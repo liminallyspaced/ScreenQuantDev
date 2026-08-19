@@ -1254,11 +1254,13 @@ DEAD_KINDS = {
     "TRIM_OFFSCREEN", "HIDE_OFFSCREEN_INSTANCES", "SUBDIV_TRIM",
     "ADAPTIVE_SUBDIV_CAP", "MICRO_EMITTERS", "CAMERA_CULL",
     "HAIR_RIBBONS", "CRYPTO_PRUNE", "PASS_PRUNE", "OFFSCREEN_DICING",
+    "OPAQUE_CUTOUT_SHADOWS",
 }
 PATH_KINDS = {
     "APPLY_PERCEPTUAL_PATHS", "LIGHT_TREE", "CAUSTICS_OFF",
     "PATH_GUIDING_OFF", "WORLD_MIS_NONE", "VOLUME_BOUNCES_ZERO",
     "HOMOGENEOUS_VOLUME", "LIGHT_SAMPLING_THRESHOLD",
+    "TRANSPARENT_SHADOW_CAP",
 }
 
 
@@ -1375,6 +1377,8 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
             plan = dict(plan)
             plan["actions"] = kept
         plan = _filter_manual_plan(plan, settings)
+        already_adaptive = bool(getattr(
+            getattr(scene, "cycles", None), "use_adaptive_sampling", False))
         result, jrnl = self._apply_atomic(context, scene, settings, plan, cov, mem)
         if result is None:
             return {'CANCELLED'}
@@ -1382,7 +1386,8 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
             getattr(settings, "speed_mode", "AUTO") == "AUTO"
             or getattr(settings, "speed_probe_knee", True)
         )
-        knee = knee_apply.auto_knee(scene) if do_knee else {
+        knee = knee_apply.auto_knee(
+            scene, already_adaptive=already_adaptive) if do_knee else {
             "applied": False, "reason": "sample knee off in Manual",
         }
         skip_entries = list(result["skipped"]) + _journal_skip_entries(jrnl)

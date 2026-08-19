@@ -16,7 +16,8 @@ AUTO_PROBE_SCALE = 25
 KNEE_FLOOR = 64
 
 
-def apply_knee(scene, jrnl, knee, probe_scale=100, eps=None):
+def apply_knee(scene, jrnl, knee, probe_scale=100, eps=None,
+               already_adaptive=False):
     """MODE_MIN cycles.samples to the padded knee. Never raises. Returns dict."""
     current = getattr(getattr(scene, "cycles", None), "samples", 0)
     result = {
@@ -31,7 +32,8 @@ def apply_knee(scene, jrnl, knee, probe_scale=100, eps=None):
             "ladder never converged (eps=%.3f)" % used_eps)
         return result
     target = sample_probe.pad_cheap_probe_knee(
-        knee, current, probe_scale, floor=KNEE_FLOOR)
+        knee, current, probe_scale, floor=KNEE_FLOOR,
+        already_adaptive=already_adaptive)
     result["target"] = target
     if not isinstance(current, (int, float)) or current <= target:
         result["reason"] = "current samples %s already at/under knee %d" % (
@@ -98,8 +100,11 @@ def make_blender_renderer(scene, jrnl, scale=PROBE_SCALE):
     return render_at
 
 
-def auto_knee(scene):
-    """Cheap ladder after Make it Fast. Never raises. Failures are reasons."""
+def auto_knee(scene, already_adaptive=False):
+    """Cheap ladder after Make it Fast. Never raises. Failures are reasons.
+
+    already_adaptive is the file's flag BEFORE Make it Fast turned it on.
+    """
     import uuid
 
     from .. import journal
@@ -134,7 +139,8 @@ def auto_knee(scene):
     try:
         applied = apply_knee(
             scene, apply_scoped, result["knee"],
-            probe_scale=AUTO_PROBE_SCALE, eps=sample_probe.AUTO_EPS)
+            probe_scale=AUTO_PROBE_SCALE, eps=sample_probe.AUTO_EPS,
+            already_adaptive=already_adaptive)
         result.update(applied)
         result["rungs"] = result.get("rungs") or sorted(
             sample_probe.rungs_for_current(current) or ())

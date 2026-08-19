@@ -228,15 +228,21 @@ def _gpu_backends():
 def _rebuild_actions(scene, mem, settings, caveats):
     actions = []
     rend = getattr(scene, "render", None)
-    if _is_anim(scene) and not getattr(rend, "use_persistent_data", False):
-        # Planner proposes; apply calls the headroom-gated policy so an
-        # over-budget scene disables it instead of OOMing.
-        factor = 0.55 if _budget_known(settings) else 1.0
+    if rend is not None and not getattr(rend, "use_persistent_data", False):
+        # First F12 still pays the BVH. The next F12 on a weak GPU does not.
+        # Apply stays VRAM-headroom gated so an 8 GB box cannot OOM.
+        anim = _is_anim(scene)
+        if anim:
+            factor = 0.55 if _budget_known(settings) else 1.0
+            label = "Persistent Data (animation; VRAM-headroom gated)"
+        else:
+            factor = 1.0
+            label = "Persistent Data (next F12 keeps the BVH; VRAM-headroom gated)"
+            caveats.append(
+                "persistent data does not speed the first F12")
         actions.append(SpeedAction(
-            "PERSISTENT_DATA",
-            "Persistent Data (animation; VRAM-headroom gated)",
-            "rebuild", 0, factor, 0, {}))
-        if factor >= 1.0:
+            "PERSISTENT_DATA", label, "rebuild", 0, factor, 0, {}))
+        if anim and factor >= 1.0:
             caveats.append(
                 "estimate ignores VRAM-gated levers (budget unset)")
     if rend is not None and not getattr(rend, "use_lock_interface", False):
@@ -377,6 +383,7 @@ def _path_actions(scene, caveats):
     actions.extend(_volume_bounces_actions(scene, caveats))
     actions.extend(_homogeneous_volume_actions(scene, caveats))
     actions.extend(_light_sampling_actions(scene))
+    actions.extend(_transparent_shadow_actions(scene, caveats))
     return actions
 
 
@@ -644,6 +651,7 @@ def _dead_actions(scene, coverage, caveats):
     actions.extend(_hair_ribbon_actions(scene, coverage))
     actions.extend(_crypto_actions(scene))
     actions.extend(_pass_prune_actions(scene))
+    actions.extend(_opaque_cutout_shadow_actions(scene, caveats))
     return actions
 
 
@@ -1356,6 +1364,211 @@ def _has_deform(obj):
         if getattr(mod, "type", "") in DEFORM_MODS:
             return True
     return False
+
+
+OPAQUE_CUTOUT_SHADOW_MAX = 64
+
+
+def _opaque_cutout_shadow_actions(scene, caveats):
+    """Opaque shadows on CLIP/HASHED cutouts. Glass and transmission stay.
+
+    Cycles docs: disabling use_transparent_shadow is faster, shadows are not
+    accurate. Cutout cards (leaves, decals) are the safe case. Windows and
+    hero glass are not. A material shared with any HERO/EXCLUDE object is
+    skipped — writing it would change the protected user too.
+    """
+    protected_mats = set()
+    for obj in _iter_objects(scene):
+        if not _protected(obj):
+            continue
+        for slot in getattr(obj, "material_slots", ()) or ():
+            mat = getattr(slot, "material", None)
+            name = getattr(mat, "name", None) if mat is not None else None
+            if name:
+                protected_mats.add(name)
+
+    names = []
+    seen = set()
+    linked_seen = set()
+    for obj in _iter_objects(scene):
+        if getattr(obj, "hide_render", False) or _protected(obj):
+            continue
+        for slot in getattr(obj, "material_slots", ()) or ():
+            mat = getattr(slot, "material", None)
+            if mat is None:
+                continue
+            if not _is_cutout_for_opaque_shadow(mat):
+                continue
+            name = getattr(mat, "name", "")
+            if not name:
+                continue
+            if _is_linked(mat):
+                linked_seen.add(name)
+                continue
+            if name in protected_mats:
+                continue
+            if getattr(mat, "use_transparent_shadow", True) is False:
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    if linked_seen:
+        caveats.append(
+            "%d linked cutout material(s) not changed (opaque shadows)"
+            % len(linked_seen))
+    if len(names) > OPAQUE_CUTOUT_SHADOW_MAX:
+        caveats.append(
+            "too many cutout materials for opaque-shadow lever")
+        return []
+    if not names:
+        return []
+    return [SpeedAction(
+        "OPAQUE_CUTOUT_SHADOWS",
+        "%d cutout material(s) → opaque shadows" % len(names),
+        "dead", 1, 0.90, 1, {"materials": names})]
+
+
+_CUTOUT_SURFACE = {
+    "BSDF_DIFFUSE", "BSDF_GLOSSY", "BSDF_PRINCIPLED",
+    "BSDF_TRANSLUCENT", "BSDF_VELVET", "BSDF_TOON",
+}
+
+
+def _is_cutout_for_opaque_shadow(mat):
+    """CLIP/HASHED is not enough. Official files often store HASHED on
+    every material (Classroom walls, floor, paint). Require proven alpha
+    and skip glass / portals / leftover Transparent-only windows.
+    """
+    if mat is None:
+        return False
+    blend = getattr(mat, "blend_method", "OPAQUE")
+    if blend not in ("CLIP", "HASHED"):
+        return False
+    tree = getattr(mat, "node_tree", None)
+    if tree is None:
+        return False
+    if _tree_has_types(tree, {"GROUP"}):
+        return False
+    if _tree_has_types(tree, {"BSDF_GLASS", "BSDF_REFRACTION"}):
+        return False
+    nodes = list(getattr(tree, "nodes", ()) or ())
+    types = {getattr(n, "type", "") for n in nodes}
+    for node in nodes:
+        if getattr(node, "type", "") == "BSDF_PRINCIPLED" and _principled_transmits(node):
+            return False
+    # Light portal: Transparent mixed with Emission, no surface BSDF.
+    if "BSDF_TRANSPARENT" in types and "EMISSION" in types and not (types & _CUTOUT_SURFACE):
+        return False
+    for node in nodes:
+        if getattr(node, "type", "") == "BSDF_PRINCIPLED" and _principled_alpha_open(node):
+            return True
+    return _mix_transparent_cutout(tree)
+
+
+def _mix_transparent_cutout(tree):
+    """Image-driven leaf/wire: Mix Shader of Transparent + surface, Fac linked."""
+    nodes = list(getattr(tree, "nodes", ()) or ())
+    types = {getattr(n, "type", "") for n in nodes}
+    if "BSDF_TRANSPARENT" not in types:
+        return False
+    if not (types & _CUTOUT_SURFACE):
+        return False
+    for node in nodes:
+        if getattr(node, "type", "") != "MIX_SHADER":
+            continue
+        inputs = getattr(node, "inputs", None)
+        if inputs is None:
+            continue
+        getter = getattr(inputs, "get", None)
+        sock = getter("Fac") if getter is not None else None
+        if sock is None:
+            try:
+                sock = inputs[0]
+            except Exception:
+                sock = None
+        if sock is not None and getattr(sock, "is_linked", False):
+            return True
+    return False
+
+
+TRANSPARENT_SHADOW_CAP = 4
+TRANSPARENT_NODE_TYPES = {"BSDF_TRANSPARENT", "BSDF_GLASS", "BSDF_REFRACTION"}
+
+
+def _transparent_shadow_actions(scene, caveats):
+    """MODE_MIN transparent_max_bounces to 4 when the scene proves alpha/glass.
+
+    Shadow rays retrace every transparent hit. A default of 8 is leftover
+    budget on blinds, leaves, and window stacks. Hero glass / MNEE stay.
+    GROUP trees are not proven.
+    """
+    cycles = _cycles(scene)
+    if cycles is None or not _has_attr(cycles, "transparent_max_bounces"):
+        return []
+    current = getattr(cycles, "transparent_max_bounces", None)
+    if not isinstance(current, (int, float)) or current <= TRANSPARENT_SHADOW_CAP:
+        return []
+    if _needs_caustics(scene):
+        return []
+    if not _scene_has_transparency(scene):
+        return []
+    return [SpeedAction(
+        "TRANSPARENT_SHADOW_CAP",
+        "Transparent shadows cap %d (stacked alpha/glass; not hero)" % (
+            TRANSPARENT_SHADOW_CAP),
+        "paths", 1, 0.92, 1,
+        {"value": TRANSPARENT_SHADOW_CAP})]
+
+
+def _scene_has_transparency(scene):
+    for obj in _iter_objects(scene):
+        if getattr(obj, "hide_render", False) or _protected(obj):
+            continue
+        for slot in getattr(obj, "material_slots", ()) or ():
+            mat = getattr(slot, "material", None)
+            proven = _material_is_transparent(mat)
+            if proven is True:
+                return True
+    return False
+
+
+def _material_is_transparent(mat):
+    """True / False. GROUP in the tree → not proven (False)."""
+    if mat is None:
+        return False
+    blend = getattr(mat, "blend_method", "OPAQUE")
+    if blend in ("CLIP", "HASHED", "BLEND"):
+        return True
+    tree = getattr(mat, "node_tree", None)
+    if tree is None:
+        return False
+    if _tree_has_types(tree, {"GROUP"}):
+        return False
+    if _tree_has_types(tree, TRANSPARENT_NODE_TYPES):
+        return True
+    for node in getattr(tree, "nodes", ()) or ():
+        if getattr(node, "type", "") != "BSDF_PRINCIPLED":
+            continue
+        if _principled_transmits(node) or _principled_alpha_open(node):
+            return True
+    return False
+
+
+def _principled_alpha_open(node):
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        return False
+    getter = getattr(inputs, "get", None)
+    if getter is None:
+        return False
+    sock = getter("Alpha")
+    if sock is None:
+        return False
+    if getattr(sock, "is_linked", False):
+        return True
+    value = getattr(sock, "default_value", 1.0)
+    return isinstance(value, (int, float)) and value < 0.999
 
 
 def _looks_glass(obj):

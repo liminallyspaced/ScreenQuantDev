@@ -290,6 +290,59 @@ def _apply_micro_emitters(scene, settings, jrnl, payload, cache, skipped, progre
     return "micro-emitters demoted (%d writes)" % changed if changed else None
 
 
+def _lookup_material(scene, name):
+    """bpy.data.materials, or a scene-slot walk when bpy is unavailable."""
+    try:
+        import bpy
+        mat = bpy.data.materials.get(name)
+        if mat is not None:
+            return mat
+    except Exception:
+        pass
+    for obj in getattr(scene, "objects", ()) or ():
+        for slot in getattr(obj, "material_slots", ()) or ():
+            mat = getattr(slot, "material", None)
+            if mat is not None and getattr(mat, "name", None) == name:
+                return mat
+    return None
+
+
+def _material_used_by_protected(scene, mat_name):
+    for obj in getattr(scene, "objects", ()) or ():
+        if not speed_solver._protected(obj):
+            continue
+        for slot in getattr(obj, "material_slots", ()) or ():
+            mat = getattr(slot, "material", None)
+            if getattr(mat, "name", None) == mat_name:
+                return True
+    return False
+
+
+def _apply_opaque_cutout_shadows(scene, settings, jrnl, payload, cache, skipped, progress):
+    changed = 0
+    for name in payload.get("materials") or ():
+        mat = _lookup_material(scene, name)
+        if mat is None:
+            skipped.append(_skip("OPAQUE_CUTOUT_SHADOWS", name, "material missing"))
+            continue
+        if speed_solver._is_linked(mat):
+            skipped.append(_skip("OPAQUE_CUTOUT_SHADOWS", name, "linked material"))
+            continue
+        if not speed_solver._is_cutout_for_opaque_shadow(mat):
+            skipped.append(_skip(
+                "OPAQUE_CUTOUT_SHADOWS", name, "not a proven CLIP/HASHED cutout"))
+            continue
+        if getattr(mat, "use_transparent_shadow", True) is False:
+            continue
+        if _material_used_by_protected(scene, name):
+            skipped.append(_skip(
+                "OPAQUE_CUTOUT_SHADOWS", name, "used by protected object"))
+            continue
+        if jrnl.set_prop(mat, "use_transparent_shadow", False):
+            changed += 1
+    return "opaque cutout shadows (%d writes)" % changed if changed else None
+
+
 def _apply_light_tree(scene, settings, jrnl, payload, cache, skipped, progress):
     enabled = bool(payload.get("enabled"))
     if jrnl.set_prop(scene, "cycles.use_light_tree", enabled, SPEED_TAG):
@@ -348,6 +401,21 @@ def _apply_light_sampling_threshold(scene, settings, jrnl, payload, cache, skipp
     if jrnl.set_prop(scene, "cycles.light_sampling_threshold", target):
         return "light sampling threshold %s" % target
     return None
+
+
+def _apply_transparent_shadow_cap(scene, settings, jrnl, payload, cache, skipped, progress):
+    if speed_solver._needs_caustics(scene):
+        skipped.append(_skip(
+            "TRANSPARENT_SHADOW_CAP", "-", "hero glass or MNEE caustics"))
+        return None
+    if not speed_solver._scene_has_transparency(scene):
+        skipped.append(_skip(
+            "TRANSPARENT_SHADOW_CAP", "-", "no proven transparent materials"))
+        return None
+    target = int(payload.get("value") or speed_solver.TRANSPARENT_SHADOW_CAP)
+    entry = (("cycles", "transparent_max_bounces", target, presets.MODE_MIN),)
+    changes = _apply_entries(scene, jrnl, entry)
+    return "transparent shadows cap %d" % target if changes else None
 
 
 def _apply_volume_bounces_zero(scene, settings, jrnl, payload, cache, skipped, progress):
@@ -590,11 +658,13 @@ _HANDLERS = {
     "HIDE_OFFSCREEN_INSTANCES": _apply_hide_instances,
     "SUBDIV_TRIM": _apply_subdiv,
     "MICRO_EMITTERS": _apply_micro_emitters,
+    "OPAQUE_CUTOUT_SHADOWS": _apply_opaque_cutout_shadows,
     "LIGHT_TREE": _apply_light_tree,
     "CAUSTICS_OFF": _apply_caustics_off,
     "PATH_GUIDING_OFF": _apply_path_guiding_off,
     "WORLD_MIS_NONE": _apply_world_mis_none,
     "LIGHT_SAMPLING_THRESHOLD": _apply_light_sampling_threshold,
+    "TRANSPARENT_SHADOW_CAP": _apply_transparent_shadow_cap,
     "VOLUME_BOUNCES_ZERO": _apply_volume_bounces_zero,
     "HOMOGENEOUS_VOLUME": _apply_homogeneous_volume,
     "CAMERA_CULL": _apply_camera_cull,

@@ -95,11 +95,16 @@ def find_sample_knee(ladder, eps=DEFAULT_EPS):
 DEFAULT_RUNGS = (64, 128, 256, 512)
 
 
-def pad_cheap_probe_knee(knee, current, probe_scale, floor=KNEE_FLOOR):
+def pad_cheap_probe_knee(knee, current, probe_scale, floor=KNEE_FLOOR,
+                         already_adaptive=False):
     """One doubling of safety when the ladder was not full-res.
 
     A 25% OIDN postage stamp can look converged a rung early. Never raises
     the live sample count. Full-res probes (scale >= 100) keep the raw knee.
+
+    already_adaptive: the file arrived with adaptive on (not something we
+    just enabled). Extra doubling so a 512 interior does not get gutted to
+    128 off a postage stamp.
     """
     if knee is None:
         return None
@@ -112,6 +117,8 @@ def pad_cheap_probe_knee(knee, current, probe_scale, floor=KNEE_FLOOR):
     if probe_scale >= 100 or target >= current:
         return min(target, current)
     padded = min(current, max(target * 2, int(floor)))
+    if already_adaptive and padded * 2 <= current:
+        padded = min(current, padded * 2)
     if padded < current:
         return padded
     return min(target, current)
