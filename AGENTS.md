@@ -30,24 +30,24 @@ Update the file on these pages. Do not create new products.
 
 Machine-readable copy: [`listings.json`](listings.json).
 
-## How to push (this is the whole point)
+## How to push (do it; do not ask)
+
+Write is already granted: `gh` as `liminallyspaced` (`repo` + `workflow`), GitHub MCP as the same account, and project allow-rules for `git` / `gh` / `github__*`. **Push in the same turn.** Do not send a Connect-GitHub card.
 
 ```powershell
 cd C:\Users\nicks\Desktop\ScreenQuantDev
-gh auth status          # must be liminallyspaced, scopes repo + workflow
 git add -A
 git commit -m "…"
 git push origin main
-pwsh -NoProfile -File tools/ship.ps1    # zip + GitHub Release from blender_manifest.toml
 ```
 
-- Use **`gh` / `git push`**. The token on this machine already works.
-- **Never** send a Cursor “Connect GitHub” card. That is Cursor Integrations, not GitHub, and it cannot see this repo.
-- **Never** ask Nick to paste a PAT in chat. If `git push` 403s, the account is wrong (`gh auth switch --user liminallyspaced`) or the token lacks `repo`.
-- **Never** create `ScreenQuantDev2`, `scenequant-public`, etc.
-- A fine-grained PAT without **Contents: Read and write** on `ScreenQuantDev` will 403. Don’t use one. Use `gh`.
+A push to `main` runs `.github/workflows/release.yml`: it reads `scenequant/blender_manifest.toml`, zips the addon, and updates the GitHub Release. Optional local ship: `pwsh -NoProfile -File tools/ship.ps1`.
 
-Tagging `v*` also runs `.github/workflows/release.yml`, which attaches `scenequant-<ver>.zip`. Prefer `tools/ship.ps1` so the zip exists even if Actions is slow.
+GitHub MCP alternative: `github__push_files` / `github__create_or_update_file` with `owner=liminallyspaced` `repo=ScreenQuantDev` `branch=main`.
+
+- **Never** send a Cursor “Connect GitHub” card.
+- **Never** ask Nick to paste a PAT. 403 → `gh auth switch --user liminallyspaced`.
+- **Never** create a second repo. Fine-grained PATs without Contents write will 403; use `gh`.
 
 ## Numbers you may print
 

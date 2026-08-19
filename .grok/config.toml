@@ -1,0 +1,10 @@
+# Autonomous git/gh/GitHub MCP. git push is a dangerous command on some hosts
+# unless it is explicitly allowed.
+
+[permission]
+allow = [
+  "Bash(git *)",
+  "Bash(gh *)",
+  "Bash(pwsh *)",
+  "MCPTool(github__*)",
+]

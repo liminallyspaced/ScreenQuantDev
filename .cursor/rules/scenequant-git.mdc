@@ -1,0 +1,17 @@
+---
+description: Push ScreenQuantDev with gh/git. Never send a Cursor GitHub-connect card.
+alwaysApply: true
+---
+
+You already have GitHub write as `liminallyspaced` (`gh` + `repo` scope). Push yourself.
+
+```powershell
+cd C:\Users\nicks\Desktop\ScreenQuantDev
+git add -A
+git commit -m "<msg>"
+git push origin main
+```
+
+Never show a “Connect GitHub” card. That is Cursor Integrations, not GitHub, and it cannot see this repo. Never ask for a PAT. Never create a second repo.
+
+Public product: `github.com/liminallyspaced/ScreenQuantDev`. Map: `AGENTS.md`.

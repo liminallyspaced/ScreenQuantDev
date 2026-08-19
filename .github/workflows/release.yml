@@ -1,9 +1,11 @@
 name: Release zip
 
+# Any push to main ships. A v* tag also ships. No human GitHub-connect card.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,21 +16,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read version from blender_manifest.toml
+        id: ver
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c "import re,pathlib; t=pathlib.Path('scenequant/blender_manifest.toml').read_text(); m=re.search(r'^version\\s*=\\s*\"([^\"]+)\"', t, re.M); assert m, 'no version'; print(m.group(1))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build addon zip
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          zip -r "scenequant-${VERSION}.zip" scenequant \
+          zip -r "scenequant-${{ steps.ver.outputs.version }}.zip" scenequant \
             -x "scenequant/**/__pycache__/*" \
             -x "scenequant/**/*.pyc"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: SceneQuant ${{ steps.ver.outputs.version }}
           files: scenequant-*.zip
           fail_on_unmatched_files: true
+          make_latest: true
           body: |
-            Install **the `scenequant-*.zip` asset**, not “Source code”.
+            Install **scenequant-${{ steps.ver.outputs.version }}.zip** from Assets. Do not install Source code.
 
             - itch: https://liminalvisual.itch.io/scenequant
             - Gumroad: https://8139959199815.gumroad.com/l/exyxdi
