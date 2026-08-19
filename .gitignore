@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.blend
+*.blend1
+*.zip
+*.scenequant.json
+.DS_Store
+Thumbs.db
