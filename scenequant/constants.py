@@ -35,3 +35,8 @@ NODE_GROUP_MAX_DEPTH = 8
 GEOMETRY_TYPES = frozenset(
     {"MESH", "CURVE", "SURFACE", "META", "FONT", "CURVES", "POINTCLOUD", "VOLUME"}
 )
+
+# SceneQuantSettings.last_report StringProperty maxlen. Blender default is 1024,
+# which truncates Analyze JSON so json.loads fails and Make it Fast wipes the grade.
+LAST_REPORT_MAXLEN = 1_048_576
+

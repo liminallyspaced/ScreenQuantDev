@@ -3,8 +3,14 @@
 # to the scene. format_text/write_html consume ONLY the build_report_data dict.
 
 import html
+import json
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
+
+try:
+    from ..constants import LAST_REPORT_MAXLEN
+except ImportError:  # loaded via spec_from_file_location in unit tests
+    LAST_REPORT_MAXLEN = 1_048_576
 
 SEVERITY_ORDER = ("critical", "high", "medium", "info")
 SEVERITY_COLORS = {
@@ -45,6 +51,74 @@ FIX_LABELS = {
 
 def fix_label(idname):
     return FIX_LABELS.get(idname, idname)
+
+
+
+
+# Drop bulky keys first when the JSON would exceed last_report maxlen.
+# Never drop grade / memory / speed_plan -- Make it Fast merges onto Analyze.
+_REPORT_DROP_ORDER = (
+    "per_image_targets",
+    "dedup",
+    "findings",
+    "plan",
+    "journal_tags",
+    "skip_reasons",
+    "verify",
+    "caveats",
+)
+_REPORT_KEEP = (
+    "grade", "memory", "speed_plan",
+    "est_before_mb", "est_after_mb", "est_after_measured_mb", "budget_mb",
+)
+
+
+def decode_last_report(raw):
+    """Parse last_report JSON. Truncated/corrupt strings become {}."""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def encode_last_report(data, maxlen=LAST_REPORT_MAXLEN):
+    """JSON for SceneQuantSettings.last_report. Never returns truncated JSON.
+
+    Blender StringProperty silently clips at maxlen (default 1024). A clipped
+    blob fails json.loads, so the next merge writes a grade-less dict.
+    Prefer dropping bulky keys over losing grade / speed_plan / memory.
+    """
+    payload = dict(data) if isinstance(data, dict) else {}
+    encoded = json.dumps(payload, default=str)
+    if len(encoded) <= maxlen:
+        return encoded
+    for key in _REPORT_DROP_ORDER:
+        if key not in payload:
+            continue
+        payload.pop(key, None)
+        encoded = json.dumps(payload, default=str)
+        if len(encoded) <= maxlen:
+            return encoded
+    slim = {k: payload[k] for k in _REPORT_KEEP if k in payload}
+    encoded = json.dumps(slim, default=str)
+    if len(encoded) <= maxlen:
+        return encoded
+    plan = slim.get("speed_plan")
+    if isinstance(plan, dict):
+        slim["speed_plan"] = {k: plan[k] for k in ("est_pct", "est_factor") if k in plan}
+        encoded = json.dumps(slim, default=str)
+        if len(encoded) <= maxlen:
+            return encoded
+    encoded = json.dumps({k: slim[k] for k in ("grade", "speed_plan") if k in slim})
+    if len(encoded) <= maxlen:
+        return encoded
+    encoded = json.dumps({"grade": slim.get("grade")})
+    if len(encoded) <= maxlen:
+        return encoded
+    return "{}"
 
 
 def build_report_data(grade, findings, mem, plan_or_none,

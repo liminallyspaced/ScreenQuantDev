@@ -34,39 +34,56 @@ def notify_progress(progress, index, total, label):
         pass
 
 
+def _is_library_id(datablock):
+    """Linked library IDs are not another scene in this file the artist renders."""
+    return getattr(datablock, "library", None) is not None
+
+
+def _local_scene_count():
+    return sum(1 for s in bpy.data.scenes if not _is_library_id(s))
+
+
+def _in_other_local_scene(scenes, scene):
+    """True when a LOCAL scene other than `scene` appears in `scenes`."""
+    return any(s is not scene and not _is_library_id(s) for s in scenes)
+
+
 def used_outside_scene(datablock, scene, cache=None):
     """True when writes tied to `datablock` could leak into another scene.
 
     Precision, by case:
-    - single-scene file: exact (always False);
+    - one LOCAL scene (library scenes ignored): exact (always False);
     - Object: users_scene, PLUS collection instancing -- users_scene omits a
       scene that renders the object only through an Empty's
-      instance_collection, which read as a clean false negative;
+      instance_collection, which read as a clean false negative. Library
+      scenes are not "another scene in this file"; a linked object that
+      only lives in this local scene is local. Two LOCAL scenes sharing an
+      object still skip;
     - Mesh/Image/other IDs: best effort -- bpy.data.user_map users are chased
       through Material/Mesh/node-group hops until an Object (users_scene),
       World, or Scene settles it. Brush users are ignored (never rendered);
       any unknown user kind, or a chain deeper than MAX_USER_HOPS, counts as
-      outside.
+      outside. Library Scene/World users do not count as outside.
     cache: an optional dict, shared across one operation's calls, holding the
-    collection maps the instancing check builds. Free in single-scene files.
+    collection maps the instancing check builds. Free in single-local-scene files.
     Cost: user_map scans all of bpy.data per hop. Per-candidate calls are fine
     for tens of datablocks in multi-scene files and free in single-scene files.
     """
-    if len(bpy.data.scenes) <= 1:
+    if _local_scene_count() <= 1:
         return False
     if isinstance(datablock, bpy.types.Object):
-        if any(s is not scene for s in datablock.users_scene):
+        if _in_other_local_scene(datablock.users_scene, scene):
             return True
         return _instanced_into_other_scene(datablock, scene, cache)
     return _users_reach_outside(datablock, scene)
 
 
 def _instanced_into_other_scene(obj, scene, cache):
-    """True when another scene instances a collection that contains obj.
+    """True when another LOCAL scene instances a collection that contains obj.
 
     Object.users_scene only lists scenes obj is LINKED into, so an Empty in
     scene B with instance_collection = a collection holding obj renders obj in
-    B while users_scene says A only.
+    B while users_scene says A only. Library scenes are ignored.
     """
     instancing = _collection_instancing_scenes(cache)
     if not instancing:
@@ -79,7 +96,7 @@ def _instanced_into_other_scene(obj, scene, cache):
         if collection in seen:
             continue
         seen.add(collection)
-        if any(s is not scene for s in instancing.get(collection, ())):
+        if _in_other_local_scene(instancing.get(collection, ()), scene):
             return True
         # Instancing a parent collection renders every child's contents too.
         pending.extend(parents.get(collection, ()))
@@ -87,11 +104,13 @@ def _instanced_into_other_scene(obj, scene, cache):
 
 
 def _collection_instancing_scenes(cache):
-    """collection -> set of scenes holding an object that instances it."""
+    """collection -> set of LOCAL scenes holding an object that instances it."""
     if cache is not None and "instancing_scenes" in cache:
         return cache["instancing_scenes"]
     mapping = {}
     for other in bpy.data.scenes:
+        if _is_library_id(other):
+            continue
         for obj in other.objects:
             source = getattr(obj, "instance_collection", None)
             if source is not None:
@@ -141,11 +160,15 @@ def _users_reach_outside(datablock, scene):
 def _user_reaches_outside(user, scene):
     """True = provably outside, False = settled inside, None = chase further."""
     if isinstance(user, bpy.types.Object):
-        return any(s is not scene for s in user.users_scene)
+        return _in_other_local_scene(user.users_scene, scene)
     if isinstance(user, bpy.types.Scene):
+        if _is_library_id(user):
+            return False  # library scene is not another scene in this file
         return user is not scene
     if isinstance(user, bpy.types.World):
-        return any(s is not scene and s.world is user for s in bpy.data.scenes)
+        return any(
+            s is not scene and not _is_library_id(s) and s.world is user
+            for s in bpy.data.scenes)
     if isinstance(user, (bpy.types.Material, bpy.types.Mesh, bpy.types.NodeTree)):
         return None
     if isinstance(user, bpy.types.Brush):

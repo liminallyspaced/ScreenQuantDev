@@ -3,6 +3,7 @@
 # Access is always RNA (scene.scenequant.xxx) — never dict style.
 
 import bpy
+from .constants import LAST_REPORT_MAXLEN
 from bpy.props import (
     BoolProperty,
     EnumProperty,
@@ -96,6 +97,7 @@ class SceneQuantSettings(bpy.types.PropertyGroup):
         description="Internal: serialized last analysis report",
         default="",
         options={"HIDDEN"},
+        maxlen=LAST_REPORT_MAXLEN,
     )
     speed_mode: EnumProperty(
         name="Mode",

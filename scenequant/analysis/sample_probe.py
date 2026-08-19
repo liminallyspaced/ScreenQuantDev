@@ -124,6 +124,22 @@ def pad_cheap_probe_knee(knee, current, probe_scale, floor=KNEE_FLOOR,
     return min(target, current)
 
 
+
+def reported_samples(knee_result, samples_after=None):
+    """spp for operator copy: padded/applied count, not the raw probe knee.
+
+    Prefer the live cycles.samples after auto_knee, then apply_knee's
+    `target` (the padded floor), and only then the raw ladder knee.
+    """
+    if samples_after is not None:
+        return samples_after
+    if isinstance(knee_result, dict):
+        if knee_result.get("target") is not None:
+            return knee_result["target"]
+        return knee_result.get("knee")
+    return knee_result
+
+
 def rungs_for_current(current, rungs=DEFAULT_RUNGS):
     """Ladder at or under current spp, plus the 2N partner of the top rung.
 

@@ -260,11 +260,12 @@ def _report_payload(scene, grade_value, findings, mem, cov, mesh_scan,
 
 
 def _load_report_dict(settings):
-    try:
-        data = json.loads(settings.last_report) if settings.last_report else {}
-    except (ValueError, TypeError):
-        data = {}
-    return data if isinstance(data, dict) else {}
+    return report.decode_last_report(getattr(settings, "last_report", "") or "")
+
+
+def _dump_report(settings, data):
+    """Write last_report without truncating JSON (keeps Analyze grade)."""
+    settings.last_report = report.encode_last_report(data)
 
 
 def _merge_apply_report(settings, jrnl, skip_entries):
@@ -277,7 +278,7 @@ def _merge_apply_report(settings, jrnl, skip_entries):
     skips["apply"] = skip_entries
     data["skip_reasons"] = skips
     data["journal_tags"] = _journal_action_log(jrnl)
-    settings.last_report = json.dumps(data)
+    _dump_report(settings, data)
 
 
 def _store_speed_plan(settings, plan, jrnl, skip_entries):
@@ -290,7 +291,7 @@ def _store_speed_plan(settings, plan, jrnl, skip_entries):
     skips["speed"] = skip_entries
     data["skip_reasons"] = skips
     data["journal_tags"] = _journal_action_log(jrnl)
-    settings.last_report = json.dumps(data)
+    _dump_report(settings, data)
 
 
 def _store_fit_estimates(settings, plan, jrnl, skip_entries, measured_after_mb):
@@ -307,7 +308,7 @@ def _store_fit_estimates(settings, plan, jrnl, skip_entries, measured_after_mb):
     skips["apply"] = skip_entries
     data["skip_reasons"] = skips
     data["journal_tags"] = _journal_action_log(jrnl)
-    settings.last_report = json.dumps(data)
+    _dump_report(settings, data)
 
 
 # ---------------------------------------------------------- atomic apply helpers
@@ -497,7 +498,7 @@ class SCENEQUANT_OT_analyze(_CameraPollMixin, bpy.types.Operator):
                 payload = _report_payload(
                     scene, grade_value, findings, mem, cov, mesh_scan,
                     image_scan, budget_mb, plan=plan)
-                settings.last_report = json.dumps(payload)
+                _dump_report(settings, payload)
         except Exception as error:
             logger.exception("Analyze failed")
             self.report({'ERROR'}, f"Analyze failed: {error}")
@@ -1435,7 +1436,10 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
             f"{result['applied']} changes"
         )
         if knee.get("applied"):
-            message += ", samples → %s" % knee.get("knee")
+            from ..analysis import sample_probe
+            spp = sample_probe.reported_samples(
+                knee, getattr(getattr(scene, "cycles", None), "samples", None))
+            message += ", samples → %s" % spp
         elif knee.get("reason"):
             skip_entries.append({
                 "name": "SAMPLE_KNEE",
@@ -1625,7 +1629,7 @@ def _store_verify(settings, name_a, name_b, mean, peak):
     payload["verify"] = {
         "a": name_a, "b": name_b, "mean": mean, "max": peak,
     }
-    settings.last_report = json.dumps(payload)
+    _dump_report(settings, payload)
 
 
 CLASSES = (

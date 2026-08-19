@@ -1063,6 +1063,235 @@ def test_opaque_cutout_shadows_proven_only():
           "over-count cutouts caveats too many")
 
 
+def _load_guards_fake_bpy():
+    """Load apply/guards.py against a duck-typed bpy (no Blender)."""
+    import importlib.util
+    import types
+    bpy_mod = types.ModuleType("bpy")
+
+    class Object:
+        pass
+
+    class Scene:
+        pass
+
+    class World:
+        pass
+
+    class Material:
+        pass
+
+    class Mesh:
+        pass
+
+    class NodeTree:
+        pass
+
+    class Brush:
+        pass
+
+    bpy_mod.types = types.SimpleNamespace(
+        Object=Object, Scene=Scene, World=World,
+        Material=Material, Mesh=Mesh, NodeTree=NodeTree, Brush=Brush)
+
+    def user_map(subset=None, **kwargs):
+        return {item: set() for item in (subset or [])}
+
+    bpy_mod.data = types.SimpleNamespace(
+        scenes=[], collections=[], user_map=user_map)
+    saved = sys.modules.get("bpy")
+    sys.modules["bpy"] = bpy_mod
+    try:
+        path = os.path.join(PROJECT_ROOT, "scenequant", "apply", "guards.py")
+        spec = importlib.util.spec_from_file_location("_sq_test_guards", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        if saved is None:
+            sys.modules.pop("bpy", None)
+        else:
+            sys.modules["bpy"] = saved
+    return bpy_mod, mod
+
+
+def _as_object(bpy_mod, src):
+    """Copy a duck-typed Obj onto bpy.types.Object so isinstance checks fire."""
+    inst = bpy_mod.types.Object()
+    for key, value in src.__dict__.items():
+        setattr(inst, key, value)
+    if not hasattr(inst, "users_scene"):
+        inst.users_scene = []
+    if not hasattr(inst, "users_collection"):
+        inst.users_collection = []
+    return inst
+
+
+def test_used_outside_ignores_library_scenes():
+    section("used-outside ignores library scenes")
+    bpy_mod, guards = _load_guards_fake_bpy()
+
+    class Local:
+        library = None
+        objects = []
+        world = None
+        name = "Local"
+
+    class Lib:
+        library = "assets/chairs.blend"
+        objects = []
+        world = None
+        name = "LibScene"
+
+    local = Local()
+    lib = Lib()
+    other = Local()
+    other.name = "OtherLocal"
+
+    chair = bpy_mod.types.Object()
+    chair.name = "Chair.001"
+    chair.users_scene = [local, lib]
+    chair.users_collection = []
+
+    bpy_mod.data.scenes = [local, lib]
+    check(guards.used_outside_scene(chair, local) is False,
+          "1 local + library scene: linked chair is not used-outside")
+
+    bpy_mod.data.scenes = [local, lib, other]
+    check(guards.used_outside_scene(chair, local) is False,
+          "chair only in this local scene (library also in users_scene) is local")
+
+    chair.users_scene = [local, other]
+    check(guards.used_outside_scene(chair, local) is True,
+          "two LOCAL scenes sharing an object still skip")
+
+    chair.users_scene = [local]
+    coll = Obj(name="Chairs", children=[], objects=[chair])
+    instancer = Obj(instance_collection=coll)
+    other.objects = [instancer]
+    chair.users_collection = [coll]
+    bpy_mod.data.collections = [coll]
+    bpy_mod.data.scenes = [local, other, lib]
+    check(guards.used_outside_scene(chair, local) is True,
+          "instanced into another LOCAL scene is used-outside")
+
+    other.objects = []
+    lib.objects = [instancer]
+    bpy_mod.data.scenes = [local, lib]
+    check(guards.used_outside_scene(chair, local) is False,
+          "instanced only into a library scene is not used-outside")
+
+
+def test_linked_cull_ignores_library_scenes():
+    section("linked scatter with library scenes is camera-culled")
+    bpy_mod, guards = _load_guards_fake_bpy()
+    scene = _scene()
+    scene.library = None
+    scene.name = "Classroom"
+    lib = Obj(name="ChairLib", library="chairs.blend", objects=[])
+    bpy_mod.data.scenes = [scene, lib]
+    bpy_mod.data.collections = []
+
+    chair = _as_object(
+        bpy_mod, _mesh("Chair.001", library="assets/chairs.blend"))
+    chair.users_scene = [scene, lib]
+    chair.users_collection = []
+    scene.objects = [chair]
+
+    hero = _as_object(
+        bpy_mod, _mesh("HeroTiny", scenequant=Obj(override="HERO")))
+    hero.users_scene = [scene]
+    hero.users_collection = []
+
+    lamp = _as_object(bpy_mod, _mesh("TinyLamp"))
+    lamp.type = "LIGHT"
+    lamp.users_scene = [scene, lib]
+    lamp.users_collection = []
+
+    volume = _as_object(bpy_mod, _mesh("Fog"))
+    volume.type = "VOLUME"
+    volume.users_scene = [scene]
+    volume.users_collection = []
+
+    emitter = _as_object(bpy_mod, _mesh(
+        "Neon", material_slots=[Obj(material=_principled_mat("Neon", strength=5.0))]))
+    emitter.users_scene = [scene]
+    emitter.users_collection = []
+
+    catcher = _as_object(bpy_mod, _mesh("Catch", is_shadow_catcher=True))
+    catcher.users_scene = [scene]
+    catcher.users_collection = []
+
+    lamp_coll = Obj(objects=[Obj(
+        name="Spot", type="LIGHT", hide_render=False,
+        material_slots=(), instance_collection=None)])
+    light_inst = _as_object(bpy_mod, _empty(
+        "ceilingLamp", instance_collection=lamp_coll))
+    light_inst.users_scene = [scene]
+    light_inst.users_collection = []
+
+    scene.objects = [chair, hero, lamp, volume, emitter, catcher, light_inst]
+    cov = _tiny_cov("Chair.001", "HeroTiny", "TinyLamp", "Fog", "Neon",
+                    "Catch", "ceilingLamp")
+
+    orig = speed_solver._used_outside
+    speed_solver._used_outside = (
+        lambda obj, sc, _g=guards: _g.used_outside_scene(obj, sc))
+    try:
+        plan = speed_solver.build_speed_plan(scene, cov, _mem(), _settings())
+    finally:
+        speed_solver._used_outside = orig
+
+    culls = [a for a in plan.actions if a.kind == "CAMERA_CULL"]
+    culled = []
+    for action in culls:
+        culled.extend(action.payload.get("objects") or [])
+    check(len(culls) == 1 and "Chair.001" in culled,
+          "linked Chair.001 only in this local scene is in CAMERA_CULL")
+    check("HeroTiny" not in culled, "HERO tiny stays out of CAMERA_CULL")
+    check("TinyLamp" not in culled, "lights stay out of CAMERA_CULL")
+    check("Fog" not in culled, "volumes stay out of CAMERA_CULL")
+    check("Neon" not in culled, "emitters stay out of CAMERA_CULL")
+    check("Catch" not in culled, "shadow catchers stay out of CAMERA_CULL")
+    check("ceilingLamp" not in culled, "light instances stay out of CAMERA_CULL")
+    check(all(a.kind != "DISTANCE_CULL" for a in plan.actions),
+          "distance cull stays off")
+    check(all("not camera-culled (used outside" not in c for c in plan.caveats),
+          "library scenes do not caveat used-outside")
+
+
+def test_two_local_scenes_still_skip_camera_cull():
+    section("two LOCAL scenes still skip CAMERA_CULL")
+    bpy_mod, guards = _load_guards_fake_bpy()
+    scene = _scene()
+    scene.library = None
+    other = _scene()
+    other.library = None
+    other.name = "Other"
+    bpy_mod.data.scenes = [scene, other]
+    bpy_mod.data.collections = []
+    chair = _as_object(bpy_mod, _mesh("Chair.001", library="assets/chairs.blend"))
+    chair.users_scene = [scene, other]
+    chair.users_collection = []
+    scene.objects = [chair]
+    orig = speed_solver._used_outside
+    speed_solver._used_outside = (
+        lambda obj, sc, _g=guards: _g.used_outside_scene(obj, sc))
+    try:
+        plan = speed_solver.build_speed_plan(
+            scene, _tiny_cov("Chair.001"), _mem(), _settings())
+    finally:
+        speed_solver._used_outside = orig
+    culled = []
+    for action in plan.actions:
+        if action.kind == "CAMERA_CULL":
+            culled.extend(action.payload.get("objects") or [])
+    check("Chair.001" not in culled,
+          "shared across two LOCAL scenes is not camera-culled")
+    check(any("used outside this scene" in c for c in plan.caveats),
+          "cross-local skip is a caveat")
+
+
+
 def main():
     test_independence()
     test_default_plan_filters()
@@ -1085,7 +1314,11 @@ def main():
     test_light_sampling_threshold_disabled_only()
     test_offscreen_dicing_adaptive_only()
     test_opaque_cutout_shadows_proven_only()
+    test_used_outside_ignores_library_scenes()
+    test_linked_cull_ignores_library_scenes()
+    test_two_local_scenes_still_skip_camera_cull()
     finish()
 
 
-main()
+if __name__ == "__main__":
+    main()

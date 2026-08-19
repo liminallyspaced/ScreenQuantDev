@@ -6,6 +6,9 @@
 - Sample knee: already-adaptive files pad an extra doubling (512→128 becomes 256). Adaptive-off interiors stay one doubling (300→128).
 - CAMERA_CULL tags linked scatter/tiny (Cycles flags, not hide_render) and turns on Simplify with high caps. Distance cull stays off.
 - N-panel is one Make it Fast button plus Revert. Analyze / VRAM / Manual / Tune / Safety stay closed. Auto click runs Analyze then the speed stack, then Fit-to-Budget only if VRAM is over. Draft / Quantize / Tune are not auto-fired.
+- used-outside ignores linked library scenes, so CAMERA_CULL can tag linked scatter that only lives in this file.
+- last_report maxlen is 1 MB and writes never emit truncated JSON, so Analyze grade survives Make it Fast.
+- Operator copy reports the padded sample count (128 / 256), not the raw probe knee.
 - Public Classroom claim stays 41%. loft unchanged.
 
 **Versioning rule (tied to the journal schema):** a release that changes the journal

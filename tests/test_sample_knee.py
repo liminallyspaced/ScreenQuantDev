@@ -19,6 +19,77 @@ def _load():
     return mod
 
 
+
+def _load_report():
+    path = os.path.join(PROJECT_ROOT, "scenequant", "ui", "report.py")
+    spec = importlib.util.spec_from_file_location("sample_probe_report", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_reported_samples_uses_padded_target():
+    section("operator reports padded spp not raw knee")
+    probe = _load()
+    check(probe.pad_cheap_probe_knee(64, 300, 25) == 128,
+          "Classroom-shaped 300, raw 64 → padded 128")
+    check(probe.pad_cheap_probe_knee(64, 512, 25, already_adaptive=True) == 256,
+          "already-adaptive loft 512, raw 64 → padded 256")
+    applied = {"applied": True, "knee": 64, "target": 128}
+    check(probe.reported_samples(applied) == 128,
+          "result.target is the padded floor")
+    check(probe.reported_samples(applied, samples_after=128) == 128,
+          "live cycles.samples after auto_knee is 128")
+    check(probe.reported_samples(applied) != applied["knee"],
+          "operator copy is not the raw probe knee")
+    loft = {"applied": True, "knee": 64, "target": 256}
+    check(probe.reported_samples(loft, samples_after=256) == 256,
+          "already-adaptive extra pad reports 256")
+
+
+def test_encode_last_report_keeps_grade():
+    section("Analyze grade survives merge/truncate")
+    import json
+    report = _load_report()
+    bulky = {
+        "grade": "B",
+        "memory": {"total_mb": 1200.0},
+        "findings": [{"message": "x" * 80, "severity": "medium"}] * 40,
+        "per_image_targets": [{"name": "Tex%d" % i, "px": 1024} for i in range(80)],
+        "dedup": {"mesh_groups": [["A", "B"]] * 20},
+    }
+    dumped = json.dumps(bulky)
+    check(len(dumped) > 1024,
+          "classroom-sized Analyze JSON exceeds default StringProperty 1024")
+    truncated = dumped[:1024]
+    try:
+        json.loads(truncated)
+        parsed = True
+    except ValueError:
+        parsed = False
+    check(parsed is False,
+          "silently truncated last_report is invalid JSON (the grade wipe)")
+
+    encoded = report.encode_last_report(bulky, maxlen=1024)
+    check(len(encoded) <= 1024, "encode_last_report fits maxlen")
+    data = json.loads(encoded)
+    check(data.get("grade") == "B", "grade survives compact")
+    check(data.get("memory", {}).get("total_mb") == 1200.0,
+          "memory estimate survives compact")
+
+    data["speed_plan"] = {"est_pct": 70.0, "actions": [
+        {"kind": "CAMERA_CULL", "payload": {"objects": ["Chair.%03d" % i]}}
+        for i in range(30)
+    ]}
+    merged = report.encode_last_report(data, maxlen=1024)
+    check(len(merged) <= 1024, "merged speed plan still fits")
+    out = report.decode_last_report(merged)
+    check(out.get("grade") == "B",
+          "grade kept after Make it Fast merge onto last_report")
+    check("speed_plan" in out, "speed_plan kept after compact merge")
+
+
+
 def main():
     probe = _load()
     try:
@@ -110,7 +181,10 @@ def main():
     check(sorted(ladder.keys()) == [64, 128, 256],
           "full ladder rendered when no knee")
 
+    test_reported_samples_uses_padded_target()
+    test_encode_last_report_keeps_grade()
     finish()
 
 
-main()
+if __name__ == "__main__":
+    main()
