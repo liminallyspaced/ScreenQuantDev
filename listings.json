@@ -1,0 +1,81 @@
+{
+  "product": "SceneQuant — Scene & Render Optimizer",
+  "tagline": "One click. Faster Cycles. Full revert.",
+  "button": "Make it Fast",
+  "version": "0.3.1",
+  "price": "$0",
+  "license": "GPL-3.0-or-later",
+  "blender": "4.2+",
+  "author": "Nick Siegel",
+  "github_account": "liminallyspaced",
+  "public_repo": "liminallyspaced/ScreenQuantDev",
+  "public_url": "https://github.com/liminallyspaced/ScreenQuantDev",
+  "releases": "https://github.com/liminallyspaced/ScreenQuantDev/releases",
+  "private_source": "liminallyspaced/scenequant",
+  "local_public": "C:\\Users\\nicks\\Desktop\\ScreenQuantDev",
+  "local_private": "C:\\Users\\nicks\\Desktop\\SceneQuant",
+  "listings": {
+    "github": {
+      "url": "https://github.com/liminallyspaced/ScreenQuantDev/releases",
+      "status": "live",
+      "hosts_zip": true
+    },
+    "itch": {
+      "url": "https://liminalvisual.itch.io/scenequant",
+      "status": "live",
+      "hosts_zip": true
+    },
+    "gumroad": {
+      "url": "https://8139959199815.gumroad.com/l/exyxdi",
+      "status": "live",
+      "hosts_zip": true
+    },
+    "superhive": {
+      "url": null,
+      "status": "no_creator_shop",
+      "hosts_zip": false
+    },
+    "blender_extensions": {
+      "url": null,
+      "status": "not_submitted",
+      "hosts_zip": false
+    }
+  },
+  "proof": [
+    {
+      "scene": "Classroom (Christophe Seux)",
+      "blender": "4.5.5 LTS",
+      "res": "1920x1080",
+      "spp": 300,
+      "baseline": "2:43",
+      "fast": "1:35",
+      "cut": "41%",
+      "mae": "5.6/255",
+      "plate": "docs/proof/classroom-pair.jpg"
+    },
+    {
+      "scene": "loft.blend",
+      "blender": "4.5.5 LTS",
+      "res": "1080x1350",
+      "spp": 512,
+      "baseline": "5:37",
+      "fast": "2:41",
+      "cut": "52%",
+      "mae": "7.0/255",
+      "note": "timed at 100% (native file is 250%)",
+      "plate": "docs/proof/loft-pair.jpg"
+    },
+    {
+      "scene": "loft.blend",
+      "blender": "5.1.2",
+      "res": "1080x1350",
+      "spp": 512,
+      "baseline": "5:50",
+      "fast": "2:12",
+      "cut": "62%",
+      "mae": "7.0/255",
+      "plate": "docs/proof/loft-51-pair.jpg"
+    }
+  ],
+  "machine": "RTX 2080 Super Max-Q 8 GB · i7-10875H · 16 GB · Windows 11 · Cycles OptiX · factory-startup · persistent data off"
+}

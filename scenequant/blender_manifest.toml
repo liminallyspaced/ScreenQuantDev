@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "scenequant"
-version = "0.3.0"
+version = "0.3.1"
 name = "SceneQuant — Scene & Render Optimizer"
 tagline = "Make it Fast and Fit to Budget: cut Cycles time, fit VRAM"
 maintainer = "Nick Siegel <nicksiegel.loft@gmail.com>"
@@ -10,6 +10,7 @@ type = "add-on"
 tags = ["Render", "Scene"]
 
 blender_version_min = "4.2.0"
+website = "https://github.com/liminallyspaced/ScreenQuantDev"
 
 license = ["SPDX:GPL-3.0-or-later"]
 copyright = ["2026 Nick Siegel"]

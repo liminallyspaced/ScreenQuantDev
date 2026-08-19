@@ -1,0 +1,36 @@
+name: Release zip
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build addon zip
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          zip -r "scenequant-${VERSION}.zip" scenequant \
+            -x "scenequant/**/__pycache__/*" \
+            -x "scenequant/**/*.pyc"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: scenequant-*.zip
+          fail_on_unmatched_files: true
+          body: |
+            Install **the `scenequant-*.zip` asset**, not “Source code”.
+
+            - itch: https://liminalvisual.itch.io/scenequant
+            - Gumroad: https://8139959199815.gumroad.com/l/exyxdi
+
+            Same three measured pairs only: Classroom 41%, loft 52%, loft on 5.1 62%.
