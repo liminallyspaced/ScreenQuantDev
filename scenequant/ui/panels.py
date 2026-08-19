@@ -1,9 +1,9 @@
 # N-panel UI (VIEW_3D sidebar, tab "SceneQuant") plus a per-object override
 # panel in Object properties and a per-image override panel in the Image
-# editor. The pipeline panels are numbered: 1 Analyze, 2 Make it Fast, 3 Fit Budget,
-# 4 Levers, 5 Tune, then Safety. draw() must never raise and never do heavy work: report
-# and journal parses are cached per scene by string identity, the journal
-# summary tolerates malformed entries, and no draw path may write files.
+# editor. Default view is ONE button (Make it Fast) plus Revert. Analyze,
+# VRAM, Manual, Tune, Safety stay registered but DEFAULT_CLOSED. Make it Fast
+# already runs coverage + the speed stack; the artist does not click a
+# numbered pipeline. draw() must never raise and never do heavy work.
 
 import json
 import logging
@@ -239,8 +239,9 @@ class SceneQuantPanelMixin:
 
 class SCENEQUANT_PT_analyze(SceneQuantPanelMixin, bpy.types.Panel):
     bl_idname = "SCENEQUANT_PT_analyze"
-    bl_label = "1. Analyze"
-    bl_order = 0
+    bl_label = "Analyze"
+    bl_order = 1
+    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
@@ -269,27 +270,15 @@ class SCENEQUANT_PT_analyze(SceneQuantPanelMixin, bpy.types.Panel):
 
 class SCENEQUANT_PT_speed(SceneQuantPanelMixin, bpy.types.Panel):
     bl_idname = "SCENEQUANT_PT_speed"
-    bl_label = "2. Make it Fast"
-    bl_order = 1
+    bl_label = "SceneQuant"
+    bl_order = 0
 
     def draw(self, context):
         layout = self.layout
-        settings = context.scene.scenequant
-        row = layout.row(align=True)
-        row.prop(settings, "speed_mode", expand=True)
         row = layout.row()
-        row.scale_y = 1.8
+        row.scale_y = 2.2
         row.operator("scenequant.make_it_fast", text="Make it Fast")
-        if settings.speed_mode == "MANUAL":
-            box = layout.box()
-            box.prop(settings, "speed_probe_knee")
-            box.prop(settings, "speed_apply_dead")
-            box.prop(settings, "speed_apply_paths")
-            box.label(text="Then click Make it Fast to review the plan")
-        row = layout.row(align=True)
-        row.operator("scenequant.revert_all", text="Revert")
-        row.operator("scenequant.probe_sample_knee", text="Knee")
-        row.operator("scenequant.verify_render", text="Verify")
+        layout.operator("scenequant.revert_all", text="Revert")
         data = parse_report(context.scene)
         plan = data.get("speed_plan") if isinstance(data, dict) else None
         if isinstance(plan, dict) and isinstance(plan.get("est_pct"), (int, float)):
@@ -302,8 +291,9 @@ class SCENEQUANT_PT_speed(SceneQuantPanelMixin, bpy.types.Panel):
 
 class SCENEQUANT_PT_budget(SceneQuantPanelMixin, bpy.types.Panel):
     bl_idname = "SCENEQUANT_PT_budget"
-    bl_label = "3. Fit to Budget"
+    bl_label = "VRAM"
     bl_order = 2
+    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
@@ -334,13 +324,25 @@ class SCENEQUANT_PT_budget(SceneQuantPanelMixin, bpy.types.Panel):
 
 class SCENEQUANT_PT_levers(SceneQuantPanelMixin, bpy.types.Panel):
     bl_idname = "SCENEQUANT_PT_levers"
-    bl_label = "4. Levers"
+    bl_label = "Manual"
     bl_order = 3
+    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
         scene = context.scene
         settings = scene.scenequant
+        row = layout.row(align=True)
+        row.prop(settings, "speed_mode", expand=True)
+        if settings.speed_mode == "MANUAL":
+            box = layout.box()
+            box.prop(settings, "speed_probe_knee")
+            box.prop(settings, "speed_apply_dead")
+            box.prop(settings, "speed_apply_paths")
+        row = layout.row(align=True)
+        row.operator("scenequant.probe_sample_knee", text="Knee")
+        row.operator("scenequant.verify_render", text="Verify")
+        layout.separator()
         layout.operator("scenequant.dedup", icon='DUPLICATE')
         col = layout.column(align=True)
         col.prop(settings, "trim_keep_reflections")
@@ -366,8 +368,9 @@ class SCENEQUANT_PT_levers(SceneQuantPanelMixin, bpy.types.Panel):
 
 class SCENEQUANT_PT_tune(SceneQuantPanelMixin, bpy.types.Panel):
     bl_idname = "SCENEQUANT_PT_tune"
-    bl_label = "5. Tune"
+    bl_label = "Tune"
     bl_order = 4
+    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
@@ -382,6 +385,7 @@ class SCENEQUANT_PT_safety(SceneQuantPanelMixin, bpy.types.Panel):
     bl_idname = "SCENEQUANT_PT_safety"
     bl_label = "Safety"
     bl_order = 5
+    bl_options = {'DEFAULT_CLOSED'}
 
     @_draw_guard
     def draw(self, context):

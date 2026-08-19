@@ -984,7 +984,8 @@ def _emission_strength_socket(node):
 def _camera_cull_actions(scene, coverage, caveats):
     """Scatter/tiny only. Scene flag alone does nothing — objects listed too.
 
-    Never lights, heroes, volumes, shadow catchers. Distance cull is AND
+    Never lights, heroes, volumes, shadow catchers. Linked scatter/tiny ARE
+    listed (Cycles per-object flag, not hide_render). Distance cull is AND
     with camera cull; we do not enable both.
     """
     if not coverage:
@@ -993,7 +994,7 @@ def _camera_cull_actions(scene, coverage, caveats):
     if cycles is None or not _has_attr(cycles, "use_camera_cull"):
         return []
     names = []
-    linked_skipped = 0
+    outside_skipped = 0
     for name, info in _sorted_coverage(coverage):
         if _cov_attr(info, "max_coverage", 1.0) >= TINY_COVERAGE:
             continue
@@ -1009,23 +1010,23 @@ def _camera_cull_actions(scene, coverage, caveats):
         oc = getattr(obj, "cycles", None)
         if oc is not None and getattr(oc, "is_shadow_catcher", False):
             continue
-        if _is_linked(obj) or _used_outside(obj, scene):
-            linked_skipped += 1
+        if _used_outside(obj, scene):
+            outside_skipped += 1
             continue
         if getattr(oc, "use_camera_cull", False):
             continue
         names.append(name)
-    if linked_skipped:
+    if outside_skipped:
         caveats.append(
-            "%d scatter/tiny object(s) not camera-culled (linked or used outside this scene)"
-            % linked_skipped)
+            "%d scatter/tiny object(s) not camera-culled (used outside this scene)"
+            % outside_skipped)
     if not names and getattr(cycles, "use_camera_cull", False):
         return []
     if not names:
         return []
     return [SpeedAction(
         "CAMERA_CULL",
-        "%d scatter/tiny object(s) → camera cull (per-object flag)" % len(names),
+        "%d scatter/tiny object(s) → camera cull, including linked" % len(names),
         "dead", 1, 0.88, 1, {"objects": names})]
 
 

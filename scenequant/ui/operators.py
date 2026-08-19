@@ -1291,11 +1291,49 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
 
     plan_json: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
+    def _auto_analyze(self, context):
+        """Step 1 of the one-button path. Read-only grade + coverage report."""
+        scene = context.scene
+        if scene.camera is None:
+            return
+        try:
+            bpy.ops.scenequant.analyze('EXEC_DEFAULT')
+        except Exception:
+            logger.exception("Make it Fast: analyze step failed")
+
+    def _auto_fit_if_over(self, context):
+        """Step 3: VRAM ladder only when the analyze estimate is over budget.
+        Never fires Draft / Quantize / Tune as their own buttons.
+        """
+        scene = context.scene
+        settings = scene.scenequant
+        if scene.camera is None:
+            return
+        budget_gb = float(getattr(settings, "vram_budget_gb", 0.0) or 0.0)
+        if budget_gb <= 0.0:
+            return
+        total = None
+        raw = getattr(settings, "last_report", "") or ""
+        if raw:
+            try:
+                mem = (json.loads(raw) or {}).get("memory") or {}
+                total = mem.get("total_mb")
+            except Exception:
+                total = None
+        if not isinstance(total, (int, float)) or total <= budget_gb * MB_PER_GB:
+            return
+        try:
+            bpy.ops.scenequant.fit_budget('EXEC_DEFAULT')
+        except Exception:
+            logger.exception("Make it Fast: fit_budget step failed")
+
     def invoke(self, context, event):
         scene = context.scene
         settings = scene.scenequant
         if _not_cycles(self, scene):
             return {'CANCELLED'}
+        if getattr(settings, "speed_mode", "AUTO") == "AUTO":
+            self._auto_analyze(context)
         try:
             with _OperatorUI(context, "Building speed plan") as update:
                 plan, cov, mem = self._build_plan(context, scene, settings, update)
@@ -1412,6 +1450,8 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
                 f"e.g. {example['name']}: {example['reason']}")
         else:
             self.report({'INFO'}, message)
+        if getattr(settings, "speed_mode", "AUTO") == "AUTO":
+            self._auto_fit_if_over(context)
         return {'FINISHED'}
 
     def _apply_atomic(self, context, scene, settings, plan, cov, mem):

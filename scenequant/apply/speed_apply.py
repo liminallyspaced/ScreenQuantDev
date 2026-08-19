@@ -466,9 +466,40 @@ def _apply_homogeneous_volume(scene, settings, jrnl, payload, cache, skipped, pr
     return "homogeneous volume (%d writes)" % changed if changed else None
 
 
+def _cull_object_skip(obj, scene, guard_cache):
+    """Camera-cull may write linked objects; hide_render must not."""
+    override = getattr(getattr(obj, "scenequant", None), "override", "AUTO")
+    if override != "AUTO":
+        return "override %s" % override
+    if guards.used_outside_scene(obj, scene, guard_cache):
+        return "used by other scenes"
+    if getattr(obj, "type", "") in ("LIGHT", "VOLUME", "CAMERA"):
+        return "lights/volumes never culled"
+    if getattr(obj, "is_shadow_catcher", False):
+        return "shadow catcher"
+    oc = getattr(obj, "cycles", None)
+    if oc is not None and getattr(oc, "is_shadow_catcher", False):
+        return "shadow catcher"
+    return None
+
+
 def _apply_camera_cull(scene, settings, jrnl, payload, cache, skipped, progress):
     jrnl.set_prop(scene, "cycles.use_camera_cull", True, SPEED_TAG)
     # Distance cull is AND with camera cull — do not enable it here.
+    # Fast GI stays out. Draft simplify caps (subdiv 2, particles 0.5) stay out.
+    jrnl.set_prop(scene, "render.use_simplify", True, SPEED_TAG)
+    rend = getattr(scene, "render", None)
+    subdiv = getattr(rend, "simplify_subdivision_render", None) if rend is not None else None
+    # Factory 6. Raise 0 / missing / low. Never lower a user 6+. Never write 2.
+    if not isinstance(subdiv, (int, float)) or subdiv < 6:
+        jrnl.set_prop(scene, "render.simplify_subdivision_render", 6, SPEED_TAG)
+    particles = getattr(rend, "simplify_child_particles_render", None) if rend is not None else None
+    if particles == 0 or particles == 0.0:
+        jrnl.set_prop(scene, "render.simplify_child_particles_render", 1.0, SPEED_TAG)
+    cycles = getattr(scene, "cycles", None)
+    margin = getattr(cycles, "camera_cull_margin", None) if cycles is not None else None
+    if margin is None or margin == 0:
+        jrnl.set_prop(scene, "cycles.camera_cull_margin", 0.1, SPEED_TAG)
     guard_cache = {}
     tagged = 0
     for name in payload.get("objects") or ():
@@ -476,18 +507,18 @@ def _apply_camera_cull(scene, settings, jrnl, payload, cache, skipped, progress)
         if obj is None:
             skipped.append(_skip("CAMERA_CULL", name, "object missing"))
             continue
-        reason = _object_write_skip(obj, scene, guard_cache)
+        reason = _cull_object_skip(obj, scene, guard_cache)
         if reason:
             skipped.append(_skip("CAMERA_CULL", name, reason))
             continue
-        if getattr(obj, "type", "") in ("LIGHT", "VOLUME", "CAMERA"):
-            skipped.append(_skip("CAMERA_CULL", name, "lights/volumes never culled"))
-            continue
-        if getattr(obj, "is_shadow_catcher", False):
-            skipped.append(_skip("CAMERA_CULL", name, "shadow catcher"))
-            continue
         if jrnl.set_prop(obj, "cycles.use_camera_cull", True, SPEED_TAG):
+            update = getattr(obj, "update_tag", None)
+            if callable(update):
+                update()
             tagged += 1
+        elif speed_solver._is_linked(obj):
+            skipped.append(_skip(
+                "CAMERA_CULL", name, "write did not stick (linked?)"))
     return "camera cull on %d objects" % tagged
 
 

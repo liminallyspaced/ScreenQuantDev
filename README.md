@@ -42,11 +42,13 @@ Draft mode, Fast GI, and resolution tricks are **not** in the default click.
 
 Everything it writes goes through a journal. **Revert All** puts the scene back.
 
+The N-panel is one **Make it Fast** button plus Revert. Analyze, VRAM, Manual, Tune, and Safety stay closed. The click runs Analyze, then the speed stack, then Fit to Budget only if VRAM is over.
+
 Also in the addon: Analyze, Fit to Budget (VRAM), Probe Sample Knee, Verify Render.
 
 ## Install
 
-1. Download `scenequant-0.3.1.zip` from [Releases](https://github.com/liminallyspaced/ScreenQuantDev/releases/latest).
+1. Download `scenequant-0.3.3.zip` from [Releases](https://github.com/liminallyspaced/ScreenQuantDev/releases/latest).
 2. Blender → Edit → Preferences → Add-ons → Install from Disk.
 3. Enable **SceneQuant — Scene & Render Optimizer**.
 4. 3D Viewport → N panel → **SceneQuant** → **Make it Fast**.
