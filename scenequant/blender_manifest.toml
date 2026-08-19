@@ -1,0 +1,28 @@
+schema_version = "1.0.0"
+
+id = "scenequant"
+version = "0.3.0"
+name = "SceneQuant — Scene & Render Optimizer"
+tagline = "Make it Fast and Fit to Budget: cut Cycles time, fit VRAM"
+maintainer = "Nick Siegel <nicksiegel.loft@gmail.com>"
+type = "add-on"
+
+tags = ["Render", "Scene"]
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+copyright = ["2026 Nick Siegel"]
+
+[permissions]
+files = "Report export and automatic journal sidecar saved beside .blend"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.*",
+  "*.blend*",
+  "*.scenequant.json",
+  "*.zip",
+  "*.pyc",
+]
