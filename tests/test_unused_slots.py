@@ -491,6 +491,36 @@ def test_inventory_print_shape():
           and "EXTRA_ATTR_SLOTS=0" in text
           and "Auto off" in text,
           "inventory prints unique-shader / skip / extra-attr counts")
+    check("    Lamp  1" in text, "UNIQUE_UNUSED_SHADERS list names Lamp")
+
+
+def test_inventory_print_quiet():
+    section("inventory formatter lists shaders and caps mesh rows at 12")
+    used = _mat("Plain")
+    objects = []
+    extras = []
+    for i in range(8):
+        extra = _mat("Extra%02d" % i)
+        extras.append(extra)
+        data = _mesh_data("mesh%02d" % i, [used, extra], [0])
+        objects.append(_obj("Obj%02d" % i, data))
+    many = _mat("Many")
+    data = _mesh_data("loud", [used] + [many] * 10, [0])
+    objects.append(_obj("Loud", data))
+    mats = {"Plain": used, "Many": many}
+    for extra in extras:
+        mats[extra.name] = extra
+    records = us.classify_unused_slots(_scene(objects, materials_by_name=mats))
+    check(len(records) == 18, "8 unique extras + 10 Many slots = 18 records")
+    text = us.format_inventory(records)
+    mesh_rows = [ln for ln in text.splitlines() if ln.startswith("  mesh=")]
+    check(len(mesh_rows) == 12, "at most 12 example mesh rows")
+    check("... 6 more" in text, "remainder line names the unprinted rows")
+    check("    Extra00  1" in text and "    Many  10" in text,
+          "UNIQUE_UNUSED_SHADERS list has material name + slot count")
+    check(text.count("mesh=") == 12, "does not dump every unused slot")
+    check("no time claim" in text and "Auto off" in text,
+          "quiet inventory still refuses a time claim")
 
 
 def test_default_plan_kind_absent_empty():
@@ -587,6 +617,7 @@ def main():
     test_unique_mesh_processed_once()
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
+    test_inventory_print_quiet()
     test_default_plan_kind_absent_empty()
     test_duplicate_unused_of_used_material_skipped()
     test_unique_unused_shader_kept()

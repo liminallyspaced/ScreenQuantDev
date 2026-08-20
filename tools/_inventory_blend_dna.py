@@ -84,6 +84,15 @@ CD_MTFACE, CD_MTEXPOLY, CD_MLOOPUV = 5, 15, 16
 COLOR_CD_TYPES = frozenset({CD_MCOL, CD_MLOOPCOL})
 UV_CD_TYPES = frozenset({CD_MTFACE, CD_MTEXPOLY, CD_MLOOPUV})
 
+# DNA_image_types.h eImageAlphaMode (2.80 through 4.5). bpy Image.alpha_mode.
+# Unknown/missing must NOT map to IGNORE.
+IMA_ALPHA_MODE = {
+    0: "STRAIGHT",
+    1: "PREMUL",
+    2: "CHANNEL_PACKED",
+    3: "IGNORE",
+}
+
 # Integer SH_NODE_* from BKE_node.h 2.73–2.79 (fallback if idname empty).
 NODE_TYPE = {
     2: "GROUP",
@@ -266,6 +275,61 @@ def _id_name(block):
     if len(name) >= 2:
         return name[2:]
     return name
+
+
+def _image_filepath(im):
+    """Image filepath, never ID.name.
+
+    3.0+/4.x DNA: Image.filepath (FILE_MAX).
+    2.8+/2.92 DNA: Image.name is the 1024-char path. ID.name is
+    ``(id, name)`` via _id_name and is a different field.
+    """
+    if im is None:
+        return ""
+    if _has_field(im, b"filepath"):
+        return _as_str(_safe_get(im, b"filepath") or "")
+    field = im.dna_type.field_from_name.get(b"name")
+    if field is None or field.dna_name.is_pointer:
+        return ""
+    # ID.name is 66 chars. Image.name path is FILE_MAX (1024).
+    if field.dna_name.array_size < 256:
+        return ""
+    return _as_str(_safe_get(im, b"name") or "")
+
+
+def _image_alpha_mode_rna(im):
+    """Map DNA IMA_ALPHA_* int to bpy strings. Do not guess IGNORE."""
+    if im is None or not _has_field(im, b"alpha_mode"):
+        return "DNA_ALPHA_MODE_MISSING"
+    raw = _safe_get(im, b"alpha_mode")
+    if raw is None:
+        return "DNA_ALPHA_MODE_UNREAD"
+    if isinstance(raw, (bytes, bytearray)):
+        if not raw:
+            return "DNA_ALPHA_MODE_UNREAD"
+        raw = raw[0]
+    elif isinstance(raw, str):
+        if not raw:
+            return "DNA_ALPHA_MODE_UNREAD"
+        raw = ord(raw[0])
+    try:
+        ival = int(raw)
+    except (TypeError, ValueError):
+        return "DNA_ALPHA_MODE_UNREAD"
+    mapped = IMA_ALPHA_MODE.get(ival)
+    if mapped is None:
+        return "DNA_ALPHA_MODE_%s" % ival
+    return mapped
+
+
+def _image_packed(im):
+    if im is None:
+        return False
+    if _safe_pointer(im, b"packedfile") is not None:
+        return True
+    if _has_field(im, b"packedfiles"):
+        return _safe_pointer(im, (b"packedfiles", b"first")) is not None
+    return False
 
 
 def _has_field(block, name):
@@ -857,14 +921,15 @@ def build_scene(bf):
     }
     images_by_addr = {}
     for im in bf.find_blocks_from_code(b"IM"):
-        path = _as_str(_safe_get(im, b"name") or "")
+        path = _image_filepath(im)
         images_by_addr[im.addr_old] = _Obj(
             name=_id_name(im),
             filepath=path,
             filepath_raw=path,
             channels=None,
             file_format="",
-            alpha_mode=int(_safe_get(im, b"alpha_mode") or 0),
+            alpha_mode=_image_alpha_mode_rna(im),
+            packed_file=True if _image_packed(im) else None,
         )
 
     mats_by_addr = {}

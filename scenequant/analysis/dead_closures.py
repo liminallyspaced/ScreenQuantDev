@@ -898,12 +898,15 @@ def format_inventory(records):
     for rec in records:
         faces = rec.get("faces")
         face_s = (" faces=%s" % faces) if faces is not None else ""
+        alpha_s = ""
+        if rec.get("class") == PRUNE_ALPHA:
+            alpha_s = "  alpha_src=%s" % (rec.get("alpha_src") or "")
         lines.append(
-            "  %-16s  %-20s  %-8s  %-16s  %s  users=%s%s"
+            "  %-16s  %-20s  %-8s  %-16s  %s  users=%s%s%s"
             % (rec.get("material", ""), rec.get("node", "") or "-",
                rec.get("socket", "") or "-", rec.get("class", ""),
                rec.get("reason", ""), ",".join(rec.get("users") or []),
-               face_s))
+               face_s, alpha_s))
     return "\n".join(lines)
 
 

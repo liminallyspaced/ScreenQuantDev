@@ -408,6 +408,8 @@ def test_jpeg_prunes_alpha():
     check(len(hits) == 1, "JPEG / 3-channel Image Alpha → PRUNE_ALPHA")
     check("no alpha" in hits[0]["reason"] or "JPEG" in hits[0]["reason"],
           "reason names missing alpha / JPEG")
+    check("wall.jpg" in (hits[0].get("alpha_src") or ""),
+          "alpha_src names the Image filepath")
 
 
 def test_real_cutout_kept():
@@ -593,6 +595,12 @@ def test_not_in_default_auto_plan():
           "inventory still sees PRUNE_MIX_TRANSPARENT (Auto is a separate gate)")
     check(any(r["class"] == dc.PRUNE_DISPLACE for r in inventory),
           "inventory still sees PRUNE_DISPLACE (Auto is a separate gate)")
+    path = os.path.join(PROJECT_ROOT, "scenequant", "planning",
+                        "speed_solver.py")
+    with open(path, encoding="utf-8") as handle:
+        src = handle.read()
+    check(src.count("dead_closure_prune_actions(") == 1,
+          "dead_closure_prune_actions is defined once and not called from build_speed_plan")
 
 
 def speed_solver_scene(objects):
@@ -626,6 +634,7 @@ def test_inventory_print_shape():
     check("PRUNE_ALPHA=" in text and "PRUNE_MIX_TRANSPARENT=" in text
           and "PRUNE_DISPLACE=" in text and "Paint" in text,
           "table lists PRUNE_ALPHA / PRUNE_MIX_TRANSPARENT / PRUNE_DISPLACE")
+    check("alpha_src=" in text, "PRUNE_ALPHA row prints alpha_src")
 
 
 def test_default_plan_kind_absent_empty():

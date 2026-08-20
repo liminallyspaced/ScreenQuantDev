@@ -17,6 +17,7 @@
 
 ACTION_KIND = "SLOT_REMOVE"
 SPEED_KIND = "UNUSED_SLOTS"
+INVENTORY_EXAMPLE_ROWS = 12
 
 IMAGE_NODE_TYPES = frozenset({"TEX_IMAGE", "TEX_ENVIRONMENT"})
 IMAGE_NODE_IDNAMES = frozenset({
@@ -420,7 +421,15 @@ def format_inventory(records):
            counts["SKIPPED_DUPLICATE_UNUSED"],
            counts["EXTRA_ATTR_SLOTS"]),
     ]
+    shader_counts = {}
     for rec in recs:
+        mat = rec.get("material") or ""
+        shader_counts[mat] = shader_counts.get(mat, 0) + 1
+    lines.append("  UNIQUE_UNUSED_SHADERS list (material, slots):")
+    for mat in sorted(shader_counts):
+        lines.append("    %s  %d" % (mat, shader_counts[mat]))
+    shown = recs[:INVENTORY_EXAMPLE_ROWS]
+    for rec in shown:
         extra = rec.get("extra_attrs") or []
         extra_s = (" extra_attrs=%s" % ",".join(extra)) if extra else ""
         lines.append(
@@ -428,6 +437,9 @@ def format_inventory(records):
             % (rec.get("mesh", ""), rec.get("index", ""),
                rec.get("material", ""), rec.get("unique_shader", True),
                ",".join(rec.get("users") or []), extra_s))
+    more = len(recs) - len(shown)
+    if more > 0:
+        lines.append("  ... %d more" % more)
     return "\n".join(lines)
 
 
