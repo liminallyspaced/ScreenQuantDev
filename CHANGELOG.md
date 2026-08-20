@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.3.3 — 2026-08-19
+## 0.3.3 — Unreleased
 
-- UNUSED_SLOTS: prune unused material slots on unique local meshes (Sketchup-style extra carpet/lamp slots). Official loft 2026-08-19: 891 meshes / 21k unused slots. Classroom: 0. Apply exists, Auto off, no time claim.
+- UNUSED_SLOTS: unique-shader gate. Duplicate unused slots of an already-used material are RNA noise (Cycles `get_used_shaders()` unions unique shaders) and are skipped. Unique unused materials stay prune keepers; extra_attrs tags UV / UV_TANGENT / VCOL / GENERATED / GROUP that used shaders on that mesh do not request. Official loft 2026-08-19: 891 meshes / 21k unused slots (pre-gate). Classroom: 0. Apply exists, Auto off, no time claim.
 - DEAD_CLOSURE_PRUNE: inventory/classifier only. Official Classroom/loft: 0 PRUNE_ALPHA, 0 PRUNE_VOLUME (Auto off). No writes. No time claim.
 - Opaque cutout shadows off on proven CLIP/HASHED cutouts only.
 - Sample knee: already-adaptive files pad an extra doubling (512→128 becomes 256). Adaptive-off interiors stay one doubling (300→128).

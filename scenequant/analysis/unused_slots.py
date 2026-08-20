@@ -1,5 +1,10 @@
-# L3 UNUSED_SLOTS: prune material slots that no polygon references.
-# Graph/datablock lever. Not a Cycles RNA knob.
+# L3 UNUSED_SLOTS: prune unused filled slots whose shader is unique vs
+# used-face materials. Graph/datablock lever. Not a Cycles RNA knob.
+#
+# Cycles get_used_shaders() unions unique shaders. A second slot of an
+# already-used material is RNA noise (no extra compile, no extra attrs).
+# A unique unused material still compiles and unions its attribute
+# requests onto the mesh — those are the keepers.
 #
 # Walks hide_render=False MESH objects. Unique local meshes only
 # (mesh.library / obj.library skipped). Slot index is polygon.material_index.
@@ -12,6 +17,38 @@
 
 ACTION_KIND = "SLOT_REMOVE"
 SPEED_KIND = "UNUSED_SLOTS"
+
+IMAGE_NODE_TYPES = frozenset({"TEX_IMAGE", "TEX_ENVIRONMENT"})
+IMAGE_NODE_IDNAMES = frozenset({
+    "ShaderNodeTexImage", "ShaderNodeTexEnvironment",
+})
+UVMAP_TYPES = frozenset({"UVMAP"})
+UVMAP_IDNAMES = frozenset({"ShaderNodeUVMap"})
+TANGENT_TYPES = frozenset({"TANGENT", "NORMAL_MAP"})
+TANGENT_IDNAMES = frozenset({
+    "ShaderNodeTangent", "ShaderNodeNormalMap",
+})
+TEX_COORD_TYPES = frozenset({"TEX_COORD"})
+TEX_COORD_IDNAMES = frozenset({"ShaderNodeTexCoord"})
+ATTRIBUTE_TYPES = frozenset({"ATTRIBUTE"})
+ATTRIBUTE_IDNAMES = frozenset({"ShaderNodeAttribute"})
+VCOL_NODE_TYPES = frozenset({"VERTEX_COLOR", "VERTEXCOLOR"})
+VCOL_NODE_IDNAMES = frozenset({"ShaderNodeVertexColor"})
+GROUP_TYPES = frozenset({"GROUP"})
+GROUP_IDNAMES = frozenset({"ShaderNodeGroup"})
+GENERATED_OR_OBJECT = frozenset({"GENERATED", "OBJECT"})
+VCOL_NAME_TOKENS = frozenset({
+    "color", "col", "vcol", "vertexcolor", "vertexcol", "vertexcolour",
+    "cd", "colattr", "paint",
+})
+
+
+class _RecordList(list):
+    """Prune records plus skip counters for inventory_counts."""
+
+    def __init__(self, records=(), skipped_duplicate_unused=0):
+        super().__init__(records)
+        self.skipped_duplicate_unused = int(skipped_duplicate_unused or 0)
 
 
 def _protected(obj):
@@ -78,11 +115,180 @@ def _iter_slot_materials(obj, mesh):
         yield i, _slot_material(slot)
 
 
+def _node_type(node):
+    return getattr(node, "type", "") or ""
+
+
+def _sock(owner, *names, collection="inputs"):
+    socks = getattr(owner, collection, None)
+    if socks is None:
+        return None
+    getter = getattr(socks, "get", None)
+    if getter is not None:
+        for name in names:
+            sock = getter(name)
+            if sock is not None:
+                return sock
+    for sock in socks or ():
+        ident = getattr(sock, "identifier", None)
+        name = getattr(sock, "name", None)
+        if ident in names or name in names:
+            return sock
+    return None
+
+
+def _iter_socks(owner, collection="inputs"):
+    socks = getattr(owner, collection, None)
+    if socks is None:
+        return
+    for sock in socks or ():
+        yield sock
+
+
+def _iter_links(sock):
+    if sock is None:
+        return
+    links = getattr(sock, "links", None)
+    if links:
+        for link in links:
+            yield link
+        return
+    link = getattr(sock, "link", None)
+    if link is not None:
+        yield link
+        return
+    from_node = getattr(sock, "from_node", None)
+    if from_node is not None:
+        yield _FakeLink(from_node, getattr(sock, "from_socket", None))
+
+
+class _FakeLink:
+    def __init__(self, from_node, from_socket):
+        self.from_node = from_node
+        self.from_socket = from_socket
+
+
+def _socket_name(sock):
+    if sock is None:
+        return ""
+    return getattr(sock, "identifier", None) or getattr(sock, "name", "") or ""
+
+
+def _is_type(node, types, idnames):
+    if node is None:
+        return False
+    if _node_type(node) in types:
+        return True
+    return getattr(node, "bl_idname", "") in idnames
+
+
+def _output_linked(node, *names):
+    sock = _sock(node, *names, collection="outputs")
+    if sock is None:
+        return False
+    if getattr(sock, "is_linked", False):
+        return True
+    links = getattr(sock, "links", None)
+    return bool(links)
+
+
+def _vector_coord_kind(node):
+    """Return GENERATED/OBJECT if Vector is explicitly those TEX_COORD outputs."""
+    vec = _sock(node, "Vector")
+    if vec is None or not getattr(vec, "is_linked", False):
+        return None
+    for link in _iter_links(vec):
+        from_node = getattr(link, "from_node", None)
+        from_sock = getattr(link, "from_socket", None)
+        if not _is_type(from_node, TEX_COORD_TYPES, TEX_COORD_IDNAMES):
+            continue
+        name = _socket_name(from_sock).upper()
+        if name in GENERATED_OR_OBJECT:
+            return name
+    return None
+
+
+def _norm_attr_name(name):
+    raw = (name or "").strip().lower()
+    return raw.replace(" ", "").replace("_", "").replace("-", "")
+
+
+def _is_vcol_name(name):
+    token = _norm_attr_name(name)
+    if not token:
+        return False
+    if token in VCOL_NAME_TOKENS:
+        return True
+    if "vcol" in token or "vertexcol" in token or "vertexcolour" in token:
+        return True
+    if token.startswith("col") and token != "collision":
+        return True
+    return False
+
+
+def _attribute_is_vcol(node):
+    name = (getattr(node, "attribute_name", None)
+            or getattr(node, "layer_name", None)
+            or "")
+    if _is_vcol_name(name):
+        return True
+    data_type = str(getattr(node, "data_type", "") or "").upper()
+    if data_type in {"COLOR", "BYTE_COLOR", "FLOAT_COLOR"}:
+        return True
+    return False
+
+
+def _material_attr_tokens(material):
+    """Conservative attr tokens a material may request on a mesh.
+
+    Duck-typed: no bpy. Walks node types, does not recurse into groups.
+    GROUP is recorded as an unknown extra so unique groups still prune.
+    """
+    tokens = set()
+    if material is None:
+        return tokens
+    if getattr(material, "use_nodes", True) is False:
+        return tokens
+    tree = getattr(material, "node_tree", None)
+    if tree is None:
+        return tokens
+    for node in getattr(tree, "nodes", ()) or ():
+        if _is_type(node, GROUP_TYPES, GROUP_IDNAMES):
+            tokens.add("GROUP")
+            continue
+        if _is_type(node, IMAGE_NODE_TYPES, IMAGE_NODE_IDNAMES):
+            if _vector_coord_kind(node) not in GENERATED_OR_OBJECT:
+                tokens.add("UV")
+            continue
+        if _is_type(node, UVMAP_TYPES, UVMAP_IDNAMES):
+            tokens.add("UV")
+            continue
+        if _is_type(node, TANGENT_TYPES, TANGENT_IDNAMES):
+            tokens.add("UV_TANGENT")
+            continue
+        if _is_type(node, VCOL_NODE_TYPES, VCOL_NODE_IDNAMES):
+            tokens.add("VCOL")
+            continue
+        if _is_type(node, ATTRIBUTE_TYPES, ATTRIBUTE_IDNAMES):
+            if _attribute_is_vcol(node):
+                tokens.add("VCOL")
+            continue
+        if _is_type(node, TEX_COORD_TYPES, TEX_COORD_IDNAMES):
+            if _output_linked(node, "Generated", "GENERATED"):
+                tokens.add("GENERATED")
+            if _output_linked(node, "UV"):
+                tokens.add("UV")
+            continue
+    return tokens
+
+
 def classify_unused_slots(scene):
-    """Return one prune record per unused filled slot on unique local meshes.
+    """Return one prune record per unique unused filled slot.
 
     Skip linked meshes, HERO/EXCLUDE objects (any render-visible user),
-    and a prune that would leave zero materials on a mesh that has faces.
+    a prune that would leave zero materials on a mesh that has faces,
+    and unused slots whose material is already among used-face materials
+    (duplicate of a live shader — Cycles get_used_shaders no-op).
     """
     groups = {}
     order = []
@@ -101,6 +307,7 @@ def classify_unused_slots(scene):
         groups[key]["objects"].append(obj)
 
     records = []
+    skipped_duplicate = 0
     for key in order:
         group = groups[key]
         mesh = group["mesh"]
@@ -111,35 +318,54 @@ def classify_unused_slots(scene):
             continue
         if any(_protected(obj) for obj in objects):
             continue
-        records.extend(_candidates_for_mesh(mesh, objects))
-    return records
+        recs, skipped = _candidates_for_mesh(mesh, objects)
+        records.extend(recs)
+        skipped_duplicate += skipped
+    return _RecordList(records, skipped_duplicate)
 
 
 def _candidates_for_mesh(mesh, objects):
     obj = objects[0]
     slots = list(_iter_slot_materials(obj, mesh))
     if not slots:
-        return []
+        return [], 0
     used = _used_indices(mesh)
     unused = []
     filled = []
+    used_mats = set()
     for index, mat in slots:
         if mat is None:
             continue
         filled.append(index)
-        if index not in used:
+        if index in used:
+            used_mats.add(mat)
+        else:
             unused.append((index, mat))
     if not unused:
-        return []
+        return [], 0
+    unique_unused = []
+    skipped = 0
+    for index, mat in unused:
+        if mat in used_mats:
+            skipped += 1
+            continue
+        unique_unused.append((index, mat))
+    if not unique_unused:
+        return [], skipped
     n_faces = _n_faces(mesh)
-    remaining = len(filled) - len(unused)
+    remaining = len(filled) - len(unique_unused)
     if remaining <= 0 and n_faces > 0:
-        return []
+        return [], skipped
     users = [getattr(o, "name", "") or "" for o in objects]
     mesh_name = getattr(mesh, "name", "") or ""
     obj_name = getattr(obj, "name", "") or ""
+    used_tokens = set()
+    for mat in used_mats:
+        used_tokens |= _material_attr_tokens(mat)
     out = []
-    for index, mat in unused:
+    for index, mat in unique_unused:
+        tokens = _material_attr_tokens(mat)
+        extra = sorted(tokens - used_tokens)
         out.append({
             "mesh": mesh_name,
             "object": obj_name,
@@ -147,39 +373,61 @@ def _candidates_for_mesh(mesh, objects):
             "material": getattr(mat, "name", "") or "",
             "users": list(users),
             "n_faces": n_faces,
+            "unique_shader": True,
+            "extra_attrs": extra,
         })
-    return out
+    return out, skipped
 
 
 def inventory_counts(records):
+    skipped = int(getattr(records, "skipped_duplicate_unused", 0) or 0)
+    recs = list(records or ())
     meshes = set()
-    for rec in records or ():
+    shaders = set()
+    extra_slots = 0
+    for rec in recs:
         name = rec.get("mesh")
         if name:
             meshes.add(name)
         else:
             meshes.add(id(rec))
+        mat = rec.get("material")
+        if mat:
+            shaders.add(mat)
+        extra = rec.get("extra_attrs") or []
+        if extra:
+            extra_slots += 1
     return {
         "UNIQUE_MESHES_WITH_UNUSED": len(meshes),
-        "UNIQUE_UNUSED_SLOTS": len(list(records or ())),
+        "UNIQUE_UNUSED_SLOTS": len(recs),
+        "UNIQUE_UNUSED_SHADERS": len(shaders),
+        "SKIPPED_DUPLICATE_UNUSED": skipped,
+        "EXTRA_ATTR_SLOTS": extra_slots,
     }
 
 
 def format_inventory(records):
-    records = list(records or ())
     counts = inventory_counts(records)
+    recs = list(records or ())
     lines = [
         "UNUSED_SLOTS inventory (apply exists; Auto off; no time claim)",
         "  UNIQUE_MESHES_WITH_UNUSED=%d  UNIQUE_UNUSED_SLOTS=%d"
         % (counts["UNIQUE_MESHES_WITH_UNUSED"],
            counts["UNIQUE_UNUSED_SLOTS"]),
+        "  UNIQUE_UNUSED_SHADERS=%d  SKIPPED_DUPLICATE_UNUSED=%d  "
+        "EXTRA_ATTR_SLOTS=%d"
+        % (counts["UNIQUE_UNUSED_SHADERS"],
+           counts["SKIPPED_DUPLICATE_UNUSED"],
+           counts["EXTRA_ATTR_SLOTS"]),
     ]
-    for rec in records:
+    for rec in recs:
+        extra = rec.get("extra_attrs") or []
+        extra_s = (" extra_attrs=%s" % ",".join(extra)) if extra else ""
         lines.append(
-            "  mesh=%s  index=%s  material=%s  users=%s"
+            "  mesh=%s  index=%s  material=%s  unique_shader=%s  users=%s%s"
             % (rec.get("mesh", ""), rec.get("index", ""),
-               rec.get("material", ""),
-               ",".join(rec.get("users") or [])))
+               rec.get("material", ""), rec.get("unique_shader", True),
+               ",".join(rec.get("users") or []), extra_s))
     return "\n".join(lines)
 
 

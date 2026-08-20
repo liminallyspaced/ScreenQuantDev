@@ -104,8 +104,128 @@ class _Journal:
         self.entries.append(entry)
 
 
-def _mat(name):
-    return Obj(name=name, library=None, override_library=None)
+def _mat(name, node_tree=None, use_nodes=None):
+    kw = dict(name=name, library=None, override_library=None)
+    if node_tree is not None:
+        kw["node_tree"] = node_tree
+        kw["use_nodes"] = True if use_nodes is None else use_nodes
+    elif use_nodes is not None:
+        kw["use_nodes"] = use_nodes
+    return Obj(**kw)
+
+
+class _Sock:
+    def __init__(self, name, default=None, identifier=None):
+        self.name = name
+        self.identifier = identifier or name
+        self.default_value = default
+        self.is_linked = False
+        self.links = []
+        self.node = None
+
+
+class _SockMap:
+    def __init__(self, items):
+        self._items = list(items)
+        self._by = {}
+        for sock in self._items:
+            self._by[sock.name] = sock
+            self._by[sock.identifier] = sock
+
+    def get(self, key):
+        return self._by.get(key)
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._items[key]
+        sock = self._by.get(key)
+        if sock is None:
+            raise KeyError(key)
+        return sock
+
+
+class _Link:
+    def __init__(self, from_node, from_socket, to_node, to_socket):
+        self.from_node = from_node
+        self.from_socket = from_socket
+        self.to_node = to_node
+        self.to_socket = to_socket
+
+
+class _Node:
+    def __init__(self, name, ntype, inputs=None, outputs=None, **kw):
+        self.name = name
+        self.type = ntype
+        self.bl_idname = kw.pop("bl_idname", "")
+        self.node_tree = kw.pop("node_tree", None)
+        self.attribute_name = kw.pop("attribute_name", "")
+        for key, value in kw.items():
+            setattr(self, key, value)
+        self.inputs = _SockMap(inputs or [])
+        self.outputs = _SockMap(outputs or [])
+        for sock in self.inputs:
+            sock.node = self
+        for sock in self.outputs:
+            sock.node = self
+
+
+class _Tree:
+    def __init__(self, nodes):
+        self.nodes = list(nodes)
+
+
+def _plain_tree():
+    prin = _Node(
+        "Principled BSDF", "BSDF_PRINCIPLED",
+        inputs=[_Sock("Base Color"), _Sock("Alpha", 1.0)],
+        outputs=[_Sock("BSDF")],
+    )
+    out = _Node(
+        "Material Output", "OUTPUT_MATERIAL",
+        inputs=[_Sock("Surface"), _Sock("Volume")],
+    )
+    return _Tree([prin, out])
+
+
+def _tex_image_tree():
+    tex = _Node(
+        "Image Texture", "TEX_IMAGE",
+        inputs=[_Sock("Vector")],
+        outputs=[_Sock("Color"), _Sock("Alpha")],
+        bl_idname="ShaderNodeTexImage",
+    )
+    prin = _Node(
+        "Principled BSDF", "BSDF_PRINCIPLED",
+        inputs=[_Sock("Base Color"), _Sock("Alpha", 1.0)],
+        outputs=[_Sock("BSDF")],
+    )
+    out = _Node(
+        "Material Output", "OUTPUT_MATERIAL",
+        inputs=[_Sock("Surface"), _Sock("Volume")],
+    )
+    return _Tree([tex, prin, out])
+
+
+def _normal_map_tree():
+    nmap = _Node(
+        "Normal Map", "NORMAL_MAP",
+        inputs=[_Sock("Color"), _Sock("Strength", 1.0)],
+        outputs=[_Sock("Normal")],
+        bl_idname="ShaderNodeNormalMap",
+    )
+    prin = _Node(
+        "Principled BSDF", "BSDF_PRINCIPLED",
+        inputs=[_Sock("Base Color"), _Sock("Normal")],
+        outputs=[_Sock("BSDF")],
+    )
+    out = _Node(
+        "Material Output", "OUTPUT_MATERIAL",
+        inputs=[_Sock("Surface"), _Sock("Volume")],
+    )
+    return _Tree([nmap, prin, out])
 
 
 def _mesh_data(name, materials, face_indices, library=None):
@@ -197,7 +317,8 @@ def test_unused_extra_slot_pruned():
     scene = _scene([obj], materials_by_name={"Carpet": carpet, "Lamp": lamp})
     records = us.classify_unused_slots(scene)
     check(len(records) == 1 and records[0]["index"] == 1
-          and records[0]["material"] == "Lamp",
+          and records[0]["material"] == "Lamp"
+          and records[0]["unique_shader"] is True,
           "inventory flags the unused extra slot")
     check(all(r["index"] != 0 for r in records),
           "used slot 0 is not a prune candidate")
@@ -365,6 +486,11 @@ def test_inventory_print_shape():
           "inventory header refuses a time claim")
     check("UNIQUE_UNUSED_SLOTS=1" in text and "Lamp" in text,
           "table lists the unused slot")
+    check("UNIQUE_UNUSED_SHADERS=1" in text
+          and "SKIPPED_DUPLICATE_UNUSED=0" in text
+          and "EXTRA_ATTR_SLOTS=0" in text
+          and "Auto off" in text,
+          "inventory prints unique-shader / skip / extra-attr counts")
 
 
 def test_default_plan_kind_absent_empty():
@@ -373,6 +499,72 @@ def test_default_plan_kind_absent_empty():
     plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
     check(all(a.kind != "UNUSED_SLOTS" for a in plan.actions),
           "empty default plan has no UNUSED_SLOTS")
+
+
+def test_duplicate_unused_of_used_material_skipped():
+    section("unused slot of an already-used material is RNA noise")
+    carpet = _mat("Carpet")
+    data = _mesh_data("rug", [carpet, carpet], [0, 0, 0])
+    obj = _obj("Rug", data)
+    scene = _scene([obj], materials_by_name={"Carpet": carpet})
+    records = us.classify_unused_slots(scene)
+    check(len(records) == 0, "duplicate unused slot is not a prune record")
+    counts = us.inventory_counts(records)
+    check(counts["SKIPPED_DUPLICATE_UNUSED"] >= 1,
+          "SKIPPED_DUPLICATE_UNUSED counts the duplicate unused slot")
+    check(counts["UNIQUE_UNUSED_SLOTS"] == 0
+          and counts["UNIQUE_UNUSED_SHADERS"] == 0,
+          "no unique unused shaders kept")
+    jrnl = _Journal()
+    applied = us.apply_unused_slots(scene, jrnl)
+    check(applied == [] and _names(data.materials) == ["Carpet", "Carpet"],
+          "apply inherits the gate and does not pop a duplicate slot")
+
+
+def test_unique_unused_shader_kept():
+    section("unused slot of a unique material is a keeper")
+    used = _mat("Plain", node_tree=_plain_tree())
+    extra = _mat("UniqueUnused", node_tree=_plain_tree())
+    data = _mesh_data("body", [used, extra], [0, 0])
+    obj = _obj("Body", data)
+    scene = _scene([obj], materials_by_name={
+        "Plain": used, "UniqueUnused": extra})
+    records = us.classify_unused_slots(scene)
+    check(len(records) == 1 and records[0]["material"] == "UniqueUnused"
+          and records[0]["unique_shader"] is True
+          and records[0]["index"] == 1,
+          "unique unused material is one prune record")
+    counts = us.inventory_counts(records)
+    check(counts["UNIQUE_UNUSED_SHADERS"] == 1
+          and counts["SKIPPED_DUPLICATE_UNUSED"] == 0,
+          "inventory counts the unique unused shader")
+
+
+def test_unique_unused_extra_attrs_uv_and_tangent():
+    section("unique unused TEX_IMAGE / NORMAL_MAP tags extra attrs")
+    plain = _mat("Plain", node_tree=_plain_tree())
+    mapped = _mat("Mapped", node_tree=_tex_image_tree())
+    data = _mesh_data("uv_mesh", [plain, mapped], [0])
+    scene = _scene([_obj("UVObj", data)],
+                   materials_by_name={"Plain": plain, "Mapped": mapped})
+    records = us.classify_unused_slots(scene)
+    check(len(records) == 1 and records[0]["unique_shader"] is True,
+          "unique unused mapped material is kept")
+    check("UV" in (records[0].get("extra_attrs") or []),
+          "TEX_IMAGE vs empty Principled tags extra UV")
+    counts = us.inventory_counts(records)
+    check(counts["EXTRA_ATTR_SLOTS"] >= 1,
+          "EXTRA_ATTR_SLOTS counts the mapped unused slot")
+
+    nmap = _mat("BumpCard", node_tree=_normal_map_tree())
+    data2 = _mesh_data("t_mesh", [plain, nmap], [0])
+    scene2 = _scene([_obj("TObj", data2)],
+                    materials_by_name={"Plain": plain, "BumpCard": nmap})
+    recs2 = us.classify_unused_slots(scene2)
+    check(len(recs2) == 1 and recs2[0]["unique_shader"] is True,
+          "unique unused normal-map material is kept")
+    check("UV_TANGENT" in (recs2[0].get("extra_attrs") or []),
+          "NORMAL_MAP vs empty Principled tags extra UV_TANGENT")
 
 
 def test_no_cycles_writes_in_module():
@@ -396,6 +588,9 @@ def main():
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
     test_default_plan_kind_absent_empty()
+    test_duplicate_unused_of_used_material_skipped()
+    test_unique_unused_shader_kept()
+    test_unique_unused_extra_attrs_uv_and_tangent()
     test_no_cycles_writes_in_module()
     finish()
 
