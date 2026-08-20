@@ -116,6 +116,8 @@ def test_default_plan_filters():
     check("LOCK_INTERFACE" in kinds, "unlocked interface proposes LOCK_INTERFACE")
     check("DEAD_CLOSURE_PRUNE" not in kinds,
           "DEAD_CLOSURE_PRUNE is not in the default Auto plan")
+    check("UNUSED_SLOTS" not in kinds,
+          "UNUSED_SLOTS is not in the default Auto plan")
     expected = speed_solver.multiply_factors(
         speed_solver.strongest_per_class(plan.actions))
     check(abs(plan.est_factor - expected) < 1e-9,

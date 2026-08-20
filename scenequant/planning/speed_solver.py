@@ -658,6 +658,9 @@ def _dead_actions(scene, coverage, caveats):
     # DEAD_CLOSURE_PRUNE lives in dead_closure_prune_actions (manual-later).
     # Not in the default Auto plan until official Classroom/loft inventory
     # proves PRUNE_ALPHA + PRUNE_VOLUME >= 1. No time claim.
+    # UNUSED_SLOTS lives in unused_slots_actions (manual-later).
+    # Not in the default Auto plan until a measured loft pair exists.
+    # No time claim. Not a Cycles RNA knob.
     return actions
 
 
@@ -1430,6 +1433,49 @@ def _opaque_cutout_shadow_actions(scene, caveats):
         "OPAQUE_CUTOUT_SHADOWS",
         "%d cutout material(s) → opaque shadows" % len(names),
         "dead", 1, 0.90, 1, {"materials": names})]
+
+
+def _load_unused_slots():
+    try:
+        from ..analysis import unused_slots
+        return unused_slots
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        import os
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "analysis", "unused_slots.py"))
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.analysis.unused_slots", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def unused_slots_actions(scene, caveats=None):
+    """Manual-later planner hook for L3 UNUSED_SLOTS.
+
+    NOT called from build_speed_plan / _dead_actions. Auto stays off until
+    a measured loft pair exists. time_factor is 1.0 (no claim). Graph /
+    datablock lever — not a Cycles RNA knob.
+    """
+    unused_slots = _load_unused_slots()
+    if unused_slots is None:
+        return []
+    records = unused_slots.classify_unused_slots(scene)
+    n = len(records)
+    if n < 1:
+        return []
+    meshes = {r.get("mesh") for r in records if r.get("mesh")}
+    return [SpeedAction(
+        "UNUSED_SLOTS",
+        "%d unused material slot(s) on %d unique mesh(es) → prune (manual)"
+        % (n, len(meshes)),
+        "dead", 2, 1.0, 1,
+        {"records": records})]
 
 
 def dead_closure_prune_actions(scene, caveats=None):
