@@ -660,8 +660,9 @@ def _dead_actions(scene, coverage, caveats):
     # proves candidates. No time claim.
     # UNUSED_SLOTS lives in unused_slots_actions (manual-later).
     # UNUSED_COLOR_ATTRS lives in unused_color_attrs_actions (manual-later).
+    # PORTAL_MESH lives in portal_mesh_actions (manual-later).
     # Not in the default Auto plan until a measured loft pair exists.
-    # No time claim. Not a Cycles RNA knob.
+    # No convert. No time claim. Not a Cycles RNA knob.
     return actions
 
 
@@ -1520,6 +1521,51 @@ def unused_color_attrs_actions(scene, caveats=None):
         "%d unused color attribute(s) on %d unique mesh(es) "
         "→ inventory (manual)"
         % (n, len(meshes)),
+        "dead", 2, 1.0, 1,
+        {"records": records})]
+
+
+
+
+def _load_portal_meshes():
+    try:
+        from ..analysis import portal_meshes
+        return portal_meshes
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        import os
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "analysis",
+            "portal_meshes.py"))
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.analysis.portal_meshes", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def portal_mesh_actions(scene, caveats=None):
+    """Manual-later planner hook for L5 PORTAL_MESH.
+
+    NOT called from build_speed_plan / _dead_actions. Auto stays off.
+    Inventory-only this pass (no mesh→light convert). time_factor is 1.0
+    (no claim). Graph pattern lever — not a Cycles RNA knob.
+    """
+    portal_meshes = _load_portal_meshes()
+    if portal_meshes is None:
+        return []
+    records = portal_meshes.classify_portal_meshes(scene)
+    n = len(records)
+    if n < 1:
+        return []
+    return [SpeedAction(
+        "PORTAL_MESH",
+        "%d portal-shaped mesh/curve material(s) → inventory (manual)"
+        % n,
         "dead", 2, 1.0, 1,
         {"records": records})]
 

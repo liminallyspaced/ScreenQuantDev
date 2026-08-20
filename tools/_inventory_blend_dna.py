@@ -1,8 +1,12 @@
 # Generic blend DNA inventory without bpy and without launching blender.
 #
 # Reconstructs duck-typed objects for scenequant.analysis.dead_closures /
-# unused_slots / unused_color_attrs. Works on 2.73 (integer SH_NODE_* +
-# idname) and 2.8+/4.x/5.x (string ShaderNode* idnames).
+# unused_slots / unused_color_attrs / portal_meshes. Works on 2.73
+# (integer SH_NODE_* + idname) and 2.8+/4.x/5.x (string ShaderNode* idnames).
+#
+# Mix Fac source sockets (Geometry Backfacing vs Incoming) are never guessed.
+# If DNA cannot name a linked Fac source, print PORTAL_MESH_UNKNOWN; do not
+# claim 0 PORTAL_MESH.
 #
 #   python3 tools/_inventory_blend_dna.py [/path/file.blend]
 #
@@ -47,6 +51,7 @@ def _load_analysis(name):
 _dc = _load_analysis("dead_closures")
 _us = _load_analysis("unused_slots")
 _uc = _load_analysis("unused_color_attrs")
+_pm = _load_analysis("portal_meshes")
 classify_dead_closures = _dc.classify_dead_closures
 dead_counts = _dc.inventory_counts
 print_dead = _dc.print_inventory
@@ -56,6 +61,9 @@ print_slots = _us.print_inventory
 classify_unused_color_attrs = _uc.classify_unused_color_attrs
 color_counts = _uc.inventory_counts
 print_colors = _uc.print_inventory
+classify_portal_meshes = _pm.classify_portal_meshes
+portal_counts = _pm.inventory_counts
+print_portals = _pm.print_inventory
 
 OB_RESTRICT_RENDER = 1 << 2
 OB_TYPE = {
@@ -706,6 +714,43 @@ def _mix_fac_record(node):
     return False, float(fac.default_value), False
 
 
+def _mix_fac_source(node):
+    """Return (from_type, from_sock_name, unknown).
+
+    unknown if Fac is linked but DNA cannot name the source node/socket.
+    Geometry Backfacing must be a named socket — never guess Incoming.
+    """
+    fac = node.inputs.get("Fac")
+    if fac is None:
+        fac = node.inputs.get("Factor")
+    if fac is None or not fac.is_linked:
+        return "", "", False
+    links = list(getattr(fac, "links", None) or ())
+    if not links:
+        return "", "", True
+    link = links[0]
+    from_node = getattr(link, "from_node", None)
+    from_sock = getattr(link, "from_socket", None)
+    ntype = ""
+    if from_node is not None:
+        ntype = (getattr(from_node, "type", "")
+                 or getattr(from_node, "bl_idname", "") or "")
+    sname = ""
+    if from_sock is not None:
+        sname = (getattr(from_sock, "identifier", None)
+                 or getattr(from_sock, "name", "") or "")
+    unknown = (from_node is None) or (not sname)
+    return ntype, sname, unknown
+
+
+def _geom_output_names(node):
+    names = []
+    for sock in getattr(node, "outputs", ()) or ():
+        names.append(getattr(sock, "identifier", None)
+                     or getattr(sock, "name", "") or "")
+    return names
+
+
 def build_scene(bf):
     stats = {
         "n_bad_links": 0,
@@ -716,6 +761,10 @@ def build_scene(bf):
         "n_unknown_fac": 0,
         "n_mix": 0,
         "n_transparent": 0,
+        "n_portal_fac_unknown": 0,
+        "n_geom_nodes": 0,
+        "n_geom_socks_unnamed": 0,
+        "n_geom_backfacing": 0,
     }
     images_by_addr = {}
     for im in bf.find_blocks_from_code(b"IM"):
@@ -736,6 +785,7 @@ def build_scene(bf):
     n_trees = 0
     n_with_nodes = 0
     mix_facs = []
+    geom_outs = []
     disp_links = []
     n_linked_mats = 0
     for ma in bf.find_blocks_from_code(b"MA"):
@@ -755,13 +805,29 @@ def build_scene(bf):
                     linked, value, unknown = _mix_fac_record(node)
                     if unknown:
                         stats["n_unknown_fac"] += 1
+                    src_type, src_sock, src_unknown = _mix_fac_source(node)
+                    if src_unknown:
+                        stats["n_portal_fac_unknown"] += 1
                     mix_facs.append((
                         _id_name(ma),
                         node.name,
                         linked,
                         value,
                         "UNKNOWN_FAC" if unknown else "ok",
+                        src_type,
+                        src_sock,
+                        "UNKNOWN_FAC_SOURCE" if src_unknown else "ok",
                     ))
+                if node.type in ("NEW_GEOMETRY", "GEOMETRY") or node.bl_idname in (
+                        "ShaderNodeNewGeometry", "ShaderNodeGeometry"):
+                    stats["n_geom_nodes"] += 1
+                    onames = _geom_output_names(node)
+                    if not any(onames):
+                        stats["n_geom_socks_unnamed"] += 1
+                    if any((n or "").replace(" ", "").lower() == "backfacing"
+                           for n in onames):
+                        stats["n_geom_backfacing"] += 1
+                    geom_outs.append((_id_name(ma), node.name, onames))
                 if node.type == "BSDF_TRANSPARENT" or node.bl_idname == "ShaderNodeBsdfTransparent":
                     stats["n_transparent"] += 1
                 if node.type == "OUTPUT_MATERIAL" or node.bl_idname == "ShaderNodeOutputMaterial":
@@ -873,6 +939,17 @@ def build_scene(bf):
                 for mb in mat_blocks:
                     mat = mats_by_addr.get(mb.addr_old) if mb is not None else None
                     slots.append(_Obj(material=mat))
+            if ob_type == "CURVE":
+                mesh = _Obj(
+                    name=_id_name(data) if data is not None else "",
+                    library=_lib_wrapper(data) if data is not None else None,
+                    override_library=_override_wrapper(data) if data is not None else None,
+                    materials=[getattr(s, "material", None) for s in slots],
+                    polygons=[],
+                    color_attributes=[],
+                    vertex_colors=[],
+                    uv_layers=[],
+                )
         objects.append(_Obj(
             name=_id_name(ob),
             type=ob_type,
@@ -913,6 +990,7 @@ def build_scene(bf):
         "node_types": dict(node_type_counts),
         "idnames": dict(idname_counts),
         "mix_facs": mix_facs,
+        "geom_outs": geom_outs,
         "disp_links": disp_links,
         "unique_local_meshes": unique_meshes,
         "unused_slots_raw": unused_slot_raw,
@@ -1005,11 +1083,46 @@ def main(argv=None):
     ccounts = color_counts(colors)
     print("COLOR_COUNTS %s" % ccounts)
 
+    print("GEOMETRY_NODES count=%d unnamed_outputs=%d backfacing_named=%d" % (
+        stats.get("n_geom_nodes", 0),
+        stats.get("n_geom_socks_unnamed", 0),
+        stats.get("n_geom_backfacing", 0)))
+    print("GEOMETRY_OUTPUTS %s" % proof.get("geom_outs"))
+    print("MIX_FAC_SOURCE unknown=%d (linked Fac whose from_socket DNA cannot name)" %
+          stats.get("n_portal_fac_unknown", 0))
+    portal_complete = (
+        stats.get("n_portal_fac_unknown", 0) == 0
+        and stats.get("n_geom_socks_unnamed", 0) == 0
+        and stats.get("n_bad_links_material", 0) == 0
+        and proof.get("n_objects", 0) > 0
+        and proof.get("object_source") != "NONE"
+    )
+    portals = classify_portal_meshes(scene)
+    pcounts = portal_counts(portals)
+    if not portal_complete:
+        print("PORTAL_MESH_UNKNOWN Fac source / Geometry sockets unproven "
+              "(unknown_fac_source=%d geom_unnamed=%d material_bad_links=%d "
+              "objects=%d source=%s)"
+              % (stats.get("n_portal_fac_unknown", 0),
+                 stats.get("n_geom_socks_unnamed", 0),
+                 stats.get("n_bad_links_material", 0),
+                 proof.get("n_objects", 0), proof.get("object_source")))
+        print("Do not treat 0 PORTAL_MESH as proof.")
+        pcounts_out = "UNKNOWN"
+    else:
+        print_portals(portals)
+        print("PORTAL_COUNTS %s" % pcounts)
+        pcounts_out = pcounts
+        print("PORTAL_MESH_WALK COMPLETE (Fac source sockets named from DNA; "
+              "Geometry Backfacing not guessed)")
+
     fired = {
         "PRUNE_MIX_TRANSPARENT": dcounts.get("PRUNE_MIX_TRANSPARENT", 0),
         "PRUNE_DISPLACE": dcounts.get("PRUNE_DISPLACE", 0),
         "UNIQUE_UNUSED_SLOTS": scounts.get("UNIQUE_UNUSED_SLOTS", 0),
         "UNUSED_COLOR_ATTRS": ccounts.get("UNUSED_COLOR_ATTRS", 0),
+        "PORTAL_MESH": pcounts_out if pcounts_out == "UNKNOWN"
+        else pcounts.get("PORTAL_MESH", 0),
     }
     print("FIRED %s" % fired)
     if not mix_complete and fired["PRUNE_MIX_TRANSPARENT"] == 0:
