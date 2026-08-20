@@ -1,4 +1,4 @@
-# L5 PORTAL_MESH inventory classifier + BACKFACE_EMIT_OPAQUE apply.
+# L5 PORTAL_MESH inventory + MESH_EMIT_SHADOW_SKIP / BACKFACE_EMIT_OPAQUE.
 # Duck-typed meshes; no .blend, no bpy.ops, no GPU.
 #   python3 tests/test_portal_meshes.py
 
@@ -296,14 +296,19 @@ def _mesh_data(name, materials, face_indices, library=None):
 
 
 def _obj(name, data, library=None, override="AUTO", hide_render=False,
-         otype="MESH"):
-    return Obj(
+         otype="MESH", visible_shadow=None, cycles_visibility=None):
+    obj = Obj(
         name=name, type=otype, hide_render=hide_render, data=data,
         library=library, override_library=None,
         scenequant=Obj(override=override),
         material_slots=_SlotView(data.materials),
         cycles=Obj(is_portal=False),
     )
+    if visible_shadow is not None:
+        obj.visible_shadow = visible_shadow
+    if cycles_visibility is not None:
+        obj.cycles_visibility = cycles_visibility
+    return obj
 
 
 def _scene(objects, **kw):
@@ -318,11 +323,14 @@ def _scene(objects, **kw):
 
 def _portal_scene(obj_name="Window", mesh_name="pane", mat_name="portal_card",
                   fac="backfacing", extra_nodes=None, library=None,
-                  mesh_library=None, override="AUTO", cull=None):
+                  mesh_library=None, override="AUTO", cull=None,
+                  visible_shadow=None, cycles_visibility=None):
     mat = _mat(mat_name, _portal_tree(fac=fac, extra_nodes=extra_nodes),
                library=library, cull=cull)
     data = _mesh_data(mesh_name, [mat], [0], library=mesh_library)
-    return _scene([_obj(obj_name, data, override=override)])
+    return _scene([_obj(obj_name, data, override=override,
+                        visible_shadow=visible_shadow,
+                        cycles_visibility=cycles_visibility)])
 
 
 class _Journal:
@@ -488,11 +496,13 @@ def test_name_is_not_how_we_detect():
 
 
 def test_not_in_default_auto_plan():
-    section("default Auto plan has no PORTAL_MESH / BACKFACE_EMIT_OPAQUE")
-    scene = speed_solver_scene(_portal_scene(cull=False).objects)
+    section("default Auto plan has no PORTAL_MESH / MESH_EMIT_SHADOW_SKIP / BACKFACE_EMIT_OPAQUE")
+    scene = speed_solver_scene(_portal_scene(cull=False, visible_shadow=True).objects)
     plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
     check(all(a.kind != "PORTAL_MESH" for a in plan.actions),
           "default Auto plan does not include PORTAL_MESH")
+    check(all(a.kind != "MESH_EMIT_SHADOW_SKIP" for a in plan.actions),
+          "default Auto plan does not include MESH_EMIT_SHADOW_SKIP")
     check(all(a.kind != "BACKFACE_EMIT_OPAQUE" for a in plan.actions),
           "default Auto plan does not include BACKFACE_EMIT_OPAQUE")
     inventory = pm.classify_portal_meshes(scene)
@@ -510,6 +520,13 @@ def test_not_in_default_auto_plan():
     check(opaque[0] not in plan.actions
           and all(a.kind != "BACKFACE_EMIT_OPAQUE" for a in plan.actions),
           "BACKFACE_EMIT_OPAQUE hook is not called from build_speed_plan")
+    shadow = speed_solver.mesh_emit_shadow_skip_actions(scene)
+    check(len(shadow) == 1 and shadow[0].kind == "MESH_EMIT_SHADOW_SKIP"
+          and shadow[0].tier == 2 and shadow[0].time_factor == 1.0,
+          "MESH_EMIT_SHADOW_SKIP planner hook exists, tier 2, no time claim")
+    check(shadow[0] not in plan.actions
+          and all(a.kind != "MESH_EMIT_SHADOW_SKIP" for a in plan.actions),
+          "MESH_EMIT_SHADOW_SKIP hook is not called from build_speed_plan")
 
 
 def test_inventory_print_shape():
@@ -639,6 +656,110 @@ def test_world_portal_card_not_this_apply():
     check(opaque == [], "planner hook emits no BACKFACE_EMIT_OPAQUE")
 
 
+def test_shadow_skip_ok_visible_shadow_true():
+    section("MESH_EMIT_BACKFACE + visible_shadow True → apply SHADOW_VIS_OFF")
+    scene = _portal_scene(visible_shadow=True)
+    obj = scene.objects[0]
+    check(obj.visible_shadow is True, "fixture casts shadows")
+    records = pm.classify_portal_meshes(scene)
+    check(len(records) == 1, "one MESH_EMIT_BACKFACE record")
+    rec = records[0]
+    check(rec["role"] == pm.ROLE_MESH_EMIT_BACKFACE, "role is MESH_EMIT_BACKFACE")
+    check(rec["shadow_skip_ok"] is True, "visible_shadow True → shadow_skip_ok")
+    mix = None
+    trans_sock = None
+    for node in obj.data.materials[0].node_tree.nodes:
+        if node.type == "MIX_SHADER":
+            mix = node
+            trans_sock = node.inputs.get("Shader")
+    check(trans_sock is not None and trans_sock.is_linked,
+          "Transparent mix input starts linked")
+    jrnl = _Journal()
+    applied = pm.apply_mesh_emit_shadow_skip(scene, jrnl, records)
+    check(len(applied) == 1, "apply writes one object")
+    check(obj.visible_shadow is False, "apply sets visible_shadow False")
+    check(trans_sock.is_linked, "Transparent mix input stays linked")
+    kinds = [e.get("kind") for e in jrnl.entries]
+    check("SHADOW_VIS_OFF" in kinds, "journal has SHADOW_VIS_OFF")
+    payload = [e.get("payload") for e in jrnl.entries
+               if e.get("kind") == "SHADOW_VIS_OFF"][0]
+    check(payload.get("object") == "Window" and payload.get("prev") is True,
+          "SHADOW_VIS_OFF payload is {object, prev: True}")
+    restored = pm.revert_mesh_emit_shadow_skip(scene, jrnl)
+    check(restored == 1, "revert consumes SHADOW_VIS_OFF")
+    check(obj.visible_shadow is True, "revert restores visible_shadow True")
+
+
+def test_shadow_skip_already_false_no_write():
+    section("visible_shadow already False → no write")
+    scene = _portal_scene(visible_shadow=False)
+    records = pm.classify_portal_meshes(scene)
+    check(len(records) == 1 and records[0]["role"] == pm.ROLE_MESH_EMIT_BACKFACE,
+          "still inventories MESH_EMIT_BACKFACE")
+    check(records[0]["shadow_skip_ok"] is False,
+          "already False is not shadow_skip_ok")
+    jrnl = _Journal()
+    applied = pm.apply_mesh_emit_shadow_skip(scene, jrnl, records)
+    check(applied == [], "apply is a no-op when already False")
+    check(scene.objects[0].visible_shadow is False, "stays False")
+    check(jrnl.entries == [], "journal stays empty")
+
+
+def test_world_portal_card_not_shadow_skip_apply():
+    section("WORLD_PORTAL_CARD is not MESH_EMIT_SHADOW_SKIP apply")
+    mat = _mat("Card", _trans_principled_tree())
+    data = _mesh_data("card", [mat], [0])
+    scene = _scene([_obj("Card", data, visible_shadow=True)])
+    records = pm.classify_portal_meshes(scene)
+    check(len(records) == 1 and records[0]["role"] == pm.ROLE_WORLD_PORTAL_CARD,
+          "inventories WORLD_PORTAL_CARD")
+    check(records[0]["shadow_skip_ok"] is False,
+          "WORLD_PORTAL_CARD is not shadow_skip_ok")
+    jrnl = _Journal()
+    applied = pm.apply_mesh_emit_shadow_skip(scene, jrnl, records)
+    check(applied == [], "WORLD_PORTAL_CARD is not this apply")
+    check(scene.objects[0].visible_shadow is True, "shadow vis stays True")
+    check(jrnl.entries == [], "journal stays empty")
+    shadow = speed_solver.mesh_emit_shadow_skip_actions(scene)
+    check(shadow == [], "planner hook emits no MESH_EMIT_SHADOW_SKIP")
+
+
+def test_hero_not_shadow_skip_apply():
+    section("HERO object → shadow skip classify and apply skip")
+    scene = _portal_scene(override="HERO", visible_shadow=True)
+    records = pm.classify_portal_meshes(scene)
+    check(records == [], "HERO object is skipped at classify")
+    fake = [{
+        "object": "Window",
+        "role": pm.ROLE_MESH_EMIT_BACKFACE,
+        "shadow_skip_ok": True,
+    }]
+    jrnl = _Journal()
+    applied = pm.apply_mesh_emit_shadow_skip(scene, jrnl, fake)
+    check(applied == [], "apply skips HERO")
+    check(scene.objects[0].visible_shadow is True, "HERO still casts shadows")
+    check(jrnl.entries == [], "journal stays empty")
+
+
+def test_cycles_visibility_shadow_path():
+    section("cycles_visibility.shadow True (no visible_shadow) → shadow_skip_ok")
+    vis = Obj(shadow=True)
+    scene = _portal_scene(cycles_visibility=vis)
+    obj = scene.objects[0]
+    check(not hasattr(obj, "visible_shadow"), "fixture has no visible_shadow")
+    check(obj.cycles_visibility.shadow is True, "legacy shadow vis True")
+    records = pm.classify_portal_meshes(scene)
+    check(len(records) == 1 and records[0]["shadow_skip_ok"] is True,
+          "cycles_visibility.shadow True → shadow_skip_ok")
+    jrnl = _Journal()
+    applied = pm.apply_mesh_emit_shadow_skip(scene, jrnl, records)
+    check(len(applied) == 1, "apply writes legacy path")
+    check(obj.cycles_visibility.shadow is False, "apply sets shadow False")
+    restored = pm.revert_mesh_emit_shadow_skip(scene, jrnl)
+    check(restored == 1 and obj.cycles_visibility.shadow is True,
+          "revert restores cycles_visibility.shadow")
+
+
 def main():
     test_backfacing_mix_is_portal()
     test_unlinked_fac_is_not_portal()
@@ -656,6 +777,11 @@ def main():
     test_apply_unlinks_transparent_and_sets_cull()
     test_missing_cull_attr_opaque_ok_false()
     test_world_portal_card_not_this_apply()
+    test_shadow_skip_ok_visible_shadow_true()
+    test_shadow_skip_already_false_no_write()
+    test_world_portal_card_not_shadow_skip_apply()
+    test_hero_not_shadow_skip_apply()
+    test_cycles_visibility_shadow_path()
     finish()
 
 

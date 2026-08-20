@@ -185,6 +185,7 @@ _PAYLOAD_IDS = {
     "NODE_UNLINK": (("material", "Material", "material_uid"),),
     "SLOT_REMOVE": (("mesh", "Mesh", "mesh_uid"),
                     ("material", "Material", "material_uid")),
+    "SHADOW_VIS_OFF": (("object", "Object", "object_uid"),),
 }
 
 
@@ -486,6 +487,8 @@ class Journal:
             return self._revert_node_unlink(payload)
         if entry.get("kind") == "SLOT_REMOVE":
             return self._revert_slot_remove(payload)
+        if entry.get("kind") == "SHADOW_VIS_OFF":
+            return self._revert_shadow_vis_off(payload)
         return False
 
     def _revert_prop(self, entry):
@@ -553,6 +556,18 @@ class Journal:
         except Exception:
             return False
         return restore_node_unlink_on_material(mat, payload)
+
+    def _revert_shadow_vis_off(self, payload):
+        """Restore one object shadow-visibility bit. Additive journal kind."""
+        obj = _find_datablock("Object", payload.get("object"),
+                              payload.get("object_uid"))
+        if obj is None:
+            return False
+        try:
+            from .analysis.portal_meshes import restore_shadow_vis_on_object
+        except Exception:
+            return False
+        return restore_shadow_vis_on_object(obj, payload)
 
     def _revert_slot_remove(self, payload):
         """Reinsert one unused material slot at its original index."""

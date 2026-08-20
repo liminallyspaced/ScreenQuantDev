@@ -1,6 +1,6 @@
 # L5 PORTAL_MESH: inventory mesh/curve cards whose used-face material
 # mixes Transparent BSDF with Fac linked to Geometry Backfacing.
-# Graph pattern + optional Manual BACKFACE_EMIT_OPAQUE apply.
+# Graph pattern + Manual MESH_EMIT_SHADOW_SKIP / BACKFACE_EMIT_OPAQUE.
 # Not a Cycles integrator knob. Never is_portal. Never AREA convert.
 #
 # SPEED_KIND stays "PORTAL_MESH" for journal/plan stability. Each record
@@ -19,21 +19,33 @@
 # helps if an HDRI/world is the real source. Classroom leftover Shade
 # Shadow is transparent retrace through that card, not missing world MIS.
 #
+# Cycles-correct write for that leftover: MESH_EMIT_SHADOW_SKIP.
+# Turn off shadow ray visibility on the MESH_EMIT_BACKFACE *object*
+# (intern/cycles/blender/object.cpp SD_OBJECT_SHADOW / visible_shadow /
+# cycles_visibility.shadow). Shadow rays never hit the Transparent card.
+# Camera / glossy / diffuse stay. Emission still lights as a mesh light.
+# Same class as hide_render membership (object visibility bit), not
+# an integrator RNA path and not a scene-level Cycles knob. TRIM in objects_apply.py
+# keeps visible_shadow True — do not fight that path; this lever is
+# only MESH_EMIT_BACKFACE records from classify.
+#
 # Transparent still sitting in the Mix latches SD_HAS_TRANSPARENT_SHADOW
 # on the whole shader (intern/cycles/scene/shader.cpp / svm.cpp
 # has_surface_transparent on remaining surface closures / kernel
 # shadow_all.h retrace). BACKFACE_EMIT_OPAQUE unlinks that Transparent
-# mix input (NODE_UNLINK) so the Surface is Emission-only. Cycles 4.5
-# does not sync use_backface_culling (blender/shader.cpp settings);
-# there is no SHADER_BACKFACE_CULL. SD_BACKFACING is a post-hit flag
-# (shader_data.h) for every ray type and does not skip shadow hits.
-# Journaled cull RNA is the viewport/EEVEE pair, not a Cycles kernel
-# skip. Never write integrator RNA.
+# mix input (NODE_UNLINK) so the Surface is Emission-only. That is the
+# quality-risk alternate: Cycles 4.5 does not sync use_backface_culling
+# (blender/shader.cpp settings); there is no SHADER_BACKFACE_CULL.
+# SD_BACKFACING is a post-hit flag (shader_data.h) for every ray type
+# and does not skip shadow hits. Journaled cull RNA is the
+# viewport/EEVEE pair, not a Cycles kernel skip. After unlink the
+# camera-facing back of the card becomes Emission. Prefer
+# MESH_EMIT_SHADOW_SKIP (keeps the Mix). Never write integrator RNA.
 #
-# Quality: Cycles F12 back of the card is Emission after unlink (not
-# invisible). Window rebate / two-way views can change. Auto off until
-# HDR-FLIP on Classroom and loft. Manual-first. Apply is NOT called from
-# Auto / build_speed_plan.
+# Quality: the card no longer casts a shadow of itself (usually wanted
+# for a window emit card). Unlink-Transparent F12 back is Emission.
+# Auto off until HDR-FLIP on Classroom and loft. Manual-first. Neither
+# apply is called from Auto / build_speed_plan.
 #
 # Later AREA convert (Manual, unbuilt) is a different lever: AREA light
 # matching strength×area + hide_render on the mesh, not a portal.
@@ -48,9 +60,11 @@
 
 SPEED_KIND = "PORTAL_MESH"
 SPEED_KIND_OPAQUE = "BACKFACE_EMIT_OPAQUE"
+SPEED_KIND_SHADOW = "MESH_EMIT_SHADOW_SKIP"
 ROLE_MESH_EMIT_BACKFACE = "MESH_EMIT_BACKFACE"
 ROLE_WORLD_PORTAL_CARD = "WORLD_PORTAL_CARD"
 ACTION_KIND = "NODE_UNLINK"
+ACTION_KIND_SHADOW = "SHADOW_VIS_OFF"
 CULL_ATTR = "use_backface_culling"
 
 GEOMETRY_OBJECT_TYPES = frozenset({"MESH", "CURVE"})
@@ -564,6 +578,78 @@ def _is_cycles_portal_light(obj):
     return False
 
 
+def _shadow_visibility(obj):
+    """Return (casts_shadow or None, rna_path).
+
+    Blender 4.2+: obj.visible_shadow (Cycles object.cpp SD_OBJECT_SHADOW).
+    Older: obj.cycles_visibility.shadow. None if neither attr exists —
+    do not default. Not a scene-level Cycles knob.
+    """
+    if obj is None:
+        return None, ""
+    if hasattr(obj, "visible_shadow"):
+        return bool(getattr(obj, "visible_shadow")), "visible_shadow"
+    vis = getattr(obj, "cycles_visibility", None)
+    if vis is not None and hasattr(vis, "shadow"):
+        return bool(getattr(vis, "shadow")), "cycles_visibility.shadow"
+    return None, ""
+
+
+def _set_shadow_visibility(obj, path, value):
+    """Write one object shadow-visibility bit. Returns True if it stuck."""
+    if obj is None or not path:
+        return False
+    if path == "visible_shadow":
+        if not hasattr(obj, "visible_shadow"):
+            return False
+        try:
+            obj.visible_shadow = value
+        except (AttributeError, TypeError):
+            return False
+        return getattr(obj, "visible_shadow") == value
+    if path == "cycles_visibility.shadow":
+        vis = getattr(obj, "cycles_visibility", None)
+        if vis is None or not hasattr(vis, "shadow"):
+            return False
+        try:
+            vis.shadow = value
+        except (AttributeError, TypeError):
+            return False
+        return getattr(vis, "shadow") == value
+    return False
+
+
+def _shadow_skip_fields(obj, role):
+    """shadow_skip_ok plus RNA path for one MESH_EMIT_BACKFACE object.
+
+    True only when the object currently casts shadows (visible_shadow
+    or cycles_visibility.shadow is True). Already-off is not this
+    write. Missing attr → False with a note (DNA 2.79 often UNKNOWN).
+    WORLD_PORTAL_CARD is never this apply. TRIM keeps visible_shadow
+    True on off-screen meshes — do not reuse that path here.
+    """
+    fields = {
+        "shadow_skip_ok": False,
+        "shadow_skip_note": "",
+        "shadow_path": "",
+    }
+    if role != ROLE_MESH_EMIT_BACKFACE:
+        return fields
+    casts, path = _shadow_visibility(obj)
+    fields["shadow_path"] = path
+    if casts is None:
+        fields["shadow_skip_note"] = (
+            "shadow visibility unreadable "
+            "(no visible_shadow / cycles_visibility.shadow)"
+        )
+        return fields
+    if not casts:
+        fields["shadow_skip_note"] = "shadow visibility already off"
+        return fields
+    fields["shadow_skip_ok"] = True
+    return fields
+
+
 def classify_portal_meshes(scene):
     """Return one inventory record per PORTAL_MESH candidate.
 
@@ -615,6 +701,7 @@ def classify_portal_meshes(scene):
                 "role": role,
             }
             rec.update(_opaque_fields(mat, role))
+            rec.update(_shadow_skip_fields(obj, role))
             records.append(rec)
     return records
 
@@ -627,6 +714,7 @@ def inventory_counts(records):
     emit = 0
     world = 0
     opaque = 0
+    shadow = 0
     for rec in recs:
         if rec.get("object"):
             objects.add(rec["object"])
@@ -641,6 +729,8 @@ def inventory_counts(records):
             world += 1
         if rec.get("opaque_ok"):
             opaque += 1
+        if rec.get("shadow_skip_ok"):
+            shadow += 1
     return {
         "PORTAL_MESH": len(recs),
         "UNIQUE_OBJECTS": len(objects),
@@ -649,6 +739,7 @@ def inventory_counts(records):
         "MESH_EMIT_BACKFACE": emit,
         "WORLD_PORTAL_CARD": world,
         "OPAQUE_OK": opaque,
+        "SHADOW_SKIP_OK": shadow,
     }
 
 
@@ -657,30 +748,55 @@ def format_inventory(records):
     recs = list(records or ())
     lines = [
         "PORTAL_MESH inventory (inventory only; Auto off; no convert; "
-        "no time claim; never is_portal for MESH_EMIT_BACKFACE)",
+        "no time claim; never is_portal for MESH_EMIT_BACKFACE; "
+        "shadow-vis skip preferred over unlink-Transparent)",
         "  PORTAL_MESH=%d  UNIQUE_OBJECTS=%d  UNIQUE_MESHES=%d  "
         "UNIQUE_MATERIALS=%d"
         % (counts["PORTAL_MESH"], counts["UNIQUE_OBJECTS"],
            counts["UNIQUE_MESHES"], counts["UNIQUE_MATERIALS"]),
-        "  MESH_EMIT_BACKFACE=%d  WORLD_PORTAL_CARD=%d  OPAQUE_OK=%d"
+        "  MESH_EMIT_BACKFACE=%d  WORLD_PORTAL_CARD=%d  "
+        "OPAQUE_OK=%d  SHADOW_SKIP_OK=%d"
         % (counts["MESH_EMIT_BACKFACE"], counts["WORLD_PORTAL_CARD"],
-           counts["OPAQUE_OK"]),
+           counts["OPAQUE_OK"], counts["SHADOW_SKIP_OK"]),
     ]
     for rec in recs:
-        note = rec.get("opaque_note") or ""
-        note_s = ("  note=%s" % note) if note else ""
+        notes = []
+        if rec.get("opaque_note"):
+            notes.append(rec.get("opaque_note"))
+        if rec.get("shadow_skip_note"):
+            notes.append(rec.get("shadow_skip_note"))
+        note_s = ("  note=%s" % "; ".join(notes)) if notes else ""
         lines.append(
             "  object=%s  mesh=%s  material=%s  role=%s  "
-            "opaque_ok=%s  reason=%s%s"
+            "opaque_ok=%s  shadow_skip_ok=%s  reason=%s%s"
             % (rec.get("object", ""), rec.get("mesh", ""),
                rec.get("material", ""), rec.get("role", ""),
-               rec.get("opaque_ok", False), rec.get("reason", ""),
+               rec.get("opaque_ok", False),
+               rec.get("shadow_skip_ok", False), rec.get("reason", ""),
                note_s))
     return "\n".join(lines)
 
 
 def print_inventory(records):
     print(format_inventory(records))
+
+
+def _find_object(scene, name):
+    if not name:
+        return None
+    objects = getattr(scene, "objects", None)
+    getter = getattr(objects, "get", None)
+    if getter is not None:
+        try:
+            obj = getter(name)
+            if obj is not None:
+                return obj
+        except Exception:
+            pass
+    for obj in objects or ():
+        if getattr(obj, "name", None) == name:
+            return obj
+    return None
 
 
 def _find_material(scene, name):
@@ -813,15 +929,13 @@ def _journal_cull(jrnl, mat, tag):
 def apply_backface_emit_opaque(scene, jrnl, records=None, tag="speed"):
     """Unlink Transparent on MESH_EMIT_BACKFACE + journal backface cull.
 
-    Only opaque_ok records. NODE_UNLINK the Transparent mix input so
-    Cycles drops SD_HAS_TRANSPARENT_SHADOW (svm.cpp
-    has_surface_transparent on remaining closures). Cycles kernel has
-    no SHADER_BACKFACE_CULL; blender/shader.cpp never reads
-    use_backface_culling. SD_BACKFACING is post-hit (shader_data.h) on
-    every ray type and does not skip shadow hits. Cull RNA is journaled
-    as the viewport/EEVEE pair; Cycles F12 back is Emission after
-    unlink. Not called by Make it Fast Auto. Never writes integrator
-    RNA. Never is_portal. Never AREA convert.
+    Quality-risk alternate to MESH_EMIT_SHADOW_SKIP. Prefer turning
+    off object shadow visibility (keeps the Mix; Cycles-correct). This
+    unlink drops SD_HAS_TRANSPARENT_SHADOW (svm.cpp
+    has_surface_transparent on remaining closures) but Cycles 4.5 does
+    not sync use_backface_culling, so the camera-facing back becomes
+    Emission. Only opaque_ok records. Not called by Make it Fast Auto.
+    Never writes integrator RNA. Never is_portal. Never AREA convert.
     """
     if records is None:
         records = classify_portal_meshes(scene)
@@ -932,6 +1046,92 @@ def revert_backface_emit_opaque(scene, jrnl):
             if restore_node_unlink_on_material(mat, payload):
                 consumed.add(id(entry))
                 count += 1
+    if hasattr(jrnl, "entries"):
+        jrnl.entries = [e for e in entries if id(e) not in consumed]
+    return count
+
+
+
+def restore_shadow_vis_on_object(obj, payload):
+    """Restore one SHADOW_VIS_OFF payload onto an already-resolved object."""
+    if obj is None or not isinstance(payload, dict):
+        return False
+    prev = payload.get("prev", True)
+    path = payload.get("path") or ""
+    if not path:
+        _casts, path = _shadow_visibility(obj)
+        if not path:
+            return False
+    return _set_shadow_visibility(obj, path, prev)
+
+
+def apply_mesh_emit_shadow_skip(scene, jrnl, records=None, tag="speed"):
+    """Turn off shadow ray visibility on MESH_EMIT_BACKFACE objects.
+
+    Cycles-correct write: intern/cycles/blender/object.cpp
+    SD_OBJECT_SHADOW / visible_shadow / cycles_visibility.shadow.
+    Shadow rays never hit the Transparent card; camera/glossy/diffuse
+    stay. Emission still lights as a mesh light. Does not unlink
+    Transparent. Skip linked / HERO / lights. Not TRIM (objects_apply
+    keeps visible_shadow True on off-screen meshes). Journal kind
+    SHADOW_VIS_OFF {object, prev}. Not called by Make it Fast Auto.
+    Never writes integrator RNA. Never is_portal. Never AREA convert.
+    """
+    if records is None:
+        records = classify_portal_meshes(scene)
+    applied = []
+    seen = set()
+    for rec in records or ():
+        if rec.get("role") != ROLE_MESH_EMIT_BACKFACE:
+            continue
+        if not rec.get("shadow_skip_ok"):
+            continue
+        name = rec.get("object") or ""
+        if not name or name in seen:
+            continue
+        obj = _find_object(scene, name)
+        if obj is None or _is_linked_id(obj) or _protected(obj):
+            continue
+        otype = getattr(obj, "type", "") or ""
+        if otype in ("LIGHT", "LAMP"):
+            continue
+        casts, path = _shadow_visibility(obj)
+        if not path or casts is not True:
+            continue
+        if not _set_shadow_visibility(obj, path, False):
+            continue
+        payload = {"object": name, "prev": True, "path": path}
+        if jrnl is not None:
+            recorder = getattr(jrnl, "record_action", None)
+            if recorder is not None:
+                recorder(ACTION_KIND_SHADOW, payload, tag)
+            elif hasattr(jrnl, "entries"):
+                jrnl.entries.append({
+                    "t": "action",
+                    "kind": ACTION_KIND_SHADOW,
+                    "payload": dict(payload),
+                    "tag": tag,
+                })
+        seen.add(name)
+        applied.append(payload)
+    return applied
+
+
+def revert_mesh_emit_shadow_skip(scene, jrnl):
+    """Restore journaled SHADOW_VIS_OFF shadow visibility. Returns count."""
+    entries = list(getattr(jrnl, "entries", None) or ())
+    consumed = set()
+    count = 0
+    for entry in reversed(entries):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("kind") != ACTION_KIND_SHADOW:
+            continue
+        payload = entry.get("payload") or {}
+        obj = _find_object(scene, payload.get("object"))
+        if restore_shadow_vis_on_object(obj, payload):
+            consumed.add(id(entry))
+            count += 1
     if hasattr(jrnl, "entries"):
         jrnl.entries = [e for e in entries if id(e) not in consumed]
     return count

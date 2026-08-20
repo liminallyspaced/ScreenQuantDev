@@ -609,6 +609,95 @@ def _hide_render(ob):
     return False
 
 
+# IDProperty types (DNA_ID.h). Cycles 2.79 ray vis lives here, not Object DNA.
+IDP_INT = 1
+IDP_GROUP = 6
+
+
+def _idp_name(prop):
+    if prop is None:
+        return ""
+    try:
+        name = prop.get(b"name", use_str=True)
+    except (KeyError, NotImplementedError, AssertionError):
+        return ""
+    return _as_str(name)
+
+
+def _idp_children(prop):
+    if prop is None:
+        return
+    try:
+        typ = int(prop.get(b"type") or 0)
+    except (KeyError, NotImplementedError, AssertionError, TypeError):
+        return
+    if typ != IDP_GROUP:
+        return
+    try:
+        first = prop.get_pointer((b"data", b"group", b"first"))
+    except (KeyError, NotImplementedError, AssertionError):
+        return
+    seen = set()
+    cur = first
+    while cur is not None:
+        ident = getattr(cur, "addr_old", id(cur))
+        if ident in seen:
+            break
+        seen.add(ident)
+        yield cur
+        try:
+            cur = cur.get_pointer(b"next")
+        except (KeyError, NotImplementedError, AssertionError):
+            break
+
+
+def _idp_int(prop):
+    if prop is None:
+        return None
+    try:
+        if int(prop.get(b"type") or -1) != IDP_INT:
+            return None
+        val = prop.get((b"data", b"val"))
+    except (KeyError, NotImplementedError, AssertionError, TypeError):
+        return None
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cycles_visibility_shadow(ob):
+    """Proven Cycles shadow vis from IDProperty cycles_visibility.shadow.
+
+    2.79 Object DNA has restrictflag / scavisflag, not visible_shadow.
+    Cycles ray vis is an IDProperty group. Return True/False only when
+    the shadow key is a proven INT. Missing group or missing key → None
+    (UNKNOWN). Never default True.
+    """
+    if ob is None:
+        return None
+    try:
+        root = ob.get_pointer((b"id", b"properties"))
+    except (KeyError, NotImplementedError, AssertionError):
+        return None
+    vis = None
+    for child in _idp_children(root) or ():
+        if _idp_name(child) == "cycles_visibility":
+            vis = child
+            break
+    if vis is None:
+        return None
+    for child in _idp_children(vis) or ():
+        if _idp_name(child) == "shadow":
+            val = _idp_int(child)
+            if val is None:
+                return None
+            return bool(val)
+    return None
+
+
 def _lib_wrapper(block):
     lib = _safe_pointer(block, (b"id", b"lib"))
     if lib is not None:
@@ -956,7 +1045,7 @@ def build_scene(bf):
                     vertex_colors=[],
                     uv_layers=[],
                 )
-        objects.append(_Obj(
+        obj_kw = dict(
             name=_id_name(ob),
             type=ob_type,
             hide_render=hide,
@@ -966,7 +1055,13 @@ def build_scene(bf):
             material_slots=slots,
             modifiers=mods,
             scenequant=_Obj(override="AUTO"),
-        ))
+        )
+        # 2.79 has no Object.visible_shadow DNA. Attach cycles_visibility
+        # only when IDP shadow is a proven INT — never default.
+        shadow = _cycles_visibility_shadow(ob)
+        if shadow is not None:
+            obj_kw["cycles_visibility"] = _Obj(shadow=shadow)
+        objects.append(_Obj(**obj_kw))
 
     comp = None
     if _safe_pointer(sc, b"nodetree") is not None:
@@ -1129,6 +1224,30 @@ def main(argv=None):
         print("OPAQUE_OK honesty: use_backface_culling is attached on the "
               "duck only when Material DNA has that field. 2.79 files "
               "typically lack it (opaque_ok=0); live 4.5 hasattr True.")
+        shadow_ok = pcounts.get("SHADOW_SKIP_OK", 0)
+        emit_n = pcounts.get("MESH_EMIT_BACKFACE", 0)
+        unknown_shadow = 0
+        proven_off = 0
+        for rec in portals:
+            if rec.get("role") != "MESH_EMIT_BACKFACE":
+                continue
+            if rec.get("shadow_skip_ok"):
+                continue
+            note = rec.get("shadow_skip_note") or ""
+            if "unreadable" in note or not rec.get("shadow_path"):
+                unknown_shadow += 1
+            elif "already off" in note:
+                proven_off += 1
+        print("SHADOW_SKIP honesty: 2.79 Object DNA has restrictflag/"
+              "scavisflag, not visible_shadow. Cycles ray vis is "
+              "IDProperty cycles_visibility.shadow. Missing key is "
+              "UNKNOWN (not defaulted True). SHADOW_SKIP_OK=%d "
+              "already_off=%d UNKNOWN=%d MESH_EMIT_BACKFACE=%d"
+              % (shadow_ok, proven_off, unknown_shadow, emit_n))
+        if unknown_shadow:
+            print("SHADOW_SKIP_OK not proven (UNKNOWN visibility on %d "
+                  "emit card(s); do not treat 0 as a write count)."
+                  % unknown_shadow)
 
     fired = {
         "PRUNE_MIX_TRANSPARENT": dcounts.get("PRUNE_MIX_TRANSPARENT", 0),
