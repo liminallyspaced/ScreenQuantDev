@@ -1581,9 +1581,9 @@ def backface_emit_opaque_actions(scene, caveats=None):
 
     NOT called from build_speed_plan / _dead_actions. Auto stays off
     until HDR-FLIP on Classroom and loft. Quality-risk alternate to
-    MESH_EMIT_SHADOW_SKIP (unlink Transparent + journaled cull).
-    Prefer shadow-vis skip. Never is_portal. Never AREA convert.
-    time_factor is 1.0 (no claim).
+    MESH_EMIT_SHADOW_SKIP (unlink Transparent only; cull RNA is a
+    Cycles no-op). Prefer shadow-vis skip. Never is_portal.
+    Never AREA convert. time_factor is 1.0 (no claim).
     """
     portal_meshes = _load_portal_meshes()
     if portal_meshes is None:
@@ -1595,8 +1595,8 @@ def backface_emit_opaque_actions(scene, caveats=None):
         return []
     return [SpeedAction(
         "BACKFACE_EMIT_OPAQUE",
-        "%d backface-emit card(s) → unlink Transparent + backface cull "
-        "(manual; never is_portal)"
+        "%d backface-emit card(s) → unlink Transparent "
+        "(manual; never is_portal; cull RNA is a Cycles no-op)"
         % n,
         "dead", 2, 1.0, 1,
         {"records": ok})]

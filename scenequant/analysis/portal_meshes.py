@@ -40,7 +40,9 @@
 # and does not skip shadow hits. Journaled cull RNA is the
 # viewport/EEVEE pair, not a Cycles kernel skip. After unlink the
 # camera-facing back of the card becomes Emission. Prefer
-# MESH_EMIT_SHADOW_SKIP (keeps the Mix). Never write integrator RNA.
+# MESH_EMIT_SHADOW_SKIP (keeps the Mix; F12-correct). Unlink is the
+# quality-risk alternate. Never journal use_backface_culling
+# (Cycles no-op). Never write integrator RNA.
 #
 # Quality: the card no longer casts a shadow of itself (usually wanted
 # for a window emit card). Unlink-Transparent F12 back is Emission.
@@ -517,11 +519,12 @@ def _unlink_target_for_emit_backface(material):
 def _opaque_fields(material, role):
     """opaque_ok plus NODE_UNLINK payload fields for one material.
 
-    True only for MESH_EMIT_BACKFACE when (a) Transparent is a mix
-    input we can NODE_UNLINK and (b) the material has
-    use_backface_culling. Missing cull attr → opaque_ok False with a
-    note that cull is required (still inventory the candidate).
-    WORLD_PORTAL_CARD is never this apply.
+    True only for MESH_EMIT_BACKFACE when Transparent is a mix
+    input we can NODE_UNLINK. Unlink-only is enough for the shadow
+    flag (drops SD_HAS_TRANSPARENT_SHADOW). Do not require
+    use_backface_culling — Cycles 4.5 does not sync that RNA
+    (intern/cycles/blender/shader.cpp); MESH_EMIT_SHADOW_SKIP is the
+    F12-correct write. WORLD_PORTAL_CARD is never this apply.
     """
     fields = {
         "opaque_ok": False,
@@ -547,11 +550,6 @@ def _opaque_fields(material, role):
     fields["from_socket"] = _socket_name(from_sock)
     if not can_unlink:
         fields["opaque_note"] = "Transparent mix input not unlinkable"
-        return fields
-    if not hasattr(material, CULL_ATTR):
-        fields["opaque_note"] = (
-            "cull required; use_backface_culling missing"
-        )
         return fields
     fields["opaque_ok"] = True
     return fields
@@ -894,48 +892,18 @@ def _unlink_socket(tree, sock):
     return removed
 
 
-def _journal_cull(jrnl, mat, tag):
-    """Set use_backface_culling True and journal the RNA write.
-
-    Same shape as other material RNA (journal.set_prop). Duck journals
-    without set_prop still setattr and append a prop entry so revert
-    can restore the flag.
-    """
-    if not hasattr(mat, CULL_ATTR):
-        return False
-    if getattr(mat, CULL_ATTR, True) is not False:
-        return False
-    setter = getattr(jrnl, "set_prop", None) if jrnl is not None else None
-    if setter is not None:
-        return bool(setter(mat, CULL_ATTR, True, tag))
-    old = getattr(mat, CULL_ATTR)
-    try:
-        setattr(mat, CULL_ATTR, True)
-    except (AttributeError, TypeError):
-        return False
-    if jrnl is not None and hasattr(jrnl, "entries"):
-        jrnl.entries.append({
-            "t": "prop",
-            "kind": "Material",
-            "name": getattr(mat, "name", "") or "",
-            "path": CULL_ATTR,
-            "old": old,
-            "new": True,
-            "tag": tag,
-        })
-    return True
-
-
 def apply_backface_emit_opaque(scene, jrnl, records=None, tag="speed"):
-    """Unlink Transparent on MESH_EMIT_BACKFACE + journal backface cull.
+    """Unlink Transparent on MESH_EMIT_BACKFACE Mix graphs.
 
-    Quality-risk alternate to MESH_EMIT_SHADOW_SKIP. Prefer turning
-    off object shadow visibility (keeps the Mix; Cycles-correct). This
-    unlink drops SD_HAS_TRANSPARENT_SHADOW (svm.cpp
-    has_surface_transparent on remaining closures) but Cycles 4.5 does
-    not sync use_backface_culling, so the camera-facing back becomes
-    Emission. Only opaque_ok records. Not called by Make it Fast Auto.
-    Never writes integrator RNA. Never is_portal. Never AREA convert.
+    Quality-risk alternate to MESH_EMIT_SHADOW_SKIP (the F12-correct
+    write). Prefer turning off object shadow visibility (keeps the
+    Mix; Cycles-correct). This unlink drops SD_HAS_TRANSPARENT_SHADOW
+    (svm.cpp has_surface_transparent on remaining closures) but
+    Cycles 4.5 does not sync use_backface_culling, so the
+    camera-facing back becomes Emission. Never set or journal
+    use_backface_culling (Cycles no-op). Only opaque_ok records.
+    Not called by Make it Fast Auto. Never writes integrator RNA.
+    Never is_portal. Never AREA convert.
     """
     if records is None:
         records = classify_portal_meshes(scene)
@@ -947,8 +915,6 @@ def apply_backface_emit_opaque(scene, jrnl, records=None, tag="speed"):
             continue
         mat = _find_material(scene, rec.get("material"))
         if mat is None or _is_linked_id(mat):
-            continue
-        if not hasattr(mat, CULL_ATTR):
             continue
         tree = getattr(mat, "node_tree", None)
         if tree is None:
@@ -975,7 +941,6 @@ def apply_backface_emit_opaque(scene, jrnl, records=None, tag="speed"):
                 if recorder is not None:
                     recorder(ACTION_KIND, payload, tag)
             payloads.append(payload)
-        _journal_cull(jrnl, mat, tag)
         applied.extend(payloads)
     return applied
 
@@ -1023,10 +988,11 @@ def _restore_cull_entry(scene, entry):
 
 
 def revert_backface_emit_opaque(scene, jrnl):
-    """Restore NODE_UNLINK Mix links and journaled use_backface_culling.
+    """Restore NODE_UNLINK Mix links.
 
-    Newest-first so RNA cull is restored before the Mix relink when
-    apply wrote unlink then cull. Returns restored entry count.
+    Apply no longer journals use_backface_culling (Cycles no-op).
+    Legacy cull RNA entries are still restored if present.
+    Newest-first. Returns restored entry count.
     """
     entries = list(getattr(jrnl, "entries", None) or ())
     consumed = set()

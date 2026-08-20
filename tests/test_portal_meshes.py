@@ -559,20 +559,23 @@ def test_no_name_special_case_or_cycles_write():
 
 
 def test_cull_attr_present_opaque_ok():
-    section("MESH_EMIT_BACKFACE + cull attr present → opaque_ok True")
-    scene = _portal_scene(cull=False)
+    section("MESH_EMIT_BACKFACE Transparent mix input → opaque_ok True (no cull required)")
+    scene = _portal_scene()
+    mat = scene.objects[0].data.materials[0]
+    check(not hasattr(mat, "use_backface_culling"),
+          "fixture has no use_backface_culling")
     records = pm.classify_portal_meshes(scene)
     check(len(records) == 1, "one MESH_EMIT_BACKFACE record")
     rec = records[0]
     check(rec["role"] == pm.ROLE_MESH_EMIT_BACKFACE, "role is MESH_EMIT_BACKFACE")
     check(rec["opaque_ok"] is True,
-          "Transparent mix input + use_backface_culling → opaque_ok")
+          "Transparent mix input is enough for opaque_ok (cull not required)")
     check(rec.get("socket") in ("Shader", "Shader_001"),
           "record names the Transparent mix input")
 
 
 def test_apply_unlinks_transparent_and_sets_cull():
-    section("apply unlinks Transparent, sets cull, revert restores")
+    section("apply unlinks Transparent, does not write cull, revert restores Mix")
     scene = _portal_scene(cull=False)
     mat = scene.objects[0].data.materials[0]
     mix = None
@@ -585,6 +588,7 @@ def test_apply_unlinks_transparent_and_sets_cull():
           "fixture Transparent mix input starts linked")
     check(mat.use_backface_culling is False, "fixture cull starts False")
     records = pm.classify_portal_meshes(scene)
+    check(records[0]["opaque_ok"] is True, "opaque_ok True with Transparent mix input")
     jrnl = _Journal()
     applied = pm.apply_backface_emit_opaque(scene, jrnl, records)
     check(len(applied) == 1, "apply unlinks one Transparent mix input")
@@ -592,19 +596,19 @@ def test_apply_unlinks_transparent_and_sets_cull():
     emit_sock = mix.inputs.get("Shader_001")
     check(emit_sock is not None and emit_sock.is_linked,
           "Emission mix input stays linked")
-    check(mat.use_backface_culling is True, "cull set True")
+    check(mat.use_backface_culling is False, "apply does not set cull")
     kinds = [e.get("kind") for e in jrnl.entries]
     paths = [e.get("path") for e in jrnl.entries]
     check("NODE_UNLINK" in kinds, "journal has NODE_UNLINK")
-    check("use_backface_culling" in paths, "journal has cull RNA")
+    check("use_backface_culling" not in paths, "journal has no cull RNA")
     restored = pm.revert_backface_emit_opaque(scene, jrnl)
-    check(restored >= 2, "revert consumes unlink + cull entries")
+    check(restored >= 1, "revert consumes unlink entry")
     check(trans_sock.is_linked, "revert restores the Mix Transparent link")
-    check(mat.use_backface_culling is False, "revert restores cull flag")
+    check(mat.use_backface_culling is False, "revert does not write cull")
 
 
 def test_missing_cull_attr_opaque_ok_false():
-    section("no use_backface_culling attr → opaque_ok False, apply no-op")
+    section("no use_backface_culling attr → opaque_ok True, apply unlinks, no cull writes")
     scene = _portal_scene()
     mat = scene.objects[0].data.materials[0]
     check(not hasattr(mat, "use_backface_culling"),
@@ -612,9 +616,10 @@ def test_missing_cull_attr_opaque_ok_false():
     records = pm.classify_portal_meshes(scene)
     check(len(records) == 1 and records[0]["role"] == pm.ROLE_MESH_EMIT_BACKFACE,
           "still inventories MESH_EMIT_BACKFACE")
-    check(records[0]["opaque_ok"] is False, "opaque_ok False without cull attr")
-    check("cull required" in (records[0].get("opaque_note") or ""),
-          "note says cull is required")
+    check(records[0]["opaque_ok"] is True,
+          "unlink-only is enough for opaque_ok")
+    check("cull required" not in (records[0].get("opaque_note") or ""),
+          "note does not require cull")
     mix = None
     trans_sock = None
     for node in mat.node_tree.nodes:
@@ -625,9 +630,15 @@ def test_missing_cull_attr_opaque_ok_false():
           "Transparent starts linked")
     jrnl = _Journal()
     applied = pm.apply_backface_emit_opaque(scene, jrnl, records)
-    check(applied == [], "apply is a no-op without cull attr")
-    check(trans_sock.is_linked, "Transparent mix input stays linked")
-    check(jrnl.entries == [], "journal stays empty")
+    check(len(applied) == 1, "apply unlinks without cull attr")
+    check(not trans_sock.is_linked, "Transparent mix input is unlinked")
+    check("use_backface_culling" not in [e.get("path") for e in jrnl.entries],
+          "journal has no cull RNA")
+    check(not hasattr(mat, "use_backface_culling"),
+          "apply does not add use_backface_culling")
+    restored = pm.revert_backface_emit_opaque(scene, jrnl)
+    check(restored >= 1, "revert consumes unlink")
+    check(trans_sock.is_linked, "revert restores the Mix Transparent link")
 
 
 def test_world_portal_card_not_this_apply():

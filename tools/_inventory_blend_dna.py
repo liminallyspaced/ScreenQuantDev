@@ -1221,9 +1221,9 @@ def main(argv=None):
         pcounts_out = pcounts
         print("PORTAL_MESH_WALK COMPLETE (Fac source sockets named from DNA; "
               "Geometry Backfacing not guessed)")
-        print("OPAQUE_OK honesty: use_backface_culling is attached on the "
-              "duck only when Material DNA has that field. 2.79 files "
-              "typically lack it (opaque_ok=0); live 4.5 hasattr True.")
+        print("OPAQUE_OK honesty: unlink-only (Transparent mix input). "
+              "use_backface_culling is a Cycles no-op and is not required; "
+              "2.79 files typically lack the field.")
         shadow_ok = pcounts.get("SHADOW_SKIP_OK", 0)
         emit_n = pcounts.get("MESH_EMIT_BACKFACE", 0)
         unknown_shadow = 0
