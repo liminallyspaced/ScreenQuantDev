@@ -295,6 +295,35 @@ def _aov_mat(name, aov="Dust"):
     ])
 
 
+
+def _zero_disp_mat(name, value=0.0, source="VALUE", library=None):
+    """Displacement linked to Value / Noise / GROUP."""
+    prin = _principled()
+    out = _output()
+    nodes = [prin, out]
+    links = [(prin, "BSDF", out, "Surface")]
+    if source == "VALUE":
+        val = _Node("Value", "VALUE", outputs=[_Sock("Value", value)])
+        nodes.append(val)
+        links.append((val, "Value", out, "Displacement"))
+    elif source == "NOISE":
+        noise = _Node(
+            "Noise Texture", "TEX_NOISE",
+            outputs=[_Sock("Fac", 0.0), _Sock("Color")],
+            bl_idname="ShaderNodeTexNoise",
+        )
+        nodes.append(noise)
+        links.append((noise, "Fac", out, "Displacement"))
+    elif source == "GROUP":
+        val = _Node("Value", "VALUE", outputs=[_Sock("Value", 0.0)])
+        grp = _Node("Group", "GROUP", node_tree=Obj(nodes=[]))
+        nodes.extend([val, grp])
+        links.append((val, "Value", out, "Displacement"))
+    elif source == "NONE":
+        pass
+    return _mat(name, nodes, links, library=library)
+
+
 def _with_obj(mat, obj_name="Mesh", **kw):
     return _scene([_mesh(obj_name, material_slots=[Obj(material=mat)], **kw)])
 
@@ -541,10 +570,12 @@ def test_not_in_default_auto_plan():
     mat = _value_alpha_mat("Paint")
     vol = _empty_volume_mat("Hollow")
     mix = _mix_transparent_mat("Passthrough", fac=1.0)
+    disp = _zero_disp_mat("Flat")
     scene = speed_solver_scene([
         _mesh("Wall", material_slots=[Obj(material=mat)]),
         _mesh("Box", material_slots=[Obj(material=vol)]),
         _mesh("Car", material_slots=[Obj(material=mix)]),
+        _mesh("Floor", material_slots=[Obj(material=disp)]),
     ])
     plan = speed_solver.build_speed_plan(
         scene, {}, Obj(total_mb=400.0, caveats=[], per_object_geo_mb={},
@@ -560,6 +591,8 @@ def test_not_in_default_auto_plan():
           "inventory still sees PRUNE_VOLUME (Auto is a separate gate)")
     check(any(r["class"] == dc.PRUNE_MIX_TRANSPARENT for r in inventory),
           "inventory still sees PRUNE_MIX_TRANSPARENT (Auto is a separate gate)")
+    check(any(r["class"] == dc.PRUNE_DISPLACE for r in inventory),
+          "inventory still sees PRUNE_DISPLACE (Auto is a separate gate)")
 
 
 def speed_solver_scene(objects):
@@ -590,8 +623,9 @@ def test_inventory_print_shape():
     text = dc.format_inventory(dc.classify_dead_closures(_with_obj(mat, "Wall")))
     check("no writes" in text and "no time claim" in text,
           "inventory header refuses a time claim")
-    check("PRUNE_ALPHA=" in text and "PRUNE_MIX_TRANSPARENT=" in text and "Paint" in text,
-          "table lists PRUNE_ALPHA / PRUNE_MIX_TRANSPARENT and the candidate")
+    check("PRUNE_ALPHA=" in text and "PRUNE_MIX_TRANSPARENT=" in text
+          and "PRUNE_DISPLACE=" in text and "Paint" in text,
+          "table lists PRUNE_ALPHA / PRUNE_MIX_TRANSPARENT / PRUNE_DISPLACE")
 
 
 def test_default_plan_kind_absent_empty():
@@ -709,6 +743,80 @@ def test_apply_mix_transparent_unlink():
     check(restored == 1 and dead.is_linked, "revert restores the Mix Shader link")
 
 
+
+def test_displace_value_zero_prunes():
+    section("Displacement linked to Value=0 → PRUNE_DISPLACE")
+    mat = _zero_disp_mat("Flat", value=0.0)
+    records = dc.classify_dead_closures(_with_obj(mat, "Floor"))
+    hits = [r for r in _for_mat(records, "Flat") if r["class"] == dc.PRUNE_DISPLACE]
+    check(len(hits) == 1, "Value=0 Displacement → one PRUNE_DISPLACE")
+    check(hits[0]["node"] == "Material Output", "record.node is Material Output")
+    check(hits[0]["socket"] == "Displacement", "record.socket is Displacement")
+    check("Floor" in hits[0]["users"], "users lists the mesh")
+    scene = _with_obj(mat, "Floor")
+    actions = speed_solver.dead_closure_prune_actions(scene)
+    check(len(actions) == 1 and actions[0].kind == "DEAD_CLOSURE_PRUNE"
+          and actions[0].time_factor == 1.0,
+          "manual hook counts PRUNE_DISPLACE")
+
+
+def test_displace_value_half_kept():
+    section("Displacement linked to Value=0.5 → not prune")
+    mat = _zero_disp_mat("Bump", value=0.5)
+    records = dc.classify_dead_closures(_with_obj(mat, "Floor"))
+    check(all(r["class"] != dc.PRUNE_DISPLACE for r in _for_mat(records, "Bump")),
+          "Value=0.5 Displacement is not PRUNE_DISPLACE")
+
+
+def test_displace_noise_and_group_kept():
+    section("Displacement linked to Noise / GROUP → not prune")
+    noise = _zero_disp_mat("Noisy", source="NOISE")
+    records = dc.classify_dead_closures(_with_obj(noise, "Floor"))
+    check(all(r["class"] != dc.PRUNE_DISPLACE
+              for r in _for_mat(records, "Noisy")),
+          "Noise Displacement is not PRUNE_DISPLACE")
+    grouped = _zero_disp_mat("GroupedDisp", source="GROUP")
+    records = dc.classify_dead_closures(_with_obj(grouped, "Prop"))
+    check(all(r["class"] != dc.PRUNE_DISPLACE
+              for r in _for_mat(records, "GroupedDisp")),
+          "GROUP Displacement is not PRUNE_DISPLACE")
+    check(any(r["class"] == dc.SKIP_GROUP
+              for r in _for_mat(records, "GroupedDisp")),
+          "GROUP tree is SKIP_GROUP")
+
+
+def test_displace_unconnected_no_record():
+    section("unconnected Displacement → no record")
+    mat = _zero_disp_mat("Bare", source="NONE")
+    records = dc.classify_dead_closures(_with_obj(mat, "Floor"))
+    check(all(r["class"] != dc.PRUNE_DISPLACE
+              for r in _for_mat(records, "Bare")),
+          "unconnected Displacement emits no PRUNE_DISPLACE")
+    check(all(r.get("socket") != "Displacement" for r in _for_mat(records, "Bare")),
+          "unconnected Displacement emits no Displacement record")
+
+
+def test_apply_displace_unlink_and_revert():
+    section("apply unlinks Displacement; revert restores")
+    mat = _zero_disp_mat("Flat", value=0.0)
+    scene = _with_obj(mat, "Floor")
+    disp = None
+    for node in mat.node_tree.nodes:
+        if node.type == "OUTPUT_MATERIAL":
+            disp = node.inputs.get("Displacement")
+    check(disp is not None and disp.is_linked, "fixture Displacement starts linked")
+    records = dc.classify_dead_closures(scene)
+    jrnl = _Journal()
+    applied = dc.apply_dead_closures(scene, jrnl, records)
+    hits = [a for a in applied if a.get("socket") == "Displacement"]
+    check(len(hits) == 1, "apply unlinks the PRUNE_DISPLACE socket")
+    check(not disp.is_linked, "Displacement is unlinked after apply")
+    check(jrnl.entries and jrnl.entries[0]["kind"] == "NODE_UNLINK",
+          "journal kind is NODE_UNLINK")
+    restored = dc.revert_dead_closures(scene, jrnl)
+    check(restored == 1 and disp.is_linked, "revert restores the Displacement link")
+
+
 def main():
     test_value_one_prunes_alpha()
     test_jpeg_prunes_alpha()
@@ -726,6 +834,11 @@ def main():
     test_mix_glass_skipped()
     test_apply_unlink_and_revert()
     test_apply_mix_transparent_unlink()
+    test_displace_value_zero_prunes()
+    test_displace_value_half_kept()
+    test_displace_noise_and_group_kept()
+    test_displace_unconnected_no_record()
+    test_apply_displace_unlink_and_revert()
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
     test_default_plan_kind_absent_empty()

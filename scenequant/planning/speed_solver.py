@@ -657,8 +657,9 @@ def _dead_actions(scene, coverage, caveats):
     actions.extend(_opaque_cutout_shadow_actions(scene, caveats))
     # DEAD_CLOSURE_PRUNE lives in dead_closure_prune_actions (manual-later).
     # Not in the default Auto plan until official Classroom/loft inventory
-    # proves PRUNE_ALPHA + PRUNE_VOLUME >= 1. No time claim.
+    # proves candidates. No time claim.
     # UNUSED_SLOTS lives in unused_slots_actions (manual-later).
+    # UNUSED_COLOR_ATTRS lives in unused_color_attrs_actions (manual-later).
     # Not in the default Auto plan until a measured loft pair exists.
     # No time claim. Not a Cycles RNA knob.
     return actions
@@ -1478,15 +1479,79 @@ def unused_slots_actions(scene, caveats=None):
         {"records": records})]
 
 
+def _load_unused_color_attrs():
+    try:
+        from ..analysis import unused_color_attrs
+        return unused_color_attrs
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        import os
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "analysis",
+            "unused_color_attrs.py"))
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.analysis.unused_color_attrs", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def unused_color_attrs_actions(scene, caveats=None):
+    """Manual-later planner hook for L3b UNUSED_COLOR_ATTRS.
+
+    NOT called from build_speed_plan / _dead_actions. Auto stays off.
+    Inventory-only this pass (apply would drop pixel values). time_factor
+    is 1.0 (no claim). Graph / datablock lever — not a Cycles RNA knob.
+    """
+    unused_color_attrs = _load_unused_color_attrs()
+    if unused_color_attrs is None:
+        return []
+    records = unused_color_attrs.classify_unused_color_attrs(scene)
+    n = len(records)
+    if n < 1:
+        return []
+    meshes = {r.get("mesh") for r in records if r.get("mesh")}
+    return [SpeedAction(
+        "UNUSED_COLOR_ATTRS",
+        "%d unused color attribute(s) on %d unique mesh(es) "
+        "→ inventory (manual)"
+        % (n, len(meshes)),
+        "dead", 2, 1.0, 1,
+        {"records": records})]
+
+
+def _load_dead_closures():
+    try:
+        from ..analysis import dead_closures
+        return dead_closures
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        import os
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "analysis", "dead_closures.py"))
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.analysis.dead_closures", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
 def dead_closure_prune_actions(scene, caveats=None):
     """Manual-later planner hook for L1 DEAD_CLOSURE_PRUNE.
 
     NOT called from build_speed_plan / _dead_actions. Auto stays off until
     official-file inventory proves candidates. time_factor is 1.0 (no claim).
     """
-    try:
-        from ..analysis import dead_closures
-    except Exception:
+    dead_closures = _load_dead_closures()
+    if dead_closures is None:
         return []
     records = dead_closures.classify_dead_closures(scene)
     prunes = [r for r in records if r.get("class") in dead_closures.PRUNE_CLASSES]
@@ -1494,13 +1559,15 @@ def dead_closure_prune_actions(scene, caveats=None):
     n_vol = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_VOLUME)
     n_mix = sum(1 for r in prunes
                 if r.get("class") == dead_closures.PRUNE_MIX_TRANSPARENT)
-    if n_alpha + n_vol + n_mix < 1:
+    n_disp = sum(1 for r in prunes
+                 if r.get("class") == dead_closures.PRUNE_DISPLACE)
+    if n_alpha + n_vol + n_mix + n_disp < 1:
         return []
     return [SpeedAction(
         "DEAD_CLOSURE_PRUNE",
-        "%d false-transparent / empty-volume / mix-transparent "
-        "socket(s) → unlink (manual)"
-        % (n_alpha + n_vol + n_mix),
+        "%d false-transparent / empty-volume / mix-transparent / "
+        "zero-displace socket(s) → unlink (manual)"
+        % (n_alpha + n_vol + n_mix + n_disp),
         "dead", 2, 1.0, 1,
         {"records": prunes})]
 

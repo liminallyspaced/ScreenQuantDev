@@ -8,6 +8,8 @@
 # Mix Shader Fac proven 0/1 + unused Transparent BSDF is
 # PRUNE_MIX_TRANSPARENT (L1.5). Apply unlinks the dead shader input
 # (NODE_UNLINK passthrough). It is NOT wired into Make it Fast Auto.
+# Displacement proven-zero is PRUNE_DISPLACE (L1.6). Unlink the
+# Displacement socket so Cycles drops has_displacement. Same apply.
 # Never writes scene.cycles.* or use_transparent_shadow.
 
 import os
@@ -15,6 +17,7 @@ import os
 PRUNE_ALPHA = "PRUNE_ALPHA"
 PRUNE_VOLUME = "PRUNE_VOLUME"
 PRUNE_MIX_TRANSPARENT = "PRUNE_MIX_TRANSPARENT"
+PRUNE_DISPLACE = "PRUNE_DISPLACE"
 PRUNE_AOV = "PRUNE_AOV"
 KEEP_REAL_CUTOUT = "KEEP_REAL_CUTOUT"
 KEEP_GLASS = "KEEP_GLASS"
@@ -22,16 +25,19 @@ SKIP_GROUP = "SKIP_GROUP"
 SKIP_LINKED = "SKIP_LINKED"
 
 ALL_CLASSES = (
-    PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_AOV,
-    KEEP_REAL_CUTOUT, KEEP_GLASS, SKIP_GROUP, SKIP_LINKED,
+    PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_DISPLACE,
+    PRUNE_AOV, KEEP_REAL_CUTOUT, KEEP_GLASS, SKIP_GROUP, SKIP_LINKED,
 )
 PRUNE_CLASSES = frozenset({
-    PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_AOV,
+    PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_DISPLACE,
+    PRUNE_AOV,
 })
 
 # Cycles CLOSURE_WEIGHT_CUTOFF is ~1e-5. Only treat a constant as opaque
 # when it is at least this close to 1.0 (conservative).
 OPAQUE_ALPHA = 1.0 - 1e-4
+# Proven-zero for Displacement / Height / Scale (same eps as Mix Fac=0).
+ZERO_EPS = 1e-4
 
 VOLUME_PROVEN = frozenset({
     "PRINCIPLED_VOLUME", "VOLUME_SCATTER", "VOLUME_ABSORPTION",
@@ -600,6 +606,96 @@ def _classify_volume(output_node, tree):
             from_node, from_sock)
 
 
+def _near_zero_float(value):
+    return isinstance(value, (int, float)) and abs(float(value)) <= ZERO_EPS
+
+
+def _near_zero_vector(value):
+    if _near_zero_float(value):
+        return True
+    try:
+        seq = list(value)
+    except TypeError:
+        return False
+    if not seq:
+        return False
+    return all(_near_zero_float(item) for item in seq)
+
+
+def _proven_zero_scalar(sock):
+    """True iff sock is unlinked ~0 or a Value node ~0. One hop. No Math."""
+    if sock is None:
+        return False
+    if not getattr(sock, "is_linked", False):
+        return _near_zero_float(getattr(sock, "default_value", None))
+    from_node, from_sock = _link_source(sock)
+    if from_node is None or _is_group_node(from_node):
+        return False
+    ntype = _node_type(from_node)
+    bl_id = getattr(from_node, "bl_idname", "") or ""
+    if ntype == "VALUE" or bl_id == "ShaderNodeValue":
+        value = _constant_float(from_node, from_sock)
+        return value is not None and _near_zero_float(value)
+    return False
+
+
+def _source_is_proven_zero(node, sock):
+    """Immediate Displacement source is a proven 0 / zero vector.
+
+    Proven: Value ~0, Vector/RGB ~0, Combine XYZ all ~0, Displacement
+    Height+Scale ~0, Vector Displacement Scale ~0. Texture / noise /
+    attribute / GROUP / driver-unknown / Math = not proven.
+    """
+    if node is None or _is_group_node(node):
+        return False
+    ntype = _node_type(node)
+    bl_id = getattr(node, "bl_idname", "") or ""
+    if ntype == "VALUE" or bl_id == "ShaderNodeValue":
+        value = _constant_float(node, sock)
+        return value is not None and _near_zero_float(value)
+    if (ntype in ("COMBXYZ", "COMBINE_XYZ", "COMB_XYZ")
+            or bl_id == "ShaderNodeCombineXYZ"):
+        return (
+            _proven_zero_scalar(_sock(node, "X"))
+            and _proven_zero_scalar(_sock(node, "Y"))
+            and _proven_zero_scalar(_sock(node, "Z"))
+        )
+    if ntype in ("VECTOR", "RGB") or bl_id == "ShaderNodeRGB":
+        value = getattr(sock, "default_value", None) if sock is not None else None
+        if value is None:
+            out = _sock(node, "Vector", "Color", "RGB", collection="outputs")
+            value = getattr(out, "default_value", None) if out is not None else None
+        return _near_zero_vector(value)
+    if ntype == "DISPLACEMENT" or bl_id == "ShaderNodeDisplacement":
+        return (
+            _proven_zero_scalar(_sock(node, "Height"))
+            and _proven_zero_scalar(_sock(node, "Scale"))
+        )
+    if (ntype in ("VECTOR_DISPLACEMENT", "VECTOR_DISPLACE")
+            or bl_id == "ShaderNodeVectorDisplacement"):
+        return _proven_zero_scalar(_sock(node, "Scale"))
+    return False
+
+
+def _classify_displace(output_node, tree):
+    """Return prune tuple if Displacement is linked to proven-zero.
+
+    Unconnected Displacement is already dead — no record.
+    """
+    sock = _sock(output_node, "Displacement")
+    if sock is None or not getattr(sock, "is_linked", False):
+        return None
+    from_node, from_sock = _link_source(sock)
+    if from_node is None:
+        return None
+    if not _source_is_proven_zero(from_node, from_sock):
+        return None
+    return (output_node, "Displacement", PRUNE_DISPLACE,
+            "Displacement linked to proven-zero constant / zero-scale Displacement",
+            from_node, from_sock)
+
+
+
 def _aov_name(node):
     for attr in ("aov_name", "name"):
         value = getattr(node, attr, None)
@@ -681,7 +777,8 @@ def classify_dead_closures(scene):
 
     Each record has: material, node, socket, class, reason, users.
     class is one of PRUNE_ALPHA | PRUNE_VOLUME | PRUNE_MIX_TRANSPARENT |
-    PRUNE_AOV | KEEP_REAL_CUTOUT | KEEP_GLASS | SKIP_GROUP | SKIP_LINKED.
+    PRUNE_DISPLACE | PRUNE_AOV | KEEP_REAL_CUTOUT | KEEP_GLASS |
+    SKIP_GROUP | SKIP_LINKED.
     HERO / EXCLUDE-shared materials are skipped (no record).
     """
     records = []
@@ -758,6 +855,13 @@ def classify_dead_closures(scene):
                     material, mnode, msock, cls, reason, users,
                     from_node=getattr(from_node, "name", "") if from_node else "",
                     from_socket=_socket_name(from_sock)))
+            disp = _classify_displace(output, tree)
+            if disp is not None:
+                dnode, dsock, cls, reason, from_node, from_sock = disp
+                records.append(_record(
+                    material, dnode, dsock, cls, reason, users,
+                    from_node=getattr(from_node, "name", "") if from_node else "",
+                    from_socket=_socket_name(from_sock)))
         records.extend(_classify_aovs(tree, scene, material, users))
     return records
 
@@ -780,10 +884,11 @@ def format_inventory(records):
     lines = [
         "DEAD_CLOSURE_PRUNE inventory (analyze only; no writes; no time claim)",
         "  PRUNE_ALPHA=%d  PRUNE_VOLUME=%d  PRUNE_MIX_TRANSPARENT=%d  "
-        "PRUNE_AOV=%d  KEEP_REAL_CUTOUT=%d  KEEP_GLASS=%d  SKIP_GROUP=%d  "
-        "SKIP_LINKED=%d"
+        "PRUNE_DISPLACE=%d  PRUNE_AOV=%d  KEEP_REAL_CUTOUT=%d  "
+        "KEEP_GLASS=%d  SKIP_GROUP=%d  SKIP_LINKED=%d"
         % (counts.get(PRUNE_ALPHA, 0), counts.get(PRUNE_VOLUME, 0),
            counts.get(PRUNE_MIX_TRANSPARENT, 0),
+           counts.get(PRUNE_DISPLACE, 0),
            counts.get(PRUNE_AOV, 0), counts.get(KEEP_REAL_CUTOUT, 0),
            counts.get(KEEP_GLASS, 0), counts.get(SKIP_GROUP, 0),
            counts.get(SKIP_LINKED, 0)),

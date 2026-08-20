@@ -2,6 +2,9 @@
 
 ## 0.3.3 — Unreleased
 
+- PRUNE_DISPLACE: Material Output Displacement linked to a proven-zero constant (Value=0 / Combine XYZ 0 / Displacement Height+Scale 0). Unlink Displacement (existing NODE_UNLINK). Unconnected is already dead (no record). Texture / noise / GROUP / Math skipped. Apply exists, Auto off, no time claim. Box blender blocked this pass; user GPU left alone. No official inventory tonight.
+- UNUSED_COLOR_ATTRS: unique local meshes, skip linked / override / HERO / EXCLUDE / any modifier. Color attributes (color_attributes or vertex_colors) not named by a used-face Attribute / Vertex Color / Color Attribute node. UV maps and position/normal built-ins are never candidates. Inventory-only: apply would drop pixel values and revert cannot restore the layer data without a blob. Auto off, no time claim. No official inventory tonight.
+
 - UNUSED_SLOTS: unique-shader gate. Duplicate unused slots of an already-used material are RNA noise (Cycles `get_used_shaders()` unions unique shaders) and are skipped. Unique unused materials stay prune keepers; extra_attrs tags UV / UV_TANGENT / VCOL / GENERATED / GROUP that used shaders on that mesh do not request. Official loft 2026-08-19: 891 meshes / 21k unused slots (pre-gate). Classroom: 0. Apply exists, Auto off, no time claim.
 - DEAD_CLOSURE_PRUNE: inventory/classifier only. Mix Shader Fac proven 0/1 with unused Transparent BSDF is PRUNE_MIX_TRANSPARENT (unlink dead shader input; apply exists, Auto off). Official Classroom/loft: 0 PRUNE_ALPHA, 0 PRUNE_VOLUME. BMW27.blend fetched (3.1 MB from demo/test/BMW27.blend.zip); box blender inventory not launched this pass. No time claim.
 - Opaque cutout shadows off on proven CLIP/HASHED cutouts only.
