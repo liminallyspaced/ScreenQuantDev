@@ -1492,12 +1492,15 @@ def dead_closure_prune_actions(scene, caveats=None):
     prunes = [r for r in records if r.get("class") in dead_closures.PRUNE_CLASSES]
     n_alpha = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_ALPHA)
     n_vol = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_VOLUME)
-    if n_alpha + n_vol < 1:
+    n_mix = sum(1 for r in prunes
+                if r.get("class") == dead_closures.PRUNE_MIX_TRANSPARENT)
+    if n_alpha + n_vol + n_mix < 1:
         return []
     return [SpeedAction(
         "DEAD_CLOSURE_PRUNE",
-        "%d false-transparent / empty-volume socket(s) → unlink (manual)"
-        % (n_alpha + n_vol),
+        "%d false-transparent / empty-volume / mix-transparent "
+        "socket(s) → unlink (manual)"
+        % (n_alpha + n_vol + n_mix),
         "dead", 2, 1.0, 1,
         {"records": prunes})]
 

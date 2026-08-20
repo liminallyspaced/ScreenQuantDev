@@ -299,6 +299,65 @@ def _with_obj(mat, obj_name="Mesh", **kw):
     return _scene([_mesh(obj_name, material_slots=[Obj(material=mat)], **kw)])
 
 
+
+def _mix_transparent_mat(name, fac=1.0, fac_from=None, both_principled=False,
+                         glass=False):
+    """Mix Shader with optional constant Fac and Transparent on one side.
+
+    Mix = (1-Fac)*Shader + Fac*Shader_001. Fac=1 → first unused; Fac=0 → second.
+    fac_from: None (unlinked default), "VALUE", or "TEX".
+    """
+    prin = _principled()
+    prin2 = _principled()
+    prin2.name = "Principled BSDF.001"
+    trans = _Node("Transparent BSDF", "BSDF_TRANSPARENT", outputs=[_Sock("BSDF")])
+    glass_node = _Node("Glass BSDF", "BSDF_GLASS", outputs=[_Sock("BSDF")])
+    mix = _Node(
+        "Mix Shader", "MIX_SHADER",
+        inputs=[_Sock("Fac", fac), _Sock("Shader"), _Sock("Shader.001")],
+        outputs=[_Sock("Shader")],
+    )
+    out = _output()
+    nodes = [prin, prin2, trans, mix, out]
+    links = []
+    if glass:
+        nodes = [glass_node, trans, mix, out]
+        links = [
+            (glass_node, "BSDF", mix, "Shader"),
+            (trans, "BSDF", mix, "Shader.001"),
+            (mix, "Shader", out, "Surface"),
+        ]
+    elif both_principled:
+        links = [
+            (prin, "BSDF", mix, "Shader"),
+            (prin2, "BSDF", mix, "Shader.001"),
+            (mix, "Shader", out, "Surface"),
+        ]
+    else:
+        # Transparent on unused side for Fac=1 (first socket).
+        links = [
+            (trans, "BSDF", mix, "Shader"),
+            (prin, "BSDF", mix, "Shader.001"),
+            (mix, "Shader", out, "Surface"),
+        ]
+    if fac_from == "VALUE":
+        val = _Node("Value", "VALUE", outputs=[_Sock("Value", fac)])
+        nodes.append(val)
+        links.append((val, "Value", mix, "Fac"))
+        mix.inputs.get("Fac").default_value = 0.5  # linked; ignore default
+    elif fac_from == "TEX":
+        img = Obj(filepath="//mask.png", channels=4, alpha_mode="STRAIGHT",
+                  file_format="PNG", name="mask.png")
+        tex = _Node(
+            "Image Texture", "TEX_IMAGE",
+            outputs=[_Sock("Color"), _Sock("Alpha", 1.0)],
+            image=img, bl_idname="ShaderNodeTexImage",
+        )
+        nodes.append(tex)
+        links.append((tex, "Alpha", mix, "Fac"))
+    return _mat(name, nodes, links)
+
+
 def test_value_one_prunes_alpha():
     section("Principled Alpha linked to Value=1.0 → PRUNE_ALPHA")
     mat = _value_alpha_mat("Paint")
@@ -526,7 +585,8 @@ def test_inventory_print_shape():
     text = dc.format_inventory(dc.classify_dead_closures(_with_obj(mat, "Wall")))
     check("no writes" in text and "no time claim" in text,
           "inventory header refuses a time claim")
-    check("PRUNE_ALPHA=" in text and "Paint" in text, "table lists the candidate")
+    check("PRUNE_ALPHA=" in text and "PRUNE_MIX_TRANSPARENT=" in text and "Paint" in text,
+          "table lists PRUNE_ALPHA / PRUNE_MIX_TRANSPARENT and the candidate")
 
 
 def test_default_plan_kind_absent_empty():
@@ -541,6 +601,109 @@ def test_default_plan_kind_absent_empty():
           "empty default plan has no DEAD_CLOSURE_PRUNE")
 
 
+
+def test_mix_fac_one_unused_transparent_prunes():
+    section("Mix Fac=1.0, Transparent on unused side → PRUNE_MIX_TRANSPARENT")
+    mat = _mix_transparent_mat("Passthrough", fac=1.0)
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = [r for r in _for_mat(records, "Passthrough")
+            if r["class"] == dc.PRUNE_MIX_TRANSPARENT]
+    check(len(hits) == 1, "Fac=1 + unused Transparent → one PRUNE_MIX_TRANSPARENT")
+    check(hits[0]["node"] == "Mix Shader", "record.node is Mix Shader")
+    check(hits[0]["socket"] in ("Shader", "Shader.001"),
+          "record.socket is the dead shader input")
+    check("MIX_TRANSPARENT" in hits[0]["reason"], "reason names MIX_TRANSPARENT")
+
+    mat = _mix_transparent_mat("PassthroughV", fac=1.0, fac_from="VALUE")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall2"))
+    hits = [r for r in _for_mat(records, "PassthroughV")
+            if r["class"] == dc.PRUNE_MIX_TRANSPARENT]
+    check(len(hits) == 1, "Fac from Value=1.0 → PRUNE_MIX_TRANSPARENT")
+
+    mat = _mix_transparent_mat("Passthrough0", fac=0.0)
+    # For Fac=0 unused is second; put Transparent there.
+    # Rebuild: first Principled, second Transparent.
+    prin = _principled()
+    trans = _Node("Transparent BSDF", "BSDF_TRANSPARENT", outputs=[_Sock("BSDF")])
+    mix = _Node(
+        "Mix Shader", "MIX_SHADER",
+        inputs=[_Sock("Fac", 0.0), _Sock("Shader"), _Sock("Shader.001")],
+        outputs=[_Sock("Shader")],
+    )
+    out = _output()
+    mat = _mat("Passthrough0", [prin, trans, mix, out], [
+        (prin, "BSDF", mix, "Shader"),
+        (trans, "BSDF", mix, "Shader.001"),
+        (mix, "Shader", out, "Surface"),
+    ])
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall3"))
+    hits = [r for r in _for_mat(records, "Passthrough0")
+            if r["class"] == dc.PRUNE_MIX_TRANSPARENT]
+    check(len(hits) == 1, "Fac=0 + unused Transparent → PRUNE_MIX_TRANSPARENT")
+
+
+def test_mix_fac_half_kept():
+    section("Mix Fac=0.5 → keep (not PRUNE_MIX_TRANSPARENT)")
+    mat = _mix_transparent_mat("Half", fac=0.5)
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    check(all(r["class"] != dc.PRUNE_MIX_TRANSPARENT
+              for r in _for_mat(records, "Half")),
+          "Fac=0.5 is not PRUNE_MIX_TRANSPARENT")
+
+
+def test_mix_fac_from_texture_kept():
+    section("Mix Fac from texture → keep")
+    mat = _mix_transparent_mat("TexFac", fac=1.0, fac_from="TEX")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    check(all(r["class"] != dc.PRUNE_MIX_TRANSPARENT
+              for r in _for_mat(records, "TexFac")),
+          "Fac from Image Texture is not PRUNE_MIX_TRANSPARENT")
+    check(any(r["class"] == dc.KEEP_REAL_CUTOUT
+              for r in _for_mat(records, "TexFac")),
+          "texture Fac Transparent mix is KEEP_REAL_CUTOUT")
+
+
+def test_mix_both_principled_not_mix_class():
+    section("Mix Fac=1.0 both Principled → not PRUNE_MIX_TRANSPARENT")
+    mat = _mix_transparent_mat("OpaqueMix", fac=1.0, both_principled=True)
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    check(all(r["class"] != dc.PRUNE_MIX_TRANSPARENT
+              for r in _for_mat(records, "OpaqueMix")),
+          "no Transparent side → not this class")
+
+
+def test_mix_glass_skipped():
+    section("Glass mix → KEEP_GLASS / skip Mix prune")
+    mat = _mix_transparent_mat("WindowMix", fac=1.0, glass=True)
+    records = dc.classify_dead_closures(_with_obj(mat, "Pane"))
+    check(any(r["class"] == dc.KEEP_GLASS for r in _for_mat(records, "WindowMix")),
+          "glass mix → KEEP_GLASS")
+    check(all(r["class"] != dc.PRUNE_MIX_TRANSPARENT
+              for r in _for_mat(records, "WindowMix")),
+          "glass mix is not PRUNE_MIX_TRANSPARENT")
+
+
+def test_apply_mix_transparent_unlink():
+    section("apply unlinks dead Transparent Mix input; revert restores")
+    mat = _mix_transparent_mat("Passthrough", fac=1.0)
+    scene = _with_obj(mat, "Wall")
+    dead = None
+    for node in mat.node_tree.nodes:
+        if node.type == "MIX_SHADER":
+            dead = node.inputs.get("Shader")
+    check(dead is not None and dead.is_linked, "fixture dead Shader starts linked")
+    records = dc.classify_dead_closures(scene)
+    jrnl = _Journal()
+    applied = dc.apply_dead_closures(scene, jrnl, records)
+    mix_hits = [a for a in applied if a.get("node") == "Mix Shader"]
+    check(len(mix_hits) == 1, "apply unlinks the dead Mix Shader input")
+    check(not dead.is_linked, "dead Transparent input is unlinked after apply")
+    check(jrnl.entries and jrnl.entries[0]["kind"] == "NODE_UNLINK",
+          "journal kind is NODE_UNLINK")
+    restored = dc.revert_dead_closures(scene, jrnl)
+    check(restored == 1 and dead.is_linked, "revert restores the Mix Shader link")
+
+
 def main():
     test_value_one_prunes_alpha()
     test_jpeg_prunes_alpha()
@@ -551,7 +714,13 @@ def main():
     test_volume_empty_and_real()
     test_hero_skipped()
     test_unused_aov()
+    test_mix_fac_one_unused_transparent_prunes()
+    test_mix_fac_half_kept()
+    test_mix_fac_from_texture_kept()
+    test_mix_both_principled_not_mix_class()
+    test_mix_glass_skipped()
     test_apply_unlink_and_revert()
+    test_apply_mix_transparent_unlink()
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
     test_default_plan_kind_absent_empty()

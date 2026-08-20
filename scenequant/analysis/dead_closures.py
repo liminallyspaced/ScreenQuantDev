@@ -5,14 +5,16 @@
 # scenequant.nodes.iter_render_materials / iter_render_image_nodes.
 # No bpy.ops. Importable without Blender (duck-typed scene + node trees).
 #
-# Apply is a separate function (unlink + journal NODE_UNLINK). It is NOT
-# wired into Make it Fast Auto. Never writes scene.cycles.* or
-# use_transparent_shadow.
+# Mix Shader Fac proven 0/1 + unused Transparent BSDF is
+# PRUNE_MIX_TRANSPARENT (L1.5). Apply unlinks the dead shader input
+# (NODE_UNLINK passthrough). It is NOT wired into Make it Fast Auto.
+# Never writes scene.cycles.* or use_transparent_shadow.
 
 import os
 
 PRUNE_ALPHA = "PRUNE_ALPHA"
 PRUNE_VOLUME = "PRUNE_VOLUME"
+PRUNE_MIX_TRANSPARENT = "PRUNE_MIX_TRANSPARENT"
 PRUNE_AOV = "PRUNE_AOV"
 KEEP_REAL_CUTOUT = "KEEP_REAL_CUTOUT"
 KEEP_GLASS = "KEEP_GLASS"
@@ -20,10 +22,12 @@ SKIP_GROUP = "SKIP_GROUP"
 SKIP_LINKED = "SKIP_LINKED"
 
 ALL_CLASSES = (
-    PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_AOV,
+    PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_AOV,
     KEEP_REAL_CUTOUT, KEEP_GLASS, SKIP_GROUP, SKIP_LINKED,
 )
-PRUNE_CLASSES = frozenset({PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_AOV})
+PRUNE_CLASSES = frozenset({
+    PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_AOV,
+})
 
 # Cycles CLOSURE_WEIGHT_CUTOFF is ~1e-5. Only treat a constant as opaque
 # when it is at least this close to 1.0 (conservative).
@@ -351,6 +355,94 @@ def _alpha_output_has_cutout_user(from_node, from_sock, tree):
     return False
 
 
+def _mix_shader_inputs(node):
+    """Return (fac_socket, [shader_socket, ...]) in node input order.
+
+    Mix Shader is (1-Fac)*Shader + Fac*Shader_001. First shader is live
+    at Fac=0; second is live at Fac=1. Identifiers are Fac / Shader /
+    Shader_001 in Blender; duck tests may use Shader.001.
+    """
+    fac = None
+    shaders = []
+    for sock in _iter_socks(node, "inputs"):
+        ident = getattr(sock, "identifier", "") or ""
+        name = getattr(sock, "name", "") or ""
+        if ident == "Fac" or name == "Fac":
+            fac = sock
+            continue
+        shaders.append(sock)
+    if fac is None:
+        fac = _sock(node, "Fac")
+    return fac, shaders
+
+
+def _proven_constant_fac(sock):
+    """Return a float iff Fac is proven constant; else None.
+
+    Proven: unconnected default_value, or a Value node. Texture / Light
+    Path / Mix / Group / anything else is unproven (KEEP / skip).
+    """
+    if sock is None:
+        return None
+    if not getattr(sock, "is_linked", False):
+        value = getattr(sock, "default_value", None)
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+    from_node, from_sock = _link_source(sock)
+    if from_node is None:
+        return None
+    ntype = _node_type(from_node)
+    bl_id = getattr(from_node, "bl_idname", "") or ""
+    if ntype == "VALUE" or bl_id == "ShaderNodeValue":
+        return _constant_float(from_node, from_sock)
+    return None
+
+
+def _shader_is_only_transparent(sock, seen=None):
+    """True if this shader socket is Transparent BSDF or a chain of only those."""
+    if sock is None or not getattr(sock, "is_linked", False):
+        return False
+    from_node, _from_sock = _link_source(sock)
+    return _node_is_only_transparent(from_node, seen)
+
+
+def _node_is_only_transparent(node, seen=None):
+    if node is None:
+        return False
+    if seen is None:
+        seen = set()
+    ident = id(node)
+    if ident in seen:
+        return True
+    seen.add(ident)
+    if _is_group_node(node):
+        return False
+    ntype = _node_type(node)
+    if ntype == "BSDF_TRANSPARENT":
+        return True
+    if ntype == "MIX_SHADER":
+        _fac, shaders = _mix_shader_inputs(node)
+        linked = False
+        for sock in shaders:
+            if not getattr(sock, "is_linked", False):
+                continue
+            linked = True
+            if not _shader_is_only_transparent(sock, seen):
+                return False
+        return linked
+    if ntype == "ADD_SHADER":
+        linked = False
+        for sock in _iter_socks(node, "inputs"):
+            if not getattr(sock, "is_linked", False):
+                continue
+            linked = True
+            if not _shader_is_only_transparent(sock, seen):
+                return False
+        return linked
+    return False
+
+
 def _tree_has_transparent_mix(tree):
     types = {_node_type(n) for n in getattr(tree, "nodes", ()) or ()}
     if "BSDF_TRANSPARENT" not in types:
@@ -360,10 +452,55 @@ def _tree_has_transparent_mix(tree):
     for node in getattr(tree, "nodes", ()) or ():
         if _node_type(node) != "MIX_SHADER":
             continue
-        fac = _sock(node, "Fac")
-        if fac is not None and getattr(fac, "is_linked", False):
-            return True
+        fac, _shaders = _mix_shader_inputs(node)
+        if fac is None or not getattr(fac, "is_linked", False):
+            continue
+        value = _proven_constant_fac(fac)
+        if value is not None and (value >= OPAQUE_ALPHA or value <= 1e-4):
+            # Fac is a proven 0/1 Value — not a real cutout.
+            continue
+        return True
     return False
+
+
+def _mix_nodes_feeding_surface(output, tree):
+    """Mix Shaders feeding Surface, including chained mixes."""
+    surface = _sock(output, "Surface") if output is not None else None
+    if surface is not None and getattr(surface, "is_linked", False):
+        reachable = _reachable_nodes(surface)
+        return [n for n in reachable if _node_type(n) == "MIX_SHADER"]
+    return [n for n in getattr(tree, "nodes", ()) or ()
+            if _node_type(n) == "MIX_SHADER"]
+
+
+def _classify_mix_transparent(mix_node):
+    """Return (node, socket, class, reason, from_node, from_sock) or None.
+
+    Unlink the dead Transparent input so the mix becomes a passthrough.
+    Existing apply_dead_closures NODE_UNLINK reverts that unlink.
+    """
+    fac, shaders = _mix_shader_inputs(mix_node)
+    if len(shaders) < 2:
+        return None
+    value = _proven_constant_fac(fac)
+    if value is None:
+        return None
+    first, second = shaders[0], shaders[1]
+    if value >= OPAQUE_ALPHA:
+        dead = first
+    elif value <= 1e-4:
+        dead = second
+    else:
+        return None
+    if not _shader_is_only_transparent(dead):
+        return None
+    from_node, from_sock = _link_source(dead)
+    reason = (
+        "MIX_TRANSPARENT: Mix Shader Fac=%.4g unused Transparent BSDF"
+        % value
+    )
+    return (mix_node, _socket_name(dead), PRUNE_MIX_TRANSPARENT,
+            reason, from_node, from_sock)
 
 
 def _classify_alpha_source(from_node, from_sock, tree):
@@ -543,8 +680,8 @@ def classify_dead_closures(scene):
     """Return inventory records for local render-used materials.
 
     Each record has: material, node, socket, class, reason, users.
-    class is one of PRUNE_ALPHA | PRUNE_VOLUME | PRUNE_AOV |
-    KEEP_REAL_CUTOUT | KEEP_GLASS | SKIP_GROUP | SKIP_LINKED.
+    class is one of PRUNE_ALPHA | PRUNE_VOLUME | PRUNE_MIX_TRANSPARENT |
+    PRUNE_AOV | KEEP_REAL_CUTOUT | KEEP_GLASS | SKIP_GROUP | SKIP_LINKED.
     HERO / EXCLUDE-shared materials are skipped (no record).
     """
     records = []
@@ -612,6 +749,15 @@ def classify_dead_closures(scene):
                     material, vnode, vsock, cls, reason, users,
                     from_node=getattr(from_node, "name", "") if from_node else "",
                     from_socket=_socket_name(from_sock)))
+            for mix in _mix_nodes_feeding_surface(output, tree):
+                hit = _classify_mix_transparent(mix)
+                if hit is None:
+                    continue
+                mnode, msock, cls, reason, from_node, from_sock = hit
+                records.append(_record(
+                    material, mnode, msock, cls, reason, users,
+                    from_node=getattr(from_node, "name", "") if from_node else "",
+                    from_socket=_socket_name(from_sock)))
         records.extend(_classify_aovs(tree, scene, material, users))
     return records
 
@@ -633,9 +779,11 @@ def format_inventory(records):
     counts = inventory_counts(records)
     lines = [
         "DEAD_CLOSURE_PRUNE inventory (analyze only; no writes; no time claim)",
-        "  PRUNE_ALPHA=%d  PRUNE_VOLUME=%d  PRUNE_AOV=%d  "
-        "KEEP_REAL_CUTOUT=%d  KEEP_GLASS=%d  SKIP_GROUP=%d  SKIP_LINKED=%d"
+        "  PRUNE_ALPHA=%d  PRUNE_VOLUME=%d  PRUNE_MIX_TRANSPARENT=%d  "
+        "PRUNE_AOV=%d  KEEP_REAL_CUTOUT=%d  KEEP_GLASS=%d  SKIP_GROUP=%d  "
+        "SKIP_LINKED=%d"
         % (counts.get(PRUNE_ALPHA, 0), counts.get(PRUNE_VOLUME, 0),
+           counts.get(PRUNE_MIX_TRANSPARENT, 0),
            counts.get(PRUNE_AOV, 0), counts.get(KEEP_REAL_CUTOUT, 0),
            counts.get(KEEP_GLASS, 0), counts.get(SKIP_GROUP, 0),
            counts.get(SKIP_LINKED, 0)),
