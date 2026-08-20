@@ -2,6 +2,7 @@
 
 ## 0.3.3 — 2026-08-19
 
+- DEAD_CLOSURE_PRUNE: inventory/classifier only. Official Classroom/loft: 0 PRUNE_ALPHA, 0 PRUNE_VOLUME (Auto off). No writes. No time claim.
 - Opaque cutout shadows off on proven CLIP/HASHED cutouts only.
 - Sample knee: already-adaptive files pad an extra doubling (512→128 becomes 256). Adaptive-off interiors stay one doubling (300→128).
 - CAMERA_CULL tags linked scatter/tiny (Cycles flags, not hide_render) and turns on Simplify with high caps. Distance cull stays off.

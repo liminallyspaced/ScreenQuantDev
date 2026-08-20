@@ -655,6 +655,9 @@ def _dead_actions(scene, coverage, caveats):
     actions.extend(_crypto_actions(scene))
     actions.extend(_pass_prune_actions(scene))
     actions.extend(_opaque_cutout_shadow_actions(scene, caveats))
+    # DEAD_CLOSURE_PRUNE lives in dead_closure_prune_actions (manual-later).
+    # Not in the default Auto plan until official Classroom/loft inventory
+    # proves PRUNE_ALPHA + PRUNE_VOLUME >= 1. No time claim.
     return actions
 
 
@@ -1427,6 +1430,30 @@ def _opaque_cutout_shadow_actions(scene, caveats):
         "OPAQUE_CUTOUT_SHADOWS",
         "%d cutout material(s) → opaque shadows" % len(names),
         "dead", 1, 0.90, 1, {"materials": names})]
+
+
+def dead_closure_prune_actions(scene, caveats=None):
+    """Manual-later planner hook for L1 DEAD_CLOSURE_PRUNE.
+
+    NOT called from build_speed_plan / _dead_actions. Auto stays off until
+    official-file inventory proves candidates. time_factor is 1.0 (no claim).
+    """
+    try:
+        from ..analysis import dead_closures
+    except Exception:
+        return []
+    records = dead_closures.classify_dead_closures(scene)
+    prunes = [r for r in records if r.get("class") in dead_closures.PRUNE_CLASSES]
+    n_alpha = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_ALPHA)
+    n_vol = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_VOLUME)
+    if n_alpha + n_vol < 1:
+        return []
+    return [SpeedAction(
+        "DEAD_CLOSURE_PRUNE",
+        "%d false-transparent / empty-volume socket(s) → unlink (manual)"
+        % (n_alpha + n_vol),
+        "dead", 2, 1.0, 1,
+        {"records": prunes})]
 
 
 _CUTOUT_SURFACE = {

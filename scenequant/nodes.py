@@ -56,6 +56,37 @@ def iter_render_image_nodes(scene):
             yield image, node, world
 
 
+def iter_render_materials(scene):
+    """Yield (material, user_names) once per material on renderable geometry.
+
+    Same object filter as iter_render_image_nodes: GEOMETRY_TYPES and
+    hide_render False. World is not included — dead-closure prune is
+    material-output only. user_names is de-duplicated scene order.
+    Headless-safe: no bpy.ops, no bpy.types.
+    """
+    seen = {}
+    order = []
+    for obj in getattr(scene, "objects", ()) or ():
+        if getattr(obj, "type", "") not in GEOMETRY_TYPES:
+            continue
+        if getattr(obj, "hide_render", False):
+            continue
+        obj_name = getattr(obj, "name", "") or ""
+        for slot in getattr(obj, "material_slots", ()) or ():
+            material = getattr(slot, "material", None)
+            if material is None:
+                continue
+            key = id(material)
+            if key not in seen:
+                seen[key] = (material, [])
+                order.append(key)
+            users = seen[key][1]
+            if obj_name and obj_name not in users:
+                users.append(obj_name)
+    for key in order:
+        yield seen[key]
+
+
 def material_image_users(scene):
     """LEGACY journal shape: {image_name: [(material_name, node_name), ...]}.
 

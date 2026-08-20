@@ -182,6 +182,7 @@ _PAYLOAD_IDS = {
                  ("new_image", "Image", "new_uid")),
     "DATA_RELINK": (("object", "Object", "object_uid"),
                     ("old_mesh", "Mesh", "old_mesh_uid")),
+    "NODE_UNLINK": (("material", "Material", "material_uid"),),
 }
 
 
@@ -479,6 +480,8 @@ class Journal:
             return self._revert_tex_swap(payload)
         if entry.get("kind") == "DATA_RELINK":
             return self._revert_data_relink(payload)
+        if entry.get("kind") == "NODE_UNLINK":
+            return self._revert_node_unlink(payload)
         return False
 
     def _revert_prop(self, entry):
@@ -534,6 +537,18 @@ class Journal:
         if replacement is not None and replacement.users == 0:
             bpy.data.images.remove(replacement)
         return True
+
+    def _revert_node_unlink(self, payload):
+        """Restore one unlinked shader socket. Additive journal kind."""
+        mat = _find_datablock("Material", payload.get("material"),
+                              payload.get("material_uid"))
+        if mat is None:
+            return False
+        try:
+            from .analysis.dead_closures import restore_node_unlink_on_material
+        except Exception:
+            return False
+        return restore_node_unlink_on_material(mat, payload)
 
     def _revert_data_relink(self, payload):
         obj = _find_datablock("Object", payload.get("object"),
