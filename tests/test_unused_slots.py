@@ -228,6 +228,20 @@ def _normal_map_tree():
     return _Tree([nmap, prin, out])
 
 
+def _group_tree():
+    group = _Node(
+        "Group", "GROUP",
+        inputs=[],
+        outputs=[_Sock("Shader")],
+        bl_idname="ShaderNodeGroup",
+    )
+    out = _Node(
+        "Material Output", "OUTPUT_MATERIAL",
+        inputs=[_Sock("Surface"), _Sock("Volume")],
+    )
+    return _Tree([group, out])
+
+
 def _mesh_data(name, materials, face_indices, library=None):
     data = Obj(
         name=name, library=library, override_library=None,
@@ -310,15 +324,16 @@ def speed_solver_scene(objects):
 
 def test_unused_extra_slot_pruned():
     section("unused extra slot pruned; used slot kept")
-    carpet = _mat("Carpet")
-    lamp = _mat("Lamp")
+    carpet = _mat("Carpet", node_tree=_plain_tree())
+    lamp = _mat("Lamp", node_tree=_normal_map_tree())
     data = _mesh_data("rug", [carpet, lamp], [0, 0, 0])
     obj = _obj("Rug", data)
     scene = _scene([obj], materials_by_name={"Carpet": carpet, "Lamp": lamp})
     records = us.classify_unused_slots(scene)
     check(len(records) == 1 and records[0]["index"] == 1
           and records[0]["material"] == "Lamp"
-          and records[0]["unique_shader"] is True,
+          and records[0]["unique_shader"] is True
+          and "UV_TANGENT" in (records[0].get("extra_attrs") or []),
           "inventory flags the unused extra slot")
     check(all(r["index"] != 0 for r in records),
           "used slot 0 is not a prune candidate")
@@ -336,9 +351,9 @@ def test_unused_extra_slot_pruned():
 
 def test_used_slot_kept_middle_unused():
     section("used slots kept when an unused slot sits in the middle")
-    a = _mat("A")
-    extra = _mat("Extra")
-    b = _mat("B")
+    a = _mat("A", node_tree=_plain_tree())
+    extra = _mat("Extra", node_tree=_normal_map_tree())
+    b = _mat("B", node_tree=_plain_tree())
     data = _mesh_data("body", [a, extra, b], [0, 2, 0, 2])
     obj = _obj("Body", data)
     scene = _scene([obj], materials_by_name={"A": a, "Extra": extra, "B": b})
@@ -392,9 +407,9 @@ def test_all_slots_used_noop():
 
 def test_revert_restores():
     section("revert restores removed slot at original index")
-    carpet = _mat("Carpet")
-    lamp = _mat("Lamp")
-    extra = _mat("Spare")
+    carpet = _mat("Carpet", node_tree=_plain_tree())
+    lamp = _mat("Lamp", node_tree=_plain_tree())
+    extra = _mat("Spare", node_tree=_normal_map_tree())
     data = _mesh_data("rug", [carpet, extra, lamp], [0, 2, 0])
     obj = _obj("Rug", data)
     mats = {"Carpet": carpet, "Lamp": lamp, "Spare": extra}
@@ -443,8 +458,8 @@ def test_hero_and_zero_materials_skipped():
 
 def test_unique_mesh_processed_once():
     section("shared unique mesh is processed once")
-    carpet = _mat("Carpet")
-    lamp = _mat("Lamp")
+    carpet = _mat("Carpet", node_tree=_plain_tree())
+    lamp = _mat("Lamp", node_tree=_normal_map_tree())
     data = _mesh_data("shared", [carpet, lamp], [0])
     a = _obj("CopyA", data)
     b = _obj("CopyB", data)
@@ -489,8 +504,12 @@ def test_inventory_print_shape():
     check("UNIQUE_UNUSED_SHADERS=1" in text
           and "SKIPPED_DUPLICATE_UNUSED=0" in text
           and "EXTRA_ATTR_SLOTS=0" in text
+          and "EXTRA_ATTR_APPLY_SLOTS=0" in text
           and "Auto off" in text,
           "inventory prints unique-shader / skip / extra-attr counts")
+    check("APPLY vs inventory" in text
+          and "EXTRA_ATTR_SHADERS list" in text,
+          "inventory shows APPLY vs inventory and extra-attr shader list")
     check("    Lamp  1" in text, "UNIQUE_UNUSED_SHADERS list names Lamp")
 
 
@@ -597,6 +616,60 @@ def test_unique_unused_extra_attrs_uv_and_tangent():
           "NORMAL_MAP vs empty Principled tags extra UV_TANGENT")
 
 
+
+def test_apply_gates_extra_attrs_not_group():
+    section("apply pops UV_TANGENT extra; leaves empty extra_attrs and GROUP")
+    plain = _mat("Plain", node_tree=_plain_tree())
+    tangent = _mat("BumpCard", node_tree=_normal_map_tree())
+    empty_extra = _mat("PlainUnused", node_tree=_plain_tree())
+    grouped = _mat("Grouped", node_tree=_group_tree())
+    data_t = _mesh_data("t_mesh", [plain, tangent], [0])
+    data_p = _mesh_data("p_mesh", [plain, empty_extra], [0])
+    data_g = _mesh_data("g_mesh", [plain, grouped], [0])
+    scene = _scene(
+        [_obj("TObj", data_t), _obj("PObj", data_p), _obj("GObj", data_g)],
+        materials_by_name={
+            "Plain": plain, "BumpCard": tangent,
+            "PlainUnused": empty_extra, "Grouped": grouped,
+        })
+    records = us.classify_unused_slots(scene)
+    names = sorted(r["material"] for r in records)
+    check(names == ["BumpCard", "Grouped", "PlainUnused"],
+          "inventory still lists all three unique unused shaders")
+    by_mat = {r["material"]: r for r in records}
+    check("UV_TANGENT" in (by_mat["BumpCard"].get("extra_attrs") or []),
+          "unique unused with UV_TANGENT extra is tagged")
+    check(not (by_mat["PlainUnused"].get("extra_attrs") or []),
+          "unique unused with no extra_attrs stays extra_attrs empty")
+    check("GROUP" in (by_mat["Grouped"].get("extra_attrs") or []),
+          "unique unused with GROUP in extra_attrs is tagged")
+    counts = us.inventory_counts(records)
+    check(counts["UNIQUE_UNUSED_SLOTS"] == 3
+          and counts["UNIQUE_UNUSED_SHADERS"] == 3
+          and counts["EXTRA_ATTR_SLOTS"] == 2
+          and counts["EXTRA_ATTR_APPLY_SLOTS"] == 1
+          and counts["EXTRA_ATTR_SHADERS"] == 2,
+          "APPLY count is extra-attr minus GROUP; inventory keeps all three")
+    text = us.format_inventory(records)
+    check("BumpCard" in text and "  APPLY" in text
+          and "Grouped" in text and "skip" in text,
+          "extra-attr shader list marks APPLY vs skip")
+    jrnl = _Journal()
+    applied = us.apply_unused_slots(scene, jrnl)
+    check(len(applied) == 1 and applied[0]["material"] == "BumpCard"
+          and applied[0]["index"] == 1,
+          "unique unused with UV_TANGENT extra → apply pops it")
+    check(_names(data_t.materials) == ["Plain"],
+          "UV_TANGENT unused slot is gone")
+    check(_names(data_p.materials) == ["Plain", "PlainUnused"],
+          "unique unused with no extra_attrs → apply leaves it")
+    check(_names(data_g.materials) == ["Plain", "Grouped"],
+          "unique unused with GROUP in extra_attrs → apply leaves it")
+    check(jrnl.entries and jrnl.entries[0]["kind"] == us.ACTION_KIND
+          and jrnl.entries[0]["payload"]["material"] == "BumpCard",
+          "journal SLOT_REMOVE only for the APPLY slot")
+
+
 def test_no_cycles_writes_in_module():
     section("UNUSED_SLOTS source never writes scene.cycles")
     path = os.path.join(PROJECT_ROOT, "scenequant", "analysis",
@@ -622,6 +695,7 @@ def main():
     test_duplicate_unused_of_used_material_skipped()
     test_unique_unused_shader_kept()
     test_unique_unused_extra_attrs_uv_and_tangent()
+    test_apply_gates_extra_attrs_not_group()
     test_no_cycles_writes_in_module()
     finish()
 

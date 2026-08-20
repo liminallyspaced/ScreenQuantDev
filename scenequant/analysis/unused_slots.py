@@ -8,11 +8,18 @@
 #
 # Walks hide_render=False MESH objects. Unique local meshes only
 # (mesh.library / obj.library skipped). Slot index is polygon.material_index.
-# Apply removes from the high index down so remaining unused indices stay
-# valid; Blender's materials.pop remaps used face indices. Journal one
-# SLOT_REMOVE per slot so revert can reinsert the material at that index.
+# Apply pops only unique unused slots whose extra_attrs is non-empty AND
+# does not contain GROUP — that is the Cycles extra-attribute tax
+# (UV / UV_TANGENT / VCOL / GENERATED). Empty extra_attrs still compiles
+# the unique shader but does not union extra mesh attributes vs used-face
+# shaders; GROUP is unexpanded so extra is unproven. Inventory still
+# lists every unique unused slot. Apply removes from the high index down
+# so remaining unused indices stay valid; Blender's materials.pop remaps
+# used face indices. Journal one SLOT_REMOVE per slot so revert can
+# reinsert the material at that index.
 #
 # NOT in default Auto Make it Fast until a measured loft pair exists.
+# unused_slots_actions is not called from build_speed_plan.
 # No bpy.ops. Importable without Blender (duck-typed scene + meshes).
 
 ACTION_KIND = "SLOT_REMOVE"
@@ -243,7 +250,8 @@ def _material_attr_tokens(material):
     """Conservative attr tokens a material may request on a mesh.
 
     Duck-typed: no bpy. Walks node types, does not recurse into groups.
-    GROUP is recorded as an unknown extra so unique groups still prune.
+    GROUP is recorded as an unknown extra so inventory can list it; apply
+    does not pop GROUP (tree not expanded).
     """
     tokens = set()
     if material is None:
@@ -380,12 +388,29 @@ def _candidates_for_mesh(mesh, objects):
     return out, skipped
 
 
+def extra_attr_apply_eligible(rec):
+    """True when apply should pop this unique unused slot.
+
+    extra_attrs must be non-empty and must not contain GROUP. Empty
+    extra_attrs: unique shader still compiles, no extra attr union.
+    GROUP: node group not expanded, extra unproven.
+    """
+    extra = list((rec or {}).get("extra_attrs") or [])
+    if not extra:
+        return False
+    if "GROUP" in extra:
+        return False
+    return True
+
+
 def inventory_counts(records):
     skipped = int(getattr(records, "skipped_duplicate_unused", 0) or 0)
     recs = list(records or ())
     meshes = set()
     shaders = set()
     extra_slots = 0
+    extra_apply_slots = 0
+    extra_shaders = set()
     for rec in recs:
         name = rec.get("mesh")
         if name:
@@ -398,12 +423,18 @@ def inventory_counts(records):
         extra = rec.get("extra_attrs") or []
         if extra:
             extra_slots += 1
+            if mat:
+                extra_shaders.add(mat)
+        if extra_attr_apply_eligible(rec):
+            extra_apply_slots += 1
     return {
         "UNIQUE_MESHES_WITH_UNUSED": len(meshes),
         "UNIQUE_UNUSED_SLOTS": len(recs),
         "UNIQUE_UNUSED_SHADERS": len(shaders),
         "SKIPPED_DUPLICATE_UNUSED": skipped,
         "EXTRA_ATTR_SLOTS": extra_slots,
+        "EXTRA_ATTR_APPLY_SLOTS": extra_apply_slots,
+        "EXTRA_ATTR_SHADERS": len(extra_shaders),
     }
 
 
@@ -416,18 +447,40 @@ def format_inventory(records):
         % (counts["UNIQUE_MESHES_WITH_UNUSED"],
            counts["UNIQUE_UNUSED_SLOTS"]),
         "  UNIQUE_UNUSED_SHADERS=%d  SKIPPED_DUPLICATE_UNUSED=%d  "
-        "EXTRA_ATTR_SLOTS=%d"
+        "EXTRA_ATTR_SLOTS=%d  EXTRA_ATTR_APPLY_SLOTS=%d  EXTRA_ATTR_SHADERS=%d"
         % (counts["UNIQUE_UNUSED_SHADERS"],
            counts["SKIPPED_DUPLICATE_UNUSED"],
-           counts["EXTRA_ATTR_SLOTS"]),
+           counts["EXTRA_ATTR_SLOTS"],
+           counts["EXTRA_ATTR_APPLY_SLOTS"],
+           counts["EXTRA_ATTR_SHADERS"]),
+        "  APPLY vs inventory: EXTRA_ATTR_APPLY_SLOTS=%d of "
+        "UNIQUE_UNUSED_SLOTS=%d (skip empty extra_attrs and GROUP)"
+        % (counts["EXTRA_ATTR_APPLY_SLOTS"], counts["UNIQUE_UNUSED_SLOTS"]),
     ]
     shader_counts = {}
+    extra_shader_counts = {}
+    apply_shader_counts = {}
+    token_hist = {}
     for rec in recs:
         mat = rec.get("material") or ""
         shader_counts[mat] = shader_counts.get(mat, 0) + 1
+        extra = rec.get("extra_attrs") or []
+        if extra:
+            extra_shader_counts[mat] = extra_shader_counts.get(mat, 0) + 1
+            for tok in extra:
+                token_hist[tok] = token_hist.get(tok, 0) + 1
+        if extra_attr_apply_eligible(rec):
+            apply_shader_counts[mat] = apply_shader_counts.get(mat, 0) + 1
     lines.append("  UNIQUE_UNUSED_SHADERS list (material, slots):")
     for mat in sorted(shader_counts):
         lines.append("    %s  %d" % (mat, shader_counts[mat]))
+    lines.append("  EXTRA_ATTR_SHADERS list (material, slots, apply):")
+    for mat in sorted(extra_shader_counts):
+        tag = "APPLY" if apply_shader_counts.get(mat, 0) else "skip"
+        lines.append("    %s  %d  %s" % (mat, extra_shader_counts[mat], tag))
+    if token_hist:
+        parts = ["%s=%d" % (k, token_hist[k]) for k in sorted(token_hist)]
+        lines.append("  extra_attrs tokens: " + " ".join(parts))
     shown = recs[:INVENTORY_EXAMPLE_ROWS]
     for rec in shown:
         extra = rec.get("extra_attrs") or []
@@ -570,12 +623,17 @@ def _safe_to_prune(mesh, recs):
 
 
 def apply_unused_slots(scene, jrnl, records=None, tag="speed"):
-    """Remove unused filled slots, high index first. Journal SLOT_REMOVE.
+    """Pop unique unused slots with proven extra attrs. Journal SLOT_REMOVE.
 
-    Not a Cycles RNA knob. Not called by Make it Fast Auto.
+    Only records whose extra_attrs is non-empty and does not contain GROUP.
+    Empty extra_attrs and GROUP stay. Unique-shader / linked / HERO gates
+    live in classify; remaining>=1 if faces is re-checked here. Not a
+    Cycles RNA knob. Not called by Make it Fast Auto.
     """
     if records is None:
         records = classify_unused_slots(scene)
+    records = [rec for rec in (records or ())
+               if extra_attr_apply_eligible(rec)]
     grouped = {}
     order = []
     for rec in records or ():
