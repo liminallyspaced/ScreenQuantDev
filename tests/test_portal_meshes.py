@@ -249,6 +249,21 @@ def _two_principled_tree():
     return tree
 
 
+def _trans_principled_tree():
+    """Mix(Transparent, Principled) Fac=Backfacing — no Emission."""
+    mix = _mix_node()
+    geom = _geom_node()
+    trans = _trans_node()
+    prin = _principled_node()
+    out = _output_node()
+    tree = _Tree([mix, geom, trans, prin, out])
+    tree.links.new(trans.outputs.get("BSDF"), mix.inputs.get("Shader"))
+    tree.links.new(prin.outputs.get("BSDF"), mix.inputs.get("Shader_001"))
+    tree.links.new(geom.outputs.get("Backfacing"), mix.inputs.get("Fac"))
+    tree.links.new(mix.outputs.get("Shader"), out.inputs.get("Surface"))
+    return tree
+
+
 def _mat(name, node_tree, library=None):
     return Obj(
         name=name, library=library, override_library=None,
@@ -342,6 +357,8 @@ def test_backfacing_mix_is_portal():
           and rec["material"] == "portal_card"
           and "Backfacing" in rec["reason"],
           "record fields are object/mesh/material/reason")
+    check(rec["role"] == pm.ROLE_MESH_EMIT_BACKFACE,
+          "Mix+Emission+Backfacing role is MESH_EMIT_BACKFACE")
 
 
 def test_unlinked_fac_is_not_portal():
@@ -365,6 +382,19 @@ def test_two_principled_is_not_portal():
     scene = _scene([_obj("Body", data)])
     check(pm.classify_portal_meshes(scene) == [],
           "Mix of two Principled is not a portal mesh")
+
+
+def test_backfacing_transparent_without_emission_is_not_emit():
+    section("Mix Transparent+Principled, Fac=Backfacing is NOT MESH_EMIT_BACKFACE")
+    mat = _mat("Card", _trans_principled_tree())
+    data = _mesh_data("card", [mat], [0])
+    scene = _scene([_obj("Card", data)])
+    records = pm.classify_portal_meshes(scene)
+    check(len(records) == 1, "Transparent+Backfacing without Emission inventories")
+    check(records[0]["role"] == pm.ROLE_WORLD_PORTAL_CARD,
+          "role is WORLD_PORTAL_CARD")
+    check(records[0]["role"] != pm.ROLE_MESH_EMIT_BACKFACE,
+          "without proven Emission is NOT MESH_EMIT_BACKFACE")
 
 
 def test_glass_in_tree_skipped():
@@ -420,6 +450,8 @@ def test_not_in_default_auto_plan():
           "default Auto plan does not include PORTAL_MESH")
     inventory = pm.classify_portal_meshes(scene)
     check(len(inventory) == 1, "inventory still sees the portal mesh")
+    check(inventory[0]["role"] == pm.ROLE_MESH_EMIT_BACKFACE,
+          "Auto-off inventory still classifies Classroom-shaped card as MESH_EMIT_BACKFACE")
     actions = speed_solver.portal_mesh_actions(scene)
     check(len(actions) == 1 and actions[0].kind == "PORTAL_MESH"
           and actions[0].tier == 2 and actions[0].time_factor == 1.0,
@@ -435,6 +467,9 @@ def test_inventory_print_shape():
           "inventory header refuses a time claim and marks no convert")
     check("PORTAL_MESH=1" in text and "portal_card" in text,
           "table lists the portal mesh")
+    check("MESH_EMIT_BACKFACE=1" in text and "WORLD_PORTAL_CARD=0" in text
+          and "role=MESH_EMIT_BACKFACE" in text,
+          "inventory prints role counts and MESH_EMIT_BACKFACE on the record")
 
 
 def test_no_name_special_case_or_cycles_write():
@@ -455,6 +490,7 @@ def main():
     test_unlinked_fac_is_not_portal()
     test_incoming_fac_is_not_portal()
     test_two_principled_is_not_portal()
+    test_backfacing_transparent_without_emission_is_not_emit()
     test_glass_in_tree_skipped()
     test_hero_skipped()
     test_linked_mesh_skipped()

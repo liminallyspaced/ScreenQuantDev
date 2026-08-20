@@ -1,14 +1,27 @@
-# L5 PORTAL_MESH: inventory mesh/curve "light portals" whose used-face
-# material is Mix(Transparent BSDF, Emission) with Fac linked to a
-# Geometry node's Backfacing socket. Graph pattern only. Not a Cycles
-# RNA knob. Inventory + classify only — no convert, no light create.
+# L5 PORTAL_MESH: inventory mesh/curve cards whose used-face material
+# mixes Transparent BSDF with Fac linked to Geometry Backfacing.
+# Graph pattern only. Not a Cycles RNA knob. Inventory + classify only
+# — no convert, no light create.
 #
-# Cycles treats a Light with cycles.is_portal specially
-# (intern/cycles/scene/light.cpp). Artist files often fake the same
-# idea with a mesh card: Mix(Transparent, Emission), Fac = Backfacing.
-# That is a real Shade Shadow / enclosed-GI leftover after the sample
-# knee — not datablock dust. Classroom DNA (dayLight_portal) is the
-# official instance of this pattern.
+# SPEED_KIND stays "PORTAL_MESH" for journal/plan stability. Each record
+# has role:
+#   MESH_EMIT_BACKFACE  Mix(Transparent, Emission) Fac=Backfacing.
+#                       The card *emits*. Classroom dayLight_portal
+#                       (hallWindow / windows) is this class: invisible
+#                       from behind, lamp from the front.
+#   WORLD_PORTAL_CARD   Transparent+Backfacing without proven Emission.
+#                       Rare. Different class from emit cards.
+#
+# Never convert MESH_EMIT_BACKFACE to Cycles Light.cycles.is_portal
+# (intern/cycles/scene/light.cpp). Portal lights do **not emit** — they
+# are importance-sampling rectangles for the world environment.
+# Replacing an emit card with is_portal=True drops the lamp and only
+# helps if an HDRI/world is the real source. Classroom leftover Shade
+# Shadow is transparent retrace through that card, not missing world MIS.
+#
+# Later convert (Manual, unbuilt) for MESH_EMIT_BACKFACE would be an
+# AREA light matching strength×area + hide_render on the mesh, not a
+# portal. World-portal cards are a different class and still unbuilt.
 #
 # Walks hide_render=False MESH/CURVE objects. Skip HERO/EXCLUDE, linked
 # ids, GROUP trees, BSDF_GLASS / refraction / principled transmission,
@@ -18,6 +31,8 @@
 # (duck-typed scene + node trees).
 
 SPEED_KIND = "PORTAL_MESH"
+ROLE_MESH_EMIT_BACKFACE = "MESH_EMIT_BACKFACE"
+ROLE_WORLD_PORTAL_CARD = "WORLD_PORTAL_CARD"
 
 GEOMETRY_OBJECT_TYPES = frozenset({"MESH", "CURVE"})
 MIX_TYPES = frozenset({"MIX_SHADER"})
@@ -383,19 +398,25 @@ def _reachable_mix_shaders(surface_sock):
                 continue
 
 
-def _material_is_portal_pattern(material):
-    """Return (True, reason) if the material matches the portal Mix pattern."""
+def _material_portal_role(material):
+    """Return (role, reason) or ("", "").
+
+    MESH_EMIT_BACKFACE: Mix(Transparent, Emission) Fac=Backfacing.
+    WORLD_PORTAL_CARD: Mix with Transparent + Backfacing Fac and no
+    proven Emission on either shader input. Never treat the latter as
+    the former. Never convert MESH_EMIT_BACKFACE to cycles.is_portal.
+    """
     if material is None:
-        return False, ""
+        return "", ""
     if getattr(material, "use_nodes", True) is False:
-        return False, ""
+        return "", ""
     tree = getattr(material, "node_tree", None)
     if tree is None:
-        return False, ""
+        return "", ""
     if _tree_has_group(tree):
-        return False, ""
+        return "", ""
     if _tree_is_glass(tree):
-        return False, ""
+        return "", ""
     for out in _find_output_nodes(tree):
         surface = _sock(out, "Surface")
         for mix in _reachable_mix_shaders(surface):
@@ -409,10 +430,21 @@ def _material_is_portal_pattern(material):
             a_emit = _shader_is_only_emission(shaders[0])
             b_emit = _shader_is_only_emission(shaders[1])
             if (a_trans and b_emit) or (a_emit and b_trans):
-                return True, (
+                return ROLE_MESH_EMIT_BACKFACE, (
                     "Mix(Transparent, Emission) Fac=Geometry.Backfacing"
                 )
-    return False, ""
+            if (a_trans or b_trans) and not a_emit and not b_emit:
+                return ROLE_WORLD_PORTAL_CARD, (
+                    "Mix(Transparent) Fac=Geometry.Backfacing; "
+                    "no proven Emission"
+                )
+    return "", ""
+
+
+def _material_is_portal_pattern(material):
+    """Return (True, reason) if the material matches either PORTAL_MESH role."""
+    role, reason = _material_portal_role(material)
+    return bool(role), reason
 
 
 def _is_cycles_portal_light(obj):
@@ -433,9 +465,12 @@ def _is_cycles_portal_light(obj):
 def classify_portal_meshes(scene):
     """Return one inventory record per PORTAL_MESH candidate.
 
-    Skip HERO/EXCLUDE, linked object/mesh/material, GROUP trees, glass /
-    refraction / principled transmission, and Cycles portal lights.
-    Name is not how we detect.
+    Each record has role MESH_EMIT_BACKFACE or WORLD_PORTAL_CARD.
+    Classroom dayLight_portal is MESH_EMIT_BACKFACE — never convert
+    that role to cycles.is_portal (drops emission). Skip HERO/EXCLUDE,
+    linked object/mesh/material, GROUP trees, glass / refraction /
+    principled transmission, and Cycles portal lights. Name is not how
+    we detect.
     """
     records = []
     seen_keys = set()
@@ -461,8 +496,8 @@ def classify_portal_meshes(scene):
         for mat in mats:
             if _is_linked_id(mat):
                 continue
-            ok, reason = _material_is_portal_pattern(mat)
-            if not ok:
+            role, reason = _material_portal_role(mat)
+            if not role:
                 continue
             key = (getattr(obj, "name", "") or "",
                    getattr(mesh, "name", "") or "",
@@ -475,6 +510,7 @@ def classify_portal_meshes(scene):
                 "mesh": getattr(mesh, "name", "") or "",
                 "material": getattr(mat, "name", "") or "",
                 "reason": reason,
+                "role": role,
             })
     return records
 
@@ -484,6 +520,8 @@ def inventory_counts(records):
     objects = set()
     meshes = set()
     materials = set()
+    emit = 0
+    world = 0
     for rec in recs:
         if rec.get("object"):
             objects.add(rec["object"])
@@ -491,11 +529,18 @@ def inventory_counts(records):
             meshes.add(rec["mesh"])
         if rec.get("material"):
             materials.add(rec["material"])
+        role = rec.get("role") or ""
+        if role == ROLE_MESH_EMIT_BACKFACE:
+            emit += 1
+        elif role == ROLE_WORLD_PORTAL_CARD:
+            world += 1
     return {
         "PORTAL_MESH": len(recs),
         "UNIQUE_OBJECTS": len(objects),
         "UNIQUE_MESHES": len(meshes),
         "UNIQUE_MATERIALS": len(materials),
+        "MESH_EMIT_BACKFACE": emit,
+        "WORLD_PORTAL_CARD": world,
     }
 
 
@@ -504,17 +549,20 @@ def format_inventory(records):
     recs = list(records or ())
     lines = [
         "PORTAL_MESH inventory (inventory only; Auto off; no convert; "
-        "no time claim)",
+        "no time claim; never is_portal for MESH_EMIT_BACKFACE)",
         "  PORTAL_MESH=%d  UNIQUE_OBJECTS=%d  UNIQUE_MESHES=%d  "
         "UNIQUE_MATERIALS=%d"
         % (counts["PORTAL_MESH"], counts["UNIQUE_OBJECTS"],
            counts["UNIQUE_MESHES"], counts["UNIQUE_MATERIALS"]),
+        "  MESH_EMIT_BACKFACE=%d  WORLD_PORTAL_CARD=%d"
+        % (counts["MESH_EMIT_BACKFACE"], counts["WORLD_PORTAL_CARD"]),
     ]
     for rec in recs:
         lines.append(
-            "  object=%s  mesh=%s  material=%s  reason=%s"
+            "  object=%s  mesh=%s  material=%s  role=%s  reason=%s"
             % (rec.get("object", ""), rec.get("mesh", ""),
-               rec.get("material", ""), rec.get("reason", "")))
+               rec.get("material", ""), rec.get("role", ""),
+               rec.get("reason", "")))
     return "\n".join(lines)
 
 

@@ -1112,6 +1112,9 @@ def main(argv=None):
     else:
         print_portals(portals)
         print("PORTAL_COUNTS %s" % pcounts)
+        print("PORTAL_MESH_ROLES MESH_EMIT_BACKFACE=%d WORLD_PORTAL_CARD=%d" % (
+            pcounts.get("MESH_EMIT_BACKFACE", 0),
+            pcounts.get("WORLD_PORTAL_CARD", 0)))
         pcounts_out = pcounts
         print("PORTAL_MESH_WALK COMPLETE (Fac source sockets named from DNA; "
               "Geometry Backfacing not guessed)")

@@ -1552,8 +1552,9 @@ def portal_mesh_actions(scene, caveats=None):
     """Manual-later planner hook for L5 PORTAL_MESH.
 
     NOT called from build_speed_plan / _dead_actions. Auto stays off.
-    Inventory-only this pass (no mesh→light convert). time_factor is 1.0
-    (no claim). Graph pattern lever — not a Cycles RNA knob.
+    Inventory-only this pass. Never convert MESH_EMIT_BACKFACE to
+    cycles.is_portal (drops emission). time_factor is 1.0 (no claim).
+    Graph pattern lever — not a Cycles RNA knob.
     """
     portal_meshes = _load_portal_meshes()
     if portal_meshes is None:
@@ -1564,7 +1565,8 @@ def portal_mesh_actions(scene, caveats=None):
         return []
     return [SpeedAction(
         "PORTAL_MESH",
-        "%d portal-shaped mesh/curve material(s) → inventory (manual)"
+        "%d mesh backface-emit / world-portal-card material(s) "
+        "→ inventory (manual; never is_portal)"
         % n,
         "dead", 2, 1.0, 1,
         {"records": records})]
