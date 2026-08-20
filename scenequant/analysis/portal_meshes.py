@@ -20,16 +20,18 @@
 # Shadow is transparent retrace through that card, not missing world MIS.
 #
 # Transparent still sitting in the Mix latches SD_HAS_TRANSPARENT_SHADOW
-# on the whole shader (intern/cycles/scene/shader.cpp / kernel shadow
-# retrace). BACKFACE_EMIT_OPAQUE unlinks that Transparent mix input
-# (NODE_UNLINK) so the Surface is Emission-only. Replacement for the
-# missing backface-is-invisible behavior is material use_backface_culling
-# (hasattr-gated; Blender 4.1+ Cycles). That cull is RNA, but it is the
-# pair for the graph write, not a new integrator knob. Never write
-# integrator RNA.
+# on the whole shader (intern/cycles/scene/shader.cpp / svm.cpp
+# has_surface_transparent on remaining surface closures / kernel
+# shadow_all.h retrace). BACKFACE_EMIT_OPAQUE unlinks that Transparent
+# mix input (NODE_UNLINK) so the Surface is Emission-only. Cycles 4.5
+# does not sync use_backface_culling (blender/shader.cpp settings);
+# there is no SHADER_BACKFACE_CULL. SD_BACKFACING is a post-hit flag
+# (shader_data.h) for every ray type and does not skip shadow hits.
+# Journaled cull RNA is the viewport/EEVEE pair, not a Cycles kernel
+# skip. Never write integrator RNA.
 #
-# Quality: outside the room the card disappears (cull) instead of being
-# transparent. Window rebate / two-way views can change. Auto off until
+# Quality: Cycles F12 back of the card is Emission after unlink (not
+# invisible). Window rebate / two-way views can change. Auto off until
 # HDR-FLIP on Classroom and loft. Manual-first. Apply is NOT called from
 # Auto / build_speed_plan.
 #
@@ -812,10 +814,14 @@ def apply_backface_emit_opaque(scene, jrnl, records=None, tag="speed"):
     """Unlink Transparent on MESH_EMIT_BACKFACE + journal backface cull.
 
     Only opaque_ok records. NODE_UNLINK the Transparent mix input so
-    Cycles drops SD_HAS_TRANSPARENT_SHADOW; if cull is currently False,
-    set use_backface_culling True and journal that RNA. Not called by
-    Make it Fast Auto. Never writes integrator RNA. Never is_portal.
-    Never AREA convert.
+    Cycles drops SD_HAS_TRANSPARENT_SHADOW (svm.cpp
+    has_surface_transparent on remaining closures). Cycles kernel has
+    no SHADER_BACKFACE_CULL; blender/shader.cpp never reads
+    use_backface_culling. SD_BACKFACING is post-hit (shader_data.h) on
+    every ray type and does not skip shadow hits. Cull RNA is journaled
+    as the viewport/EEVEE pair; Cycles F12 back is Emission after
+    unlink. Not called by Make it Fast Auto. Never writes integrator
+    RNA. Never is_portal. Never AREA convert.
     """
     if records is None:
         records = classify_portal_meshes(scene)
