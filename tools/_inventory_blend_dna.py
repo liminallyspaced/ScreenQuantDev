@@ -332,6 +332,59 @@ def _image_packed(im):
     return False
 
 
+def _image_packedfile_block(im):
+    """PackedFile DNA block for an Image. Never the pixel blob."""
+    if im is None:
+        return None
+    packed = _safe_pointer(im, b"packedfile")
+    if packed is not None:
+        return packed
+    if not _has_field(im, b"packedfiles"):
+        return None
+    first = _safe_pointer(im, (b"packedfiles", b"first"))
+    if first is None:
+        return None
+    inner = _safe_pointer(first, b"packedfile")
+    if inner is not None:
+        return inner
+    if _has_field(first, b"data") and _has_field(first, b"size"):
+        return first
+    return None
+
+
+def _packedfile_prefix(im, n=8):
+    """First n bytes of PackedFile.data. Never the whole packed blob."""
+    packed = _image_packedfile_block(im)
+    if packed is None:
+        return b""
+    data_ptr = _safe_get(packed, b"data")
+    if not data_ptr:
+        return b""
+    try:
+        data_block = im.file.find_block_from_offset(data_ptr)
+    except Exception:
+        return b""
+    if data_block is None:
+        return b""
+    size = int(getattr(data_block, "size", 0) or 0)
+    nread = min(int(n), size)
+    if nread <= 0:
+        return b""
+    im.file.handle.seek(data_block.file_offset)
+    return im.file.handle.read(nread) or b""
+
+
+def _file_format_from_magic(magic):
+    """JPEG / BMP from SOI only. PNG is not a no-alpha format. Do not guess."""
+    if not magic or not isinstance(magic, (bytes, bytearray)):
+        return ""
+    if len(magic) >= 2 and magic[:2] == b"\xff\xd8":
+        return "JPEG"
+    if len(magic) >= 2 and magic[:2] == b"BM":
+        return "BMP"
+    return ""
+
+
 def _has_field(block, name):
     if block is None:
         return False
@@ -922,14 +975,20 @@ def build_scene(bf):
     images_by_addr = {}
     for im in bf.find_blocks_from_code(b"IM"):
         path = _image_filepath(im)
+        magic = _packedfile_prefix(im, 8)
+        fmt = _file_format_from_magic(magic)
+        packed_obj = None
+        if _image_packed(im):
+            # Duck PackedFile with the 8-byte prefix only. Never the blob.
+            packed_obj = _Obj(data=magic)
         images_by_addr[im.addr_old] = _Obj(
             name=_id_name(im),
             filepath=path,
             filepath_raw=path,
             channels=None,
-            file_format="",
+            file_format=fmt,
             alpha_mode=_image_alpha_mode_rna(im),
-            packed_file=True if _image_packed(im) else None,
+            packed_file=packed_obj,
         )
 
     mats_by_addr = {}
@@ -1162,6 +1221,7 @@ def build_scene(bf):
         "unused_slots_raw": unused_slot_raw,
         "n_slot_incomplete": n_slot_incomplete,
         "mesh_stats": mesh_stats,
+        "all_materials": list(mats_by_addr.values()),
     }
     stats["n_slot_incomplete"] = n_slot_incomplete
     return scene, proof, stats

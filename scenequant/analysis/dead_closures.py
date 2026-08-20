@@ -62,6 +62,9 @@ CUTOUT_SURFACE = frozenset({
 })
 JPEG_EXTS = frozenset({".jpg", ".jpeg", ".jpe"})
 NO_ALPHA_FORMATS = frozenset({"JPEG", "JPG", "BMP"})
+JPEG_SOI = b"\xff\xd8"
+BMP_MAGIC = b"BM"
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 NO_ALPHA_MODES = frozenset({"NONE", "IGNORE"})
 COMBINED_PASS_NAMES = frozenset({"Image", "Alpha", "Combined"})
 # View-layer RNA sockets that are not custom AOVs (same map as PASS_PRUNE).
@@ -321,8 +324,47 @@ def _constant_float(node, sock):
     return None
 
 
+def _packed_file_prefix(image, n=8):
+    """First n bytes of image.packed_file.data. Never the whole blob.
+
+    Empty / missing data returns None (do not guess). Live bpy PackedFile
+    and DNA ducks both expose .data; a boolean leftover has no .data.
+    """
+    packed = getattr(image, "packed_file", None)
+    if packed is None or packed is False:
+        return None
+    data = getattr(packed, "data", None)
+    if data is None:
+        return None
+    try:
+        prefix = data[:n]
+    except TypeError:
+        return None
+    if isinstance(prefix, memoryview):
+        prefix = prefix.tobytes()
+    elif isinstance(prefix, bytearray):
+        prefix = bytes(prefix)
+    elif isinstance(prefix, str):
+        return None
+    elif not isinstance(prefix, bytes):
+        try:
+            prefix = bytes(prefix)
+        except (TypeError, ValueError):
+            return None
+    if not prefix:
+        return None
+    return prefix
+
+
 def _image_has_no_alpha(image):
-    """True only when the file is proven to have no alpha channel."""
+    """True only when the file is proven to have no alpha channel.
+
+    channels / file_format / extension stay first and can prove without
+    packed data. PackedFile magic is an extra proof for packed JPEGs
+    (and BMP) whose filepath is empty or not useful. PNG signature is
+    the alpha path: do not prune from magic. Empty packed data does
+    not guess.
+    """
     if image is None:
         return False
     channels = getattr(image, "channels", None)
@@ -340,6 +382,14 @@ def _image_has_no_alpha(image):
     ext = os.path.splitext(str(path))[1].lower()
     if ext in JPEG_EXTS or ext == ".bmp":
         return True
+    magic = _packed_file_prefix(image, 8)
+    if magic is not None:
+        if len(magic) >= 2 and magic[:2] == JPEG_SOI:
+            return True
+        if len(magic) >= 2 and magic[:2] == BMP_MAGIC:
+            return True
+        if magic == PNG_SIGNATURE:
+            return False
     return False
 
 

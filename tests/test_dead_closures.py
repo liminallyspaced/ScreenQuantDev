@@ -204,9 +204,13 @@ def _value_alpha_mat(name, value=1.0, library=None):
 
 
 def _image_alpha_mat(name, channels, filepath, alpha_mode="STRAIGHT",
-                     file_format="", blend="OPAQUE", library=None):
+                     file_format="", blend="OPAQUE", library=None,
+                     packed_data=None):
     img = Obj(filepath=filepath, channels=channels, alpha_mode=alpha_mode,
-              file_format=file_format, name=os.path.basename(filepath))
+              file_format=file_format,
+              name=os.path.basename(filepath) if filepath else "packed")
+    if packed_data is not None:
+        img.packed_file = Obj(data=packed_data)
     tex = _Node(
         "Image Texture", "TEX_IMAGE",
         outputs=[_Sock("Color"), _Sock("Alpha", 1.0)],
@@ -410,6 +414,54 @@ def test_jpeg_prunes_alpha():
           "reason names missing alpha / JPEG")
     check("wall.jpg" in (hits[0].get("alpha_src") or ""),
           "alpha_src names the Image filepath")
+
+
+def test_packed_jpeg_magic_prunes_alpha():
+    section("packed JPEG magic (no filepath / format / channels) → PRUNE_ALPHA")
+    mat = _image_alpha_mat(
+        "PackedJpeg", None, "",
+        packed_data=b"\xff\xd8\xff\xe0\x00\x10\x4a\x46")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = [r for r in _for_mat(records, "PackedJpeg")
+            if r["class"] == dc.PRUNE_ALPHA]
+    check(len(hits) == 1, "packed JPEG SOI ffd8 → PRUNE_ALPHA")
+    check("no alpha" in hits[0]["reason"] or "JPEG" in hits[0]["reason"],
+          "reason names missing alpha / JPEG")
+
+
+def test_packed_png_magic_kept():
+    section("packed PNG signature → KEEP_REAL_CUTOUT (do not prune from magic)")
+    mat = _image_alpha_mat(
+        "PackedPng", None, "",
+        packed_data=b"\x89PNG\r\n\x1a\n")
+    records = dc.classify_dead_closures(_with_obj(mat, "Card"))
+    hits = _for_mat(records, "PackedPng")
+    check(all(r["class"] != dc.PRUNE_ALPHA for r in hits),
+          "packed PNG signature is not PRUNE_ALPHA")
+    check(any(r["class"] == dc.KEEP_REAL_CUTOUT for r in hits),
+          "packed PNG signature → KEEP_REAL_CUTOUT")
+
+
+def test_empty_packed_data_does_not_guess():
+    section("empty packed data does not guess no-alpha")
+    mat = _image_alpha_mat("EmptyPacked", None, "", packed_data=b"")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = _for_mat(records, "EmptyPacked")
+    check(all(r["class"] != dc.PRUNE_ALPHA for r in hits),
+          "empty packed data is not PRUNE_ALPHA")
+    check(any(r["class"] == dc.KEEP_REAL_CUTOUT for r in hits),
+          "empty packed data stays KEEP_REAL_CUTOUT (no guess)")
+
+
+def test_packed_bmp_magic_prunes_alpha():
+    section("packed BMP magic (no filepath / format / channels) → PRUNE_ALPHA")
+    mat = _image_alpha_mat(
+        "PackedBmp", None, "",
+        packed_data=b"BM\x00\x00\x00\x00\x00\x00")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = [r for r in _for_mat(records, "PackedBmp")
+            if r["class"] == dc.PRUNE_ALPHA]
+    check(len(hits) == 1, "packed BMP BM → PRUNE_ALPHA")
 
 
 def test_real_cutout_kept():
@@ -829,6 +881,10 @@ def test_apply_displace_unlink_and_revert():
 def main():
     test_value_one_prunes_alpha()
     test_jpeg_prunes_alpha()
+    test_packed_jpeg_magic_prunes_alpha()
+    test_packed_png_magic_kept()
+    test_empty_packed_data_does_not_guess()
+    test_packed_bmp_magic_prunes_alpha()
     test_real_cutout_kept()
     test_glass_kept()
     test_group_skipped()
