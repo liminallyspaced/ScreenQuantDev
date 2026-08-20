@@ -839,13 +839,19 @@ def build_scene(bf):
                             getattr(src, "name", ""),
                             getattr(src, "type", "") or getattr(src, "bl_idname", ""),
                         ))
-        mats_by_addr[ma.addr_old] = _Obj(
+        mat_kw = dict(
             name=_id_name(ma),
             library=lib,
             override_library=_override_wrapper(ma),
             use_nodes=bool(_safe_get(ma, b"use_nodes")),
             node_tree=tree,
         )
+        # Honest RNA: 2.79 Material DNA has no use_backface_culling.
+        # Do not fake 4.5 Cycles cull on a 2.79 blend.
+        if _has_field(ma, b"use_backface_culling"):
+            mat_kw["use_backface_culling"] = bool(
+                _safe_get(ma, b"use_backface_culling"))
+        mats_by_addr[ma.addr_old] = _Obj(**mat_kw)
 
     sc, scene_names = _pick_scene(bf)
     if sc is None:
@@ -1112,12 +1118,17 @@ def main(argv=None):
     else:
         print_portals(portals)
         print("PORTAL_COUNTS %s" % pcounts)
-        print("PORTAL_MESH_ROLES MESH_EMIT_BACKFACE=%d WORLD_PORTAL_CARD=%d" % (
+        print("PORTAL_MESH_ROLES MESH_EMIT_BACKFACE=%d WORLD_PORTAL_CARD=%d "
+              "OPAQUE_OK=%d" % (
             pcounts.get("MESH_EMIT_BACKFACE", 0),
-            pcounts.get("WORLD_PORTAL_CARD", 0)))
+            pcounts.get("WORLD_PORTAL_CARD", 0),
+            pcounts.get("OPAQUE_OK", 0)))
         pcounts_out = pcounts
         print("PORTAL_MESH_WALK COMPLETE (Fac source sockets named from DNA; "
               "Geometry Backfacing not guessed)")
+        print("OPAQUE_OK honesty: use_backface_culling is attached on the "
+              "duck only when Material DNA has that field. 2.79 files "
+              "typically lack it (opaque_ok=0); live 4.5 hasattr True.")
 
     fired = {
         "PRUNE_MIX_TRANSPARENT": dcounts.get("PRUNE_MIX_TRANSPARENT", 0),

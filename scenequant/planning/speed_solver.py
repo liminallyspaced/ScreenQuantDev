@@ -661,8 +661,10 @@ def _dead_actions(scene, coverage, caveats):
     # UNUSED_SLOTS lives in unused_slots_actions (manual-later).
     # UNUSED_COLOR_ATTRS lives in unused_color_attrs_actions (manual-later).
     # PORTAL_MESH lives in portal_mesh_actions (manual-later).
-    # Not in the default Auto plan until a measured loft pair exists.
-    # No convert. No time claim. Not a Cycles RNA knob.
+    # BACKFACE_EMIT_OPAQUE lives in backface_emit_opaque_actions
+    # (manual-later; unlink Transparent + journaled backface cull).
+    # Not in the default Auto plan until HDR-FLIP on Classroom and loft.
+    # Never is_portal. Never AREA convert. No time claim.
     return actions
 
 
@@ -1552,9 +1554,9 @@ def portal_mesh_actions(scene, caveats=None):
     """Manual-later planner hook for L5 PORTAL_MESH.
 
     NOT called from build_speed_plan / _dead_actions. Auto stays off.
-    Inventory-only this pass. Never convert MESH_EMIT_BACKFACE to
+    Records carry role + opaque_ok. Never convert MESH_EMIT_BACKFACE to
     cycles.is_portal (drops emission). time_factor is 1.0 (no claim).
-    Graph pattern lever — not a Cycles RNA knob.
+    Graph pattern lever — not a Cycles integrator knob.
     """
     portal_meshes = _load_portal_meshes()
     if portal_meshes is None:
@@ -1570,6 +1572,31 @@ def portal_mesh_actions(scene, caveats=None):
         % n,
         "dead", 2, 1.0, 1,
         {"records": records})]
+
+
+def backface_emit_opaque_actions(scene, caveats=None):
+    """Manual-later planner hook for L5 BACKFACE_EMIT_OPAQUE.
+
+    NOT called from build_speed_plan / _dead_actions. Auto stays off
+    until HDR-FLIP on Classroom and loft. Unlink Transparent on
+    opaque_ok MESH_EMIT_BACKFACE + journaled use_backface_culling.
+    Never is_portal. Never AREA convert. time_factor is 1.0 (no claim).
+    """
+    portal_meshes = _load_portal_meshes()
+    if portal_meshes is None:
+        return []
+    records = portal_meshes.classify_portal_meshes(scene)
+    ok = [r for r in records if r.get("opaque_ok")]
+    n = len(ok)
+    if n < 1:
+        return []
+    return [SpeedAction(
+        "BACKFACE_EMIT_OPAQUE",
+        "%d backface-emit card(s) → unlink Transparent + backface cull "
+        "(manual; never is_portal)"
+        % n,
+        "dead", 2, 1.0, 1,
+        {"records": ok})]
 
 
 def _load_dead_closures():

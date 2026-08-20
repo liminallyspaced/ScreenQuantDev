@@ -1,4 +1,4 @@
-# L5 PORTAL_MESH inventory classifier.
+# L5 PORTAL_MESH inventory classifier + BACKFACE_EMIT_OPAQUE apply.
 # Duck-typed meshes; no .blend, no bpy.ops, no GPU.
 #   python3 tests/test_portal_meshes.py
 
@@ -123,6 +123,16 @@ class _Links:
         from_sock.links.append(link)
         from_sock.is_linked = True
         return link
+
+    def remove(self, link):
+        if link in self._items:
+            self._items.remove(link)
+        for sock in (link.from_socket, link.to_socket):
+            if sock is None:
+                continue
+            if link in sock.links:
+                sock.links.remove(link)
+            sock.is_linked = bool(sock.links)
 
 
 class _Node:
@@ -264,12 +274,15 @@ def _trans_principled_tree():
     return tree
 
 
-def _mat(name, node_tree, library=None):
-    return Obj(
+def _mat(name, node_tree, library=None, cull=None):
+    mat = Obj(
         name=name, library=library, override_library=None,
         node_tree=node_tree, use_nodes=True, blend_method="HASHED",
         use_transparent_shadow=True,
     )
+    if cull is not None:
+        mat.use_backface_culling = cull
+    return mat
 
 
 def _mesh_data(name, materials, face_indices, library=None):
@@ -305,11 +318,43 @@ def _scene(objects, **kw):
 
 def _portal_scene(obj_name="Window", mesh_name="pane", mat_name="portal_card",
                   fac="backfacing", extra_nodes=None, library=None,
-                  mesh_library=None, override="AUTO"):
+                  mesh_library=None, override="AUTO", cull=None):
     mat = _mat(mat_name, _portal_tree(fac=fac, extra_nodes=extra_nodes),
-               library=library)
+               library=library, cull=cull)
     data = _mesh_data(mesh_name, [mat], [0], library=mesh_library)
     return _scene([_obj(obj_name, data, override=override)])
+
+
+class _Journal:
+    def __init__(self):
+        self.entries = []
+
+    def record_action(self, kind, payload, tag, run_id=None):
+        entry = {"t": "action", "kind": kind, "payload": dict(payload), "tag": tag}
+        if run_id is not None:
+            entry["run"] = run_id
+        self.entries.append(entry)
+
+    def set_prop(self, datablock, rna_path, value, tag, run_id=None):
+        if not hasattr(datablock, rna_path):
+            return False
+        old = getattr(datablock, rna_path)
+        if old == value:
+            return False
+        setattr(datablock, rna_path, value)
+        entry = {
+            "t": "prop",
+            "kind": "Material",
+            "name": getattr(datablock, "name", "") or "",
+            "path": rna_path,
+            "old": old,
+            "new": value,
+            "tag": tag,
+        }
+        if run_id is not None:
+            entry["run"] = run_id
+        self.entries.append(entry)
+        return True
 
 
 def _mem():
@@ -443,11 +488,13 @@ def test_name_is_not_how_we_detect():
 
 
 def test_not_in_default_auto_plan():
-    section("default Auto plan has no PORTAL_MESH")
-    scene = speed_solver_scene(_portal_scene().objects)
+    section("default Auto plan has no PORTAL_MESH / BACKFACE_EMIT_OPAQUE")
+    scene = speed_solver_scene(_portal_scene(cull=False).objects)
     plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
     check(all(a.kind != "PORTAL_MESH" for a in plan.actions),
           "default Auto plan does not include PORTAL_MESH")
+    check(all(a.kind != "BACKFACE_EMIT_OPAQUE" for a in plan.actions),
+          "default Auto plan does not include BACKFACE_EMIT_OPAQUE")
     inventory = pm.classify_portal_meshes(scene)
     check(len(inventory) == 1, "inventory still sees the portal mesh")
     check(inventory[0]["role"] == pm.ROLE_MESH_EMIT_BACKFACE,
@@ -456,6 +503,13 @@ def test_not_in_default_auto_plan():
     check(len(actions) == 1 and actions[0].kind == "PORTAL_MESH"
           and actions[0].tier == 2 and actions[0].time_factor == 1.0,
           "planner hook exists, tier 2, no time claim")
+    opaque = speed_solver.backface_emit_opaque_actions(scene)
+    check(len(opaque) == 1 and opaque[0].kind == "BACKFACE_EMIT_OPAQUE"
+          and opaque[0].tier == 2 and opaque[0].time_factor == 1.0,
+          "BACKFACE_EMIT_OPAQUE planner hook exists, tier 2, no time claim")
+    check(opaque[0] not in plan.actions
+          and all(a.kind != "BACKFACE_EMIT_OPAQUE" for a in plan.actions),
+          "BACKFACE_EMIT_OPAQUE hook is not called from build_speed_plan")
 
 
 def test_inventory_print_shape():
@@ -485,6 +539,106 @@ def test_no_name_special_case_or_cycles_write():
           "no if name == dayLight_portal special case")
 
 
+
+
+def test_cull_attr_present_opaque_ok():
+    section("MESH_EMIT_BACKFACE + cull attr present → opaque_ok True")
+    scene = _portal_scene(cull=False)
+    records = pm.classify_portal_meshes(scene)
+    check(len(records) == 1, "one MESH_EMIT_BACKFACE record")
+    rec = records[0]
+    check(rec["role"] == pm.ROLE_MESH_EMIT_BACKFACE, "role is MESH_EMIT_BACKFACE")
+    check(rec["opaque_ok"] is True,
+          "Transparent mix input + use_backface_culling → opaque_ok")
+    check(rec.get("socket") in ("Shader", "Shader_001"),
+          "record names the Transparent mix input")
+
+
+def test_apply_unlinks_transparent_and_sets_cull():
+    section("apply unlinks Transparent, sets cull, revert restores")
+    scene = _portal_scene(cull=False)
+    mat = scene.objects[0].data.materials[0]
+    mix = None
+    trans_sock = None
+    for node in mat.node_tree.nodes:
+        if node.type == "MIX_SHADER":
+            mix = node
+            trans_sock = node.inputs.get("Shader")
+    check(mix is not None and trans_sock is not None and trans_sock.is_linked,
+          "fixture Transparent mix input starts linked")
+    check(mat.use_backface_culling is False, "fixture cull starts False")
+    records = pm.classify_portal_meshes(scene)
+    jrnl = _Journal()
+    applied = pm.apply_backface_emit_opaque(scene, jrnl, records)
+    check(len(applied) == 1, "apply unlinks one Transparent mix input")
+    check(not trans_sock.is_linked, "Transparent mix input is unlinked")
+    emit_sock = mix.inputs.get("Shader_001")
+    check(emit_sock is not None and emit_sock.is_linked,
+          "Emission mix input stays linked")
+    check(mat.use_backface_culling is True, "cull set True")
+    kinds = [e.get("kind") for e in jrnl.entries]
+    paths = [e.get("path") for e in jrnl.entries]
+    check("NODE_UNLINK" in kinds, "journal has NODE_UNLINK")
+    check("use_backface_culling" in paths, "journal has cull RNA")
+    restored = pm.revert_backface_emit_opaque(scene, jrnl)
+    check(restored >= 2, "revert consumes unlink + cull entries")
+    check(trans_sock.is_linked, "revert restores the Mix Transparent link")
+    check(mat.use_backface_culling is False, "revert restores cull flag")
+
+
+def test_missing_cull_attr_opaque_ok_false():
+    section("no use_backface_culling attr → opaque_ok False, apply no-op")
+    scene = _portal_scene()
+    mat = scene.objects[0].data.materials[0]
+    check(not hasattr(mat, "use_backface_culling"),
+          "fixture has no use_backface_culling")
+    records = pm.classify_portal_meshes(scene)
+    check(len(records) == 1 and records[0]["role"] == pm.ROLE_MESH_EMIT_BACKFACE,
+          "still inventories MESH_EMIT_BACKFACE")
+    check(records[0]["opaque_ok"] is False, "opaque_ok False without cull attr")
+    check("cull required" in (records[0].get("opaque_note") or ""),
+          "note says cull is required")
+    mix = None
+    trans_sock = None
+    for node in mat.node_tree.nodes:
+        if node.type == "MIX_SHADER":
+            trans_sock = node.inputs.get("Shader")
+            mix = node
+    check(trans_sock is not None and trans_sock.is_linked,
+          "Transparent starts linked")
+    jrnl = _Journal()
+    applied = pm.apply_backface_emit_opaque(scene, jrnl, records)
+    check(applied == [], "apply is a no-op without cull attr")
+    check(trans_sock.is_linked, "Transparent mix input stays linked")
+    check(jrnl.entries == [], "journal stays empty")
+
+
+def test_world_portal_card_not_this_apply():
+    section("WORLD_PORTAL_CARD (no Emission) → not this apply")
+    mat = _mat("Card", _trans_principled_tree(), cull=False)
+    data = _mesh_data("card", [mat], [0])
+    scene = _scene([_obj("Card", data)])
+    records = pm.classify_portal_meshes(scene)
+    check(len(records) == 1 and records[0]["role"] == pm.ROLE_WORLD_PORTAL_CARD,
+          "inventories WORLD_PORTAL_CARD")
+    check(records[0]["opaque_ok"] is False,
+          "WORLD_PORTAL_CARD is not opaque_ok")
+    trans_sock = None
+    for node in mat.node_tree.nodes:
+        if node.type == "MIX_SHADER":
+            trans_sock = node.inputs.get("Shader")
+    check(trans_sock is not None and trans_sock.is_linked,
+          "Transparent starts linked")
+    jrnl = _Journal()
+    applied = pm.apply_backface_emit_opaque(scene, jrnl, records)
+    check(applied == [], "WORLD_PORTAL_CARD is not this apply")
+    check(trans_sock.is_linked, "Transparent mix input stays linked")
+    check(mat.use_backface_culling is False, "cull stays False")
+    check(jrnl.entries == [], "journal stays empty")
+    opaque = speed_solver.backface_emit_opaque_actions(scene)
+    check(opaque == [], "planner hook emits no BACKFACE_EMIT_OPAQUE")
+
+
 def main():
     test_backfacing_mix_is_portal()
     test_unlinked_fac_is_not_portal()
@@ -498,6 +652,10 @@ def main():
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
     test_no_name_special_case_or_cycles_write()
+    test_cull_attr_present_opaque_ok()
+    test_apply_unlinks_transparent_and_sets_cull()
+    test_missing_cull_attr_opaque_ok_false()
+    test_world_portal_card_not_this_apply()
     finish()
 
 
