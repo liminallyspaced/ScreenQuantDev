@@ -322,9 +322,10 @@ def _mix_transparent_mat(name, fac=1.0, fac_from=None, both_principled=False,
     links = []
     if glass:
         nodes = [glass_node, trans, mix, out]
+        # Fac=1: first unused Transparent would prune if glass did not skip.
         links = [
-            (glass_node, "BSDF", mix, "Shader"),
-            (trans, "BSDF", mix, "Shader.001"),
+            (trans, "BSDF", mix, "Shader"),
+            (glass_node, "BSDF", mix, "Shader.001"),
             (mix, "Shader", out, "Surface"),
         ]
     elif both_principled:
@@ -539,9 +540,11 @@ def test_not_in_default_auto_plan():
     section("DEAD_CLOSURE_PRUNE is not in the default Auto plan")
     mat = _value_alpha_mat("Paint")
     vol = _empty_volume_mat("Hollow")
+    mix = _mix_transparent_mat("Passthrough", fac=1.0)
     scene = speed_solver_scene([
         _mesh("Wall", material_slots=[Obj(material=mat)]),
         _mesh("Box", material_slots=[Obj(material=vol)]),
+        _mesh("Car", material_slots=[Obj(material=mix)]),
     ])
     plan = speed_solver.build_speed_plan(
         scene, {}, Obj(total_mb=400.0, caveats=[], per_object_geo_mb={},
@@ -555,6 +558,8 @@ def test_not_in_default_auto_plan():
           "inventory still sees PRUNE_ALPHA (Auto is a separate gate)")
     check(any(r["class"] == dc.PRUNE_VOLUME for r in inventory),
           "inventory still sees PRUNE_VOLUME (Auto is a separate gate)")
+    check(any(r["class"] == dc.PRUNE_MIX_TRANSPARENT for r in inventory),
+          "inventory still sees PRUNE_MIX_TRANSPARENT (Auto is a separate gate)")
 
 
 def speed_solver_scene(objects):

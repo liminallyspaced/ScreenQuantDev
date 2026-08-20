@@ -3,7 +3,7 @@
 ## 0.3.3 — Unreleased
 
 - UNUSED_SLOTS: unique-shader gate. Duplicate unused slots of an already-used material are RNA noise (Cycles `get_used_shaders()` unions unique shaders) and are skipped. Unique unused materials stay prune keepers; extra_attrs tags UV / UV_TANGENT / VCOL / GENERATED / GROUP that used shaders on that mesh do not request. Official loft 2026-08-19: 891 meshes / 21k unused slots (pre-gate). Classroom: 0. Apply exists, Auto off, no time claim.
-- DEAD_CLOSURE_PRUNE: inventory/classifier only. Official Classroom/loft: 0 PRUNE_ALPHA, 0 PRUNE_VOLUME (Auto off). Mix Shader Fac proven 0/1 with unused Transparent BSDF is PRUNE_MIX_TRANSPARENT (unlink dead shader input). Unit-tested, official mix inventory not run tonight (GPU left alone). No writes. No time claim.
+- DEAD_CLOSURE_PRUNE: inventory/classifier only. Mix Shader Fac proven 0/1 with unused Transparent BSDF is PRUNE_MIX_TRANSPARENT (unlink dead shader input; apply exists, Auto off). Official Classroom/loft: 0 PRUNE_ALPHA, 0 PRUNE_VOLUME. BMW27.blend fetched (3.1 MB from demo/test/BMW27.blend.zip); box blender inventory not launched this pass. No time claim.
 - Opaque cutout shadows off on proven CLIP/HASHED cutouts only.
 - Sample knee: already-adaptive files pad an extra doubling (512→128 becomes 256). Adaptive-off interiors stay one doubling (300→128).
 - CAMERA_CULL tags linked scatter/tiny (Cycles flags, not hide_render) and turns on Simplify with high caps. Distance cull stays off.
