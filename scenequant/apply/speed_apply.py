@@ -418,6 +418,48 @@ def _apply_transparent_shadow_cap(scene, settings, jrnl, payload, cache, skipped
     return "transparent shadows cap %d" % target if changes else None
 
 
+def _apply_filter_glossy(scene, settings, jrnl, payload, cache, skipped, progress):
+    cycles = getattr(scene, "cycles", None)
+    prop = payload.get("prop") or speed_solver._filter_glossy_prop(cycles)
+    if cycles is None or not prop:
+        skipped.append(_skip("FILTER_GLOSSY", "-", "filter glossy attr missing"))
+        return None
+    if not speed_solver._filter_glossy_disabled(cycles, prop):
+        skipped.append(_skip(
+            "FILTER_GLOSSY", "-", "user filter glossy already > 0"))
+        return None
+    proven, _group = speed_solver._scene_glossy_state(scene)
+    if not proven:
+        skipped.append(_skip("FILTER_GLOSSY", "-", "no proven glossy/glass"))
+        return None
+    target = payload.get("value", speed_solver.FILTER_GLOSSY_VALUE)
+    if jrnl.set_prop(scene, "cycles.%s" % prop, target):
+        return "filter glossy %s" % target
+    return None
+
+
+def _apply_auto_scramble(scene, settings, jrnl, payload, cache, skipped, progress):
+    cycles = getattr(scene, "cycles", None)
+    prop = payload.get("prop") or speed_solver._auto_scramble_prop(cycles)
+    if cycles is None or not prop:
+        skipped.append(_skip("AUTO_SCRAMBLE", "-", "auto scrambling attr missing"))
+        return None
+    if getattr(cycles, "device", "GPU") == "CPU":
+        skipped.append(_skip("AUTO_SCRAMBLE", "-", "CPU path (GPU only)"))
+        return None
+    if getattr(cycles, prop, False):
+        return None
+    # Never write scrambling_distance (manual multiplier). Auto flag only.
+    changed = jrnl.set_prop(scene, "cycles.%s" % prop, True)
+    pattern = payload.get("sampling_pattern")
+    if pattern and hasattr(cycles, "sampling_pattern"):
+        current = getattr(cycles, "sampling_pattern", None)
+        # Blue-Noise is incompatible. 4.5 AUTOMATIC resolves to blue-noise.
+        if current not in ("TABULATED_SOBOL",):
+            jrnl.set_prop(scene, "cycles.sampling_pattern", pattern)
+    return "auto scrambling distance on (GPU)" if changed else None
+
+
 def _apply_volume_bounces_zero(scene, settings, jrnl, payload, cache, skipped, progress):
     if speed_solver._scene_has_volume(scene):
         skipped.append(_skip("VOLUME_BOUNCES_ZERO", "-", "scene has volumes"))
@@ -694,6 +736,8 @@ _HANDLERS = {
     "WORLD_MIS_NONE": _apply_world_mis_none,
     "LIGHT_SAMPLING_THRESHOLD": _apply_light_sampling_threshold,
     "TRANSPARENT_SHADOW_CAP": _apply_transparent_shadow_cap,
+    "FILTER_GLOSSY": _apply_filter_glossy,
+    "AUTO_SCRAMBLE": _apply_auto_scramble,
     "VOLUME_BOUNCES_ZERO": _apply_volume_bounces_zero,
     "HOMOGENEOUS_VOLUME": _apply_homogeneous_volume,
     "CAMERA_CULL": _apply_camera_cull,

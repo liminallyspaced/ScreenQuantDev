@@ -10,6 +10,8 @@
 - used-outside ignores linked library scenes, so CAMERA_CULL can tag linked scatter that only lives in this file.
 - last_report maxlen is 1 MB and writes never emit truncated JSON, so Analyze grade survives Make it Fast.
 - Operator copy reports the padded sample count (128 / 256), not the raw probe knee.
+- FILTER_GLOSSY: `blur_glossy` 0→1.0 when glossy/glass/anisotropic/clearcoat is proven. Never raises a user value already > 0. GROUP/HERO-only skipped.
+- AUTO_SCRAMBLE: `auto_scrambling_distance` on for GPU, paired with TABULATED_SOBOL. Never writes a huge manual `scrambling_distance`.
 - Public Classroom claim stays 41%. loft unchanged.
 
 **Versioning rule (tied to the journal schema):** a release that changes the journal

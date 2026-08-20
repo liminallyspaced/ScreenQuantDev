@@ -1292,6 +1292,217 @@ def test_two_local_scenes_still_skip_camera_cull():
 
 
 
+
+def _glossy_bsdf_mat(name, ntype="BSDF_GLOSSY"):
+    return Obj(
+        name=name,
+        library=None,
+        blend_method="OPAQUE",
+        node_tree=Obj(nodes=[Obj(type=ntype, inputs=Obj(get=lambda *_: None))]),
+    )
+
+
+def _principled_glossy_mat(name, roughness=0.2, specular=0.5, coat=0.0,
+                           metal=0.0, linked_rough=False, extra_types=()):
+    sockets = {
+        "Roughness": Obj(default_value=roughness, is_linked=linked_rough),
+        "Specular IOR Level": Obj(default_value=specular, is_linked=False),
+        "Specular": Obj(default_value=specular, is_linked=False),
+        "Coat Weight": Obj(default_value=coat, is_linked=False),
+        "Coat": Obj(default_value=coat, is_linked=False),
+        "Clearcoat": Obj(default_value=coat, is_linked=False),
+        "Metallic": Obj(default_value=metal, is_linked=False),
+        "Anisotropic": Obj(default_value=0.0, is_linked=False),
+    }
+    node = Obj(type="BSDF_PRINCIPLED", inputs=_GetMap(sockets))
+    nodes = [node]
+    for t in extra_types:
+        nodes.append(Obj(type=t, inputs=Obj(get=lambda *_: None)))
+    return Obj(
+        name=name, library=None, blend_method="OPAQUE",
+        node_tree=Obj(nodes=nodes),
+    )
+
+
+def test_filter_glossy_proven_only():
+    section("filter glossy is analysis-gated 0 -> 1.0")
+    scene = _scene()
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "FILTER_GLOSSY" for a in plan.actions),
+          "default blur_glossy 1.0 → no FILTER_GLOSSY")
+
+    scene = _scene(blur_glossy=0)
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "FILTER_GLOSSY" for a in plan.actions),
+          "filter glossy 0 but no glossy surfaces → no FILTER_GLOSSY")
+
+    scene = _scene(blur_glossy=0)
+    scene.objects = [_mesh("Chrome", material_slots=[
+        Obj(material=_glossy_bsdf_mat("M", "BSDF_GLOSSY"))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    hits = [a for a in plan.actions if a.kind == "FILTER_GLOSSY"]
+    check(len(hits) == 1, "BSDF_GLOSSY + filter 0 → FILTER_GLOSSY")
+    check(hits[0].tier == 1, "FILTER_GLOSSY is tier 1")
+    check(hits[0].waste_class == "paths", "FILTER_GLOSSY is paths class")
+    check(abs(hits[0].time_factor - 0.96) < 1e-9, "FILTER_GLOSSY factor 0.96")
+    check(hits[0].payload.get("value") == 1.0, "payload value 1.0")
+    check(hits[0].payload.get("prop") == "blur_glossy",
+          "RNA is blur_glossy on 4.5/5.1")
+    check(hits[0].kind not in speed_solver.FORBIDDEN_KINDS,
+          "FILTER_GLOSSY is not Draft/Fast GI")
+
+    scene = _scene(blur_glossy=0)
+    scene.objects = [_mesh("Pane", material_slots=[
+        Obj(material=_glossy_bsdf_mat("G", "BSDF_GLASS"))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(any(a.kind == "FILTER_GLOSSY" for a in plan.actions),
+          "BSDF_GLASS proves FILTER_GLOSSY")
+
+    scene = _scene(blur_glossy=0)
+    scene.objects = [_mesh("Brushed", material_slots=[
+        Obj(material=_glossy_bsdf_mat("A", "BSDF_ANISOTROPIC"))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(any(a.kind == "FILTER_GLOSSY" for a in plan.actions),
+          "BSDF_ANISOTROPIC proves FILTER_GLOSSY")
+
+    scene = _scene(blur_glossy=0)
+    scene.objects = [_mesh("Car", material_slots=[
+        Obj(material=_principled_glossy_mat("Paint", roughness=0.2, specular=0.5))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(any(a.kind == "FILTER_GLOSSY" for a in plan.actions),
+          "Principled roughness < 1 with specular → FILTER_GLOSSY")
+
+    scene = _scene(blur_glossy=0)
+    scene.objects = [_mesh("Matte", material_slots=[
+        Obj(material=_principled_glossy_mat("Flat", roughness=1.0, specular=0.5))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "FILTER_GLOSSY" for a in plan.actions),
+          "fully rough Principled is not glossy")
+
+    scene = _scene(blur_glossy=0)
+    scene.objects = [_mesh("Dielectric", material_slots=[
+        Obj(material=_principled_glossy_mat("NoSpec", roughness=0.2, specular=0.0))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "FILTER_GLOSSY" for a in plan.actions),
+          "roughness < 1 without specular is not proven")
+
+    scene = _scene(blur_glossy=0)
+    scene.objects = [_mesh("Car", material_slots=[
+        Obj(material=_principled_glossy_mat("Clear", roughness=1.0, coat=0.5))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(any(a.kind == "FILTER_GLOSSY" for a in plan.actions),
+          "clearcoat proves FILTER_GLOSSY even on rough substrate")
+
+    scene = _scene(blur_glossy=0.5)
+    scene.objects = [_mesh("Chrome", material_slots=[
+        Obj(material=_glossy_bsdf_mat("M", "BSDF_GLOSSY"))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "FILTER_GLOSSY" for a in plan.actions),
+          "user 0.5 is not raised")
+
+    scene = _scene(blur_glossy=2.0)
+    scene.objects = [_mesh("Chrome", material_slots=[
+        Obj(material=_glossy_bsdf_mat("M", "BSDF_GLOSSY"))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "FILTER_GLOSSY" for a in plan.actions),
+          "user 2.0 is not lowered")
+
+    scene = _scene(blur_glossy=0)
+    hero = _mesh("HeroChrome", material_slots=[
+        Obj(material=_glossy_bsdf_mat("M", "BSDF_GLOSSY"))])
+    hero.scenequant = Obj(override="HERO")
+    scene.objects = [hero]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "FILTER_GLOSSY" for a in plan.actions),
+          "HERO-only glossy → no FILTER_GLOSSY")
+
+    scene = _scene(blur_glossy=0)
+    hero = _mesh("HeroChrome", material_slots=[
+        Obj(material=_glossy_bsdf_mat("H", "BSDF_GLOSSY"))])
+    hero.scenequant = Obj(override="HERO")
+    local = _mesh("Trim", material_slots=[
+        Obj(material=_glossy_bsdf_mat("L", "BSDF_GLOSSY"))])
+    scene.objects = [hero, local]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(any(a.kind == "FILTER_GLOSSY" for a in plan.actions),
+          "non-hero glossy still proves FILTER_GLOSSY")
+
+    scene = _scene(blur_glossy=0)
+    scene.objects = [_mesh("GroupGloss", material_slots=[
+        Obj(material=_principled_glossy_mat("G", extra_types=("GROUP",)))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "FILTER_GLOSSY" for a in plan.actions),
+          "GROUP tree → no FILTER_GLOSSY (not proven)")
+    check(any("unproven" in c and "GROUP" in c for c in plan.caveats),
+          "unproven GROUP is a caveat")
+
+    scene = _scene()
+    del scene.cycles.blur_glossy
+    scene.cycles.filter_glossy = 0
+    scene.objects = [_mesh("Chrome", material_slots=[
+        Obj(material=_glossy_bsdf_mat("M", "BSDF_GLOSSY"))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    hits = [a for a in plan.actions if a.kind == "FILTER_GLOSSY"]
+    check(len(hits) == 1 and hits[0].payload.get("prop") == "filter_glossy",
+          "filter_glossy alias is hasattr-guarded")
+
+
+def test_auto_scramble_gpu_only():
+    section("auto scrambling is GPU, hasattr-guarded, no huge distance")
+    scene = _scene()
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "AUTO_SCRAMBLE" for a in plan.actions),
+          "missing attr → no AUTO_SCRAMBLE")
+
+    scene = _scene(auto_scrambling_distance=False, sampling_pattern="AUTOMATIC")
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    hits = [a for a in plan.actions if a.kind == "AUTO_SCRAMBLE"]
+    check(len(hits) == 1, "auto_scrambling_distance off + GPU → AUTO_SCRAMBLE")
+    check(hits[0].tier == 1, "AUTO_SCRAMBLE is tier 1")
+    check(hits[0].waste_class == "samples", "AUTO_SCRAMBLE is samples class")
+    check(abs(hits[0].time_factor - 0.97) < 1e-9, "AUTO_SCRAMBLE factor 0.97")
+    check(hits[0].payload.get("prop") == "auto_scrambling_distance",
+          "RNA is auto_scrambling_distance")
+    check(hits[0].payload.get("enabled") is True, "payload enables auto")
+    check(hits[0].payload.get("sampling_pattern") == "TABULATED_SOBOL",
+          "pairs TABULATED_SOBOL so 4.5 AUTOMATIC is not inert")
+    check("scrambling_distance" not in hits[0].payload,
+          "never force a huge manual scrambling_distance")
+    check(hits[0].kind not in speed_solver.FORBIDDEN_KINDS,
+          "AUTO_SCRAMBLE is not Draft/Fast GI")
+
+    scene = _scene(auto_scrambling_distance=True, sampling_pattern="TABULATED_SOBOL")
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "AUTO_SCRAMBLE" for a in plan.actions),
+          "already on → no AUTO_SCRAMBLE")
+
+    scene = _scene(auto_scrambling_distance=False, device="CPU",
+                   sampling_pattern="TABULATED_SOBOL")
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    check(all(a.kind != "AUTO_SCRAMBLE" for a in plan.actions),
+          "CPU path → no AUTO_SCRAMBLE")
+
+    scene = _scene()
+    scene.cycles.use_auto_scrambling = False
+    scene.cycles.sampling_pattern = "BLUE_NOISE"
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    hits = [a for a in plan.actions if a.kind == "AUTO_SCRAMBLE"]
+    check(len(hits) == 1 and hits[0].payload.get("prop") == "use_auto_scrambling",
+          "use_auto_scrambling alias is hasattr-guarded")
+
+    scene = _scene(blur_glossy=0, auto_scrambling_distance=False,
+                   sampling_pattern="AUTOMATIC")
+    scene.objects = [_mesh("Chrome", material_slots=[
+        Obj(material=_glossy_bsdf_mat("M", "BSDF_GLOSSY"))])]
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    kinds = [a.kind for a in plan.actions]
+    check("FILTER_GLOSSY" in kinds and "AUTO_SCRAMBLE" in kinds,
+          "both levers stack in the default Auto plan")
+    check(all(a.tier <= 1 for a in plan.actions if a.kind in (
+        "FILTER_GLOSSY", "AUTO_SCRAMBLE")),
+          "both stay at tier 1")
+
+
 def main():
     test_independence()
     test_default_plan_filters()
@@ -1317,6 +1528,8 @@ def main():
     test_used_outside_ignores_library_scenes()
     test_linked_cull_ignores_library_scenes()
     test_two_local_scenes_still_skip_camera_cull()
+    test_filter_glossy_proven_only()
+    test_auto_scramble_gpu_only()
     finish()
 
 

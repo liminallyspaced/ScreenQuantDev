@@ -17,22 +17,23 @@ FORBIDDEN_KINDS = {
     "PARANOID_CULL",
 }
 # TIER_PERCEPTUAL props that belong to the paths class. Adaptive / samples /
-# light_tree / scrambling are handled as their own levers (research: light
-# tree is NOT always-on; scrambling stays out of the default plan).
+# light_tree / scrambling / filter-glossy are handled as their own levers
+# (research: light tree is NOT always-on). FILTER_GLOSSY owns blur_glossy
+# (analysis-gated). AUTO_SCRAMBLE owns auto_scrambling_distance (GPU).
 PATH_PROP_NAMES = (
-    "sample_clamp_indirect", "blur_glossy",
+    "sample_clamp_indirect",
     "max_bounces", "diffuse_bounces", "glossy_bounces",
     "transmission_bounces", "transparent_max_bounces",
 )
 PATH_ENTRIES = (
     ("cycles", "sample_clamp_indirect", 5.0, "min"),
-    ("cycles", "blur_glossy", 1.0, "max", {"skip_zero": False}),
     ("cycles", "max_bounces", 8, "min"),
     ("cycles", "diffuse_bounces", 3, "min"),
     ("cycles", "glossy_bounces", 4, "min"),
     ("cycles", "transmission_bounces", 6, "min"),
     ("cycles", "transparent_max_bounces", 8, "min"),
 )
+FILTER_GLOSSY_VALUE = 1.0
 SAMPLES_CAP = 1024
 SAMPLES_FLOOR = 256          # never propose lowering below this
 THRESHOLD_CAP = 0.015        # MODE_MAX cheap-floor; do not go to 0.03
@@ -332,6 +333,7 @@ def _sample_actions(scene, caveats):
                 "Adaptive min samples %d (stops blotching in dark areas)" % target,
                 "samples", 1, 1.0, 0,
                 {"value": target}))
+    actions.extend(_auto_scramble_actions(scene))
     caveats.append(
         "Sample knee: Make it Fast probes a cheap ladder and caps "
         "samples at the proven floor — it does not guess a count")
@@ -370,7 +372,7 @@ def _path_actions(scene, caveats):
         overworked = _paths_overworked(scene)
         actions.append(SpeedAction(
             "APPLY_PERCEPTUAL_PATHS",
-            "Bounce / clamp / glossy filter (perceptual, never raises user caps)",
+            "Bounce / clamp (perceptual, never raises user caps)",
             "paths", 1, 0.75 if overworked else 0.90, 1, {}))
     actions.extend(_light_tree_actions(scene))
     actions.extend(_caustics_actions(scene))
@@ -384,6 +386,7 @@ def _path_actions(scene, caveats):
     actions.extend(_homogeneous_volume_actions(scene, caveats))
     actions.extend(_light_sampling_actions(scene))
     actions.extend(_transparent_shadow_actions(scene, caveats))
+    actions.extend(_filter_glossy_actions(scene, caveats))
     return actions
 
 
@@ -1487,6 +1490,180 @@ def _mix_transparent_cutout(tree):
         if sock is not None and getattr(sock, "is_linked", False):
             return True
     return False
+
+
+
+GLOSSY_BSDF_TYPES = {"BSDF_GLOSSY", "BSDF_GLASS", "BSDF_ANISOTROPIC"}
+
+
+def _filter_glossy_prop(cycles):
+    """Cycles 4.5.5 / 5.1.2 RNA is blur_glossy (UI: Filter Glossy).
+
+    filter_glossy is not present on supported versions; hasattr-guard both.
+    """
+    if _has_attr(cycles, "blur_glossy"):
+        return "blur_glossy"
+    if _has_attr(cycles, "filter_glossy"):
+        return "filter_glossy"
+    return None
+
+
+def _filter_glossy_disabled(cycles, prop):
+    """True when Filter Glossy is 0 / unset / disabled. User values > 0 stay."""
+    current = getattr(cycles, prop, None)
+    if current is None:
+        return True
+    if isinstance(current, bool):
+        return current is False
+    if isinstance(current, (int, float)):
+        return current == 0
+    return False
+
+
+def _filter_glossy_actions(scene, caveats):
+    """Enable Filter Glossy at 1.0 only when it is off and glossy is proven.
+
+    Write is 0 -> 1.0, never a raise of a user value already > 0. MODE_MIN
+    against 1.0 would skip 0 and would drag a deliberate 3.0 down (slower);
+    we do neither. GROUP trees are unproven. HERO/EXCLUDE objects do not
+    count as proof.
+    """
+    cycles = _cycles(scene)
+    if cycles is None:
+        return []
+    prop = _filter_glossy_prop(cycles)
+    if prop is None:
+        return []
+    if not _filter_glossy_disabled(cycles, prop):
+        return []
+    proven, saw_group = _scene_glossy_state(scene)
+    if not proven:
+        if saw_group:
+            caveats.append(
+                "filter glossy not changed (glossy unproven — GROUP node trees)")
+        return []
+    return [SpeedAction(
+        "FILTER_GLOSSY",
+        "Filter glossy 1.0 (proven glossy/glass; was disabled)",
+        "paths", 1, 0.96, 1,
+        {"value": FILTER_GLOSSY_VALUE, "prop": prop})]
+
+
+def _scene_glossy_state(scene):
+    """(proven, saw_unwalkable_group). Protected objects are not proof."""
+    proven = False
+    saw_group = False
+    for obj in _iter_objects(scene):
+        if getattr(obj, "hide_render", False) or _protected(obj):
+            continue
+        for slot in getattr(obj, "material_slots", ()) or ():
+            mat = getattr(slot, "material", None)
+            if mat is None:
+                continue
+            tree = getattr(mat, "node_tree", None)
+            if tree is None:
+                continue
+            if _tree_has_types(tree, {"GROUP"}):
+                saw_group = True
+                continue
+            if _tree_has_glossy(tree):
+                proven = True
+    return proven, saw_group
+
+
+def _tree_has_glossy(tree):
+    for node in getattr(tree, "nodes", ()) or ():
+        ntype = getattr(node, "type", "")
+        if ntype in GLOSSY_BSDF_TYPES:
+            return True
+        if ntype == "BSDF_PRINCIPLED" and _principled_is_glossy(node):
+            return True
+    return False
+
+
+def _sock(node, *names):
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        return None
+    getter = getattr(inputs, "get", None)
+    if getter is None:
+        return None
+    for name in names:
+        sock = getter(name)
+        if sock is not None:
+            return sock
+    return None
+
+
+def _sock_unlinked_float(node, names, default=0.0):
+    sock = _sock(node, *names)
+    if sock is None or getattr(sock, "is_linked", False):
+        return None
+    value = getattr(sock, "default_value", default)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _principled_is_glossy(node):
+    """Clearcoat, or roughness < 1 with specular / metal / anisotropy."""
+    coat = _sock_unlinked_float(node, ("Coat Weight", "Coat", "Clearcoat"))
+    if coat is not None and coat > 0.0:
+        return True
+    rough = _sock_unlinked_float(node, ("Roughness",), 1.0)
+    if rough is None or rough >= 1.0:
+        return False
+    spec = _sock_unlinked_float(node, ("Specular IOR Level", "Specular"))
+    if spec is not None and spec > 0.0:
+        return True
+    metal = _sock_unlinked_float(node, ("Metallic",))
+    if metal is not None and metal > 0.0:
+        return True
+    aniso = _sock_unlinked_float(node, ("Anisotropic", "Anisotropy"))
+    if aniso is not None and aniso > 0.0:
+        return True
+    return False
+
+
+def _auto_scramble_prop(cycles):
+    """Cycles 4.5.5 / 5.1.2 RNA is auto_scrambling_distance (bool).
+
+    use_auto_scrambling_distance exists on no supported version. use_auto_scrambling
+    is a defensive alias. scrambling_distance is the manual multiplier
+    (factory 1.0) — never force a huge value.
+    """
+    if _has_attr(cycles, "auto_scrambling_distance"):
+        return "auto_scrambling_distance"
+    if _has_attr(cycles, "use_auto_scrambling"):
+        return "use_auto_scrambling"
+    return None
+
+
+def _auto_scramble_actions(scene):
+    """Turn auto scrambling on for the GPU path. Skip if the attr is missing.
+
+    Inert under Blue-Noise / 4.5 AUTOMATIC unless sampling_pattern is
+    TABULATED_SOBOL (same pairing as TIER_PERCEPTUAL). Never writes
+    scrambling_distance.
+    """
+    cycles = _cycles(scene)
+    if cycles is None:
+        return []
+    prop = _auto_scramble_prop(cycles)
+    if prop is None:
+        return []
+    if getattr(cycles, "device", "GPU") == "CPU":
+        return []
+    if getattr(cycles, prop, False):
+        return []
+    payload = {"prop": prop, "enabled": True}
+    if _has_attr(cycles, "sampling_pattern"):
+        payload["sampling_pattern"] = "TABULATED_SOBOL"
+    return [SpeedAction(
+        "AUTO_SCRAMBLE",
+        "Auto scrambling distance on (GPU)",
+        "samples", 1, 0.97, 1,
+        payload)]
 
 
 TRANSPARENT_SHADOW_CAP = 4
