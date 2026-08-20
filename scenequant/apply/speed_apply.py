@@ -471,8 +471,6 @@ def _cull_object_skip(obj, scene, guard_cache):
     override = getattr(getattr(obj, "scenequant", None), "override", "AUTO")
     if override != "AUTO":
         return "override %s" % override
-    if guards.used_outside_scene(obj, scene, guard_cache):
-        return "used by other scenes"
     if getattr(obj, "type", "") in ("LIGHT", "VOLUME", "CAMERA"):
         return "lights/volumes never culled"
     if getattr(obj, "is_shadow_catcher", False):

@@ -985,8 +985,9 @@ def _camera_cull_actions(scene, coverage, caveats):
     """Scatter/tiny only. Scene flag alone does nothing — objects listed too.
 
     Never lights, heroes, volumes, shadow catchers. Linked scatter/tiny ARE
-    listed (Cycles per-object flag, not hide_render). Distance cull is AND
-    with camera cull; we do not enable both.
+    listed (Cycles per-object flag, not hide_render). Shared across local
+    helper scenes is fine: the flag is evaluated against the rendering camera.
+    Distance cull is AND with camera cull; we do not enable both.
     """
     if not coverage:
         return []
@@ -994,7 +995,6 @@ def _camera_cull_actions(scene, coverage, caveats):
     if cycles is None or not _has_attr(cycles, "use_camera_cull"):
         return []
     names = []
-    outside_skipped = 0
     for name, info in _sorted_coverage(coverage):
         if _cov_attr(info, "max_coverage", 1.0) >= TINY_COVERAGE:
             continue
@@ -1010,16 +1010,12 @@ def _camera_cull_actions(scene, coverage, caveats):
         oc = getattr(obj, "cycles", None)
         if oc is not None and getattr(oc, "is_shadow_catcher", False):
             continue
-        if _used_outside(obj, scene):
-            outside_skipped += 1
-            continue
+        # use_camera_cull is evaluated against the rendering camera, so a
+        # chair also linked into a helper scene (Classroom dustParticules)
+        # is still safe to tag. hide_render / trim keep used-outside.
         if getattr(oc, "use_camera_cull", False):
             continue
         names.append(name)
-    if outside_skipped:
-        caveats.append(
-            "%d scatter/tiny object(s) not camera-culled (used outside this scene)"
-            % outside_skipped)
     if not names and getattr(cycles, "use_camera_cull", False):
         return []
     if not names:

@@ -1260,7 +1260,7 @@ def test_linked_cull_ignores_library_scenes():
 
 
 def test_two_local_scenes_still_skip_camera_cull():
-    section("two LOCAL scenes still skip CAMERA_CULL")
+    section("two LOCAL scenes still camera-cull")
     bpy_mod, guards = _load_guards_fake_bpy()
     scene = _scene()
     scene.library = None
@@ -1285,10 +1285,10 @@ def test_two_local_scenes_still_skip_camera_cull():
     for action in plan.actions:
         if action.kind == "CAMERA_CULL":
             culled.extend(action.payload.get("objects") or [])
-    check("Chair.001" not in culled,
-          "shared across two LOCAL scenes is not camera-culled")
-    check(any("used outside this scene" in c for c in plan.caveats),
-          "cross-local skip is a caveat")
+    check("Chair.001" in culled,
+          "shared across two LOCAL scenes is still camera-culled (flag is per-camera)")
+    check(all("not camera-culled (used outside" not in c for c in plan.caveats),
+          "CAMERA_CULL does not caveat used-outside")
 
 
 
