@@ -1669,13 +1669,16 @@ def dead_closure_prune_actions(scene, caveats=None):
     n_sss = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_SSS)
     n_emit = sum(1 for r in prunes
                  if r.get("class") == dead_closures.PRUNE_EMISSION)
-    n_hit = n_alpha + n_vol + n_mix + n_disp + n_sss + n_emit
+    n_trans = sum(1 for r in prunes
+                  if r.get("class") == dead_closures.PRUNE_TRANSMISSION)
+    n_hit = n_alpha + n_vol + n_mix + n_disp + n_sss + n_emit + n_trans
     if n_hit < 1:
         return []
     return [SpeedAction(
         "DEAD_CLOSURE_PRUNE",
         "%d false-transparent / empty-volume / mix-transparent / "
-        "zero-displace / false-sss / false-emission socket(s) → unlink (manual)"
+        "zero-displace / false-sss / false-emission / false-transmission "
+        "socket(s) → unlink (manual)"
         % n_hit,
         "dead", 2, 1.0, 1,
         {"records": prunes})]
@@ -2012,16 +2015,75 @@ def _looks_glass(obj):
     return False
 
 
-def _principled_transmits(node):
-    sock = None
-    inputs = getattr(node, "inputs", None)
-    if inputs is None:
+def _proven_zero_scalar(sock):
+    """True iff sock is unlinked ~0 or a Value node ~0. One hop. No Math.
+
+    Local copy (eps 1e-4). Do not import dead_closures here.
+    """
+    if sock is None:
         return False
-    getter = getattr(inputs, "get", None)
-    if getter is not None:
-        sock = getter("Transmission Weight") or getter("Transmission")
+    eps = 1e-4
+    if not getattr(sock, "is_linked", False):
+        value = getattr(sock, "default_value", None)
+        return isinstance(value, (int, float)) and abs(float(value)) <= eps
+    from_node = None
+    from_sock = None
+    for link in getattr(sock, "links", None) or ():
+        from_node = getattr(link, "from_node", None)
+        from_sock = getattr(link, "from_socket", None)
+        break
+    if from_node is None:
+        link = getattr(sock, "link", None)
+        if link is not None:
+            from_node = getattr(link, "from_node", None)
+            from_sock = getattr(link, "from_socket", None)
+    if from_node is None:
+        from_node = getattr(sock, "from_node", None)
+        from_sock = getattr(sock, "from_socket", None)
+    if from_node is None:
+        return False
+    ntype = getattr(from_node, "type", "") or ""
+    bl_id = getattr(from_node, "bl_idname", "") or ""
+    if ntype == "GROUP" or bl_id == "ShaderNodeGroup":
+        return False
+    if ntype != "VALUE" and bl_id != "ShaderNodeValue":
+        return False
+    value = None
+    if from_sock is not None:
+        raw = getattr(from_sock, "default_value", None)
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+    if value is None:
+        outputs = getattr(from_node, "outputs", None)
+        getter = getattr(outputs, "get", None) if outputs is not None else None
+        out = None
+        if getter is not None:
+            out = getter("Value") or getter("Fac")
+        if out is None:
+            for item in outputs or ():
+                name = getattr(item, "name", None) or getattr(item, "identifier", None)
+                if name in ("Value", "Fac"):
+                    out = item
+                    break
+        raw = getattr(out, "default_value", None) if out is not None else None
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+    return value is not None and abs(value) <= eps
+
+
+def _principled_transmits(node):
+    """True iff this Principled is real glass / refraction.
+
+    Linked Transmission Weight at proven 0 is NOT glass. Cycles 4.5
+    has no has_surface_transmission link-OR latch. Texture / Math /
+    GROUP stay glass. Unlinked default > 0.2 stays glass.
+    """
+    sock = _sock(node, "Transmission Weight", "Transmission")
     if sock is None:
         return False
     if getattr(sock, "is_linked", False):
+        if _proven_zero_scalar(sock):
+            return False
         return True
-    return getattr(sock, "default_value", 0.0) > 0.2
+    value = getattr(sock, "default_value", 0.0)
+    return isinstance(value, (int, float)) and value > 0.2

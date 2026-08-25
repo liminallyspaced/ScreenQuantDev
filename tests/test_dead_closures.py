@@ -217,6 +217,44 @@ def _value_sss_mat(name, value=0.0, library=None):
     ], library=library)
 
 
+def _value_transmission_mat(name, value=0.0, library=None):
+    val = _Node("Value", "VALUE", outputs=[_Sock("Value", value)])
+    prin = _principled()
+    out = _output()
+    return _mat(name, [val, prin, out], [
+        (val, "Value", prin, "Transmission Weight"),
+        (prin, "BSDF", out, "Surface"),
+    ], library=library)
+
+
+def _value_transmission_sss_mat(name, trans=0.0, sss=0.0, library=None):
+    val_t = _Node("Value", "VALUE", outputs=[_Sock("Value", trans)])
+    val_s = _Node("Value.001", "VALUE", outputs=[_Sock("Value", sss)])
+    prin = _principled()
+    out = _output()
+    return _mat(name, [val_t, val_s, prin, out], [
+        (val_t, "Value", prin, "Transmission Weight"),
+        (val_s, "Value", prin, "Subsurface Weight"),
+        (prin, "BSDF", out, "Surface"),
+    ], library=library)
+
+
+def _image_transmission_mat(name):
+    img = Obj(filepath="//glass.png", channels=4, alpha_mode="STRAIGHT",
+              file_format="PNG", name="glass.png")
+    tex = _Node(
+        "Image Texture", "TEX_IMAGE",
+        outputs=[_Sock("Color"), _Sock("Alpha", 1.0)],
+        image=img, bl_idname="ShaderNodeTexImage",
+    )
+    prin = _principled()
+    out = _output()
+    return _mat(name, [tex, prin, out], [
+        (tex, "Color", prin, "Transmission Weight"),
+        (prin, "BSDF", out, "Surface"),
+    ])
+
+
 def _value_emission_mat(name, value=0.0, library=None):
     val = _Node("Value", "VALUE", outputs=[_Sock("Value", value)])
     prin = _principled()
@@ -667,6 +705,7 @@ def test_not_in_default_auto_plan():
     disp = _zero_disp_mat("Flat")
     sss = _value_sss_mat("Skin")
     emit = _value_emission_mat("DarkEmit")
+    trans = _value_transmission_mat("DeadGlass")
     scene = speed_solver_scene([
         _mesh("Wall", material_slots=[Obj(material=mat)]),
         _mesh("Box", material_slots=[Obj(material=vol)]),
@@ -674,6 +713,7 @@ def test_not_in_default_auto_plan():
         _mesh("Floor", material_slots=[Obj(material=disp)]),
         _mesh("Arm", material_slots=[Obj(material=sss)]),
         _mesh("Card", material_slots=[Obj(material=emit)]),
+        _mesh("Dump", material_slots=[Obj(material=trans)]),
     ])
     plan = speed_solver.build_speed_plan(
         scene, {}, Obj(total_mb=400.0, caveats=[], per_object_geo_mb={},
@@ -688,6 +728,8 @@ def test_not_in_default_auto_plan():
           "default Auto plan does not include PRUNE_SSS actions")
     check("PRUNE_EMISSION" not in kinds and "PRUNE_EMISSION" not in blob,
           "default Auto plan does not include PRUNE_EMISSION actions")
+    check("PRUNE_TRANSMISSION" not in kinds and "PRUNE_TRANSMISSION" not in blob,
+          "default Auto plan does not include PRUNE_TRANSMISSION actions")
     inventory = dc.classify_dead_closures(scene)
     check(any(r["class"] == dc.PRUNE_ALPHA for r in inventory),
           "inventory still sees PRUNE_ALPHA (Auto is a separate gate)")
@@ -701,6 +743,8 @@ def test_not_in_default_auto_plan():
           "inventory still sees PRUNE_SSS (Auto is a separate gate)")
     check(any(r["class"] == dc.PRUNE_EMISSION for r in inventory),
           "inventory still sees PRUNE_EMISSION (Auto is a separate gate)")
+    check(any(r["class"] == dc.PRUNE_TRANSMISSION for r in inventory),
+          "inventory still sees PRUNE_TRANSMISSION (Auto is a separate gate)")
     path = os.path.join(PROJECT_ROOT, "scenequant", "planning",
                         "speed_solver.py")
     with open(path, encoding="utf-8") as handle:
@@ -739,8 +783,9 @@ def test_inventory_print_shape():
           "inventory header refuses a time claim")
     check("PRUNE_ALPHA=" in text and "PRUNE_MIX_TRANSPARENT=" in text
           and "PRUNE_DISPLACE=" in text and "PRUNE_SSS=" in text
-          and "PRUNE_EMISSION=" in text and "Paint" in text,
-          "table lists PRUNE_ALPHA / MIX / DISPLACE / SSS / EMISSION")
+          and "PRUNE_EMISSION=" in text and "PRUNE_TRANSMISSION=" in text
+          and "Paint" in text,
+          "table lists PRUNE_ALPHA / MIX / DISPLACE / SSS / EMISSION / TRANSMISSION")
     check("alpha_src=" in text, "PRUNE_ALPHA row prints alpha_src")
 
 
@@ -755,8 +800,10 @@ def test_default_plan_kind_absent_empty():
     kinds = [a.kind for a in plan.actions]
     check("DEAD_CLOSURE_PRUNE" not in kinds
           and "PRUNE_SSS" not in kinds
-          and "PRUNE_EMISSION" not in kinds,
-          "empty default plan has no DEAD_CLOSURE_PRUNE / PRUNE_SSS / PRUNE_EMISSION")
+          and "PRUNE_EMISSION" not in kinds
+          and "PRUNE_TRANSMISSION" not in kinds,
+          "empty default plan has no DEAD_CLOSURE_PRUNE / PRUNE_SSS / "
+          "PRUNE_EMISSION / PRUNE_TRANSMISSION")
 
 
 
@@ -1067,6 +1114,116 @@ def test_apply_sss_unlink_and_revert():
     check(not jrnl.entries, "successful revert consumes the NODE_UNLINK entry")
 
 
+
+def test_transmission_weight_zero_not_glass_prunes():
+    section("Transmission Weight linked to Value=0 → not KEEP_GLASS, is PRUNE_TRANSMISSION")
+    mat = _value_transmission_mat("PbrDump", value=0.0)
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = _for_mat(records, "PbrDump")
+    check(all(r["class"] != dc.KEEP_GLASS for r in hits),
+          "Value=0 Transmission Weight is not KEEP_GLASS")
+    prune = [r for r in hits if r["class"] == dc.PRUNE_TRANSMISSION]
+    check(len(prune) == 1, "Value=0 Weight → one PRUNE_TRANSMISSION")
+    check(prune[0]["node"] == "Principled BSDF", "record.node is Principled BSDF")
+    check(prune[0]["socket"] == "Transmission Weight",
+          "record.socket is Transmission Weight")
+    check("Wall" in prune[0]["users"], "users lists the mesh")
+    scene = _with_obj(mat, "Wall")
+    actions = speed_solver.dead_closure_prune_actions(scene)
+    check(len(actions) == 1 and actions[0].kind == "DEAD_CLOSURE_PRUNE"
+          and actions[0].time_factor == 1.0,
+          "manual hook counts PRUNE_TRANSMISSION")
+
+
+def test_transmission_zero_also_prunes_sss():
+    section("Value-0 Transmission + Value-0 SSS → PRUNE_TRANSMISSION and PRUNE_SSS")
+    mat = _value_transmission_sss_mat("PbrDump", trans=0.0, sss=0.0)
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = _for_mat(records, "PbrDump")
+    check(all(r["class"] != dc.KEEP_GLASS for r in hits),
+          "proven-zero Transmission is not KEEP_GLASS (glass skip no longer blocks)")
+    check(any(r["class"] == dc.PRUNE_TRANSMISSION for r in hits),
+          "same material emits PRUNE_TRANSMISSION")
+    sss = [r for r in hits if r["class"] == dc.PRUNE_SSS]
+    check(len(sss) == 1, "same material also emits PRUNE_SSS")
+    check(sss[0]["socket"] == "Subsurface Weight",
+          "SSS record.socket is Subsurface Weight")
+
+
+def test_transmission_weight_one_is_glass():
+    section("Transmission Weight linked to Value=1.0 → KEEP_GLASS, no PRUNE_TRANSMISSION")
+    mat = _value_transmission_mat("RealGlass", value=1.0)
+    records = dc.classify_dead_closures(_with_obj(mat, "Pane"))
+    hits = _for_mat(records, "RealGlass")
+    check(any(r["class"] == dc.KEEP_GLASS for r in hits),
+          "Value=1.0 Transmission Weight → KEEP_GLASS")
+    check(all(r["class"] != dc.PRUNE_TRANSMISSION for r in hits),
+          "Value=1.0 Weight is not PRUNE_TRANSMISSION")
+
+
+def test_transmission_weight_tex_image_is_glass():
+    section("Transmission Weight linked to TEX_IMAGE → KEEP_GLASS, no PRUNE_TRANSMISSION")
+    mat = _image_transmission_mat("TexGlass")
+    records = dc.classify_dead_closures(_with_obj(mat, "Pane"))
+    hits = _for_mat(records, "TexGlass")
+    check(any(r["class"] == dc.KEEP_GLASS for r in hits),
+          "TEX_IMAGE Transmission Weight → KEEP_GLASS")
+    check(all(r["class"] != dc.PRUNE_TRANSMISSION for r in hits),
+          "TEX_IMAGE Weight is not PRUNE_TRANSMISSION")
+
+
+def test_transmission_unlinked_zero_neither():
+    section("Transmission unlinked 0 → neither KEEP_GLASS nor PRUNE_TRANSMISSION")
+    prin = _principled()
+    out = _output()
+    mat = _mat("BareTrans", [prin, out], [
+        (prin, "BSDF", out, "Surface"),
+    ])
+    weight = prin.inputs.get("Transmission Weight")
+    check(weight is not None and not weight.is_linked
+          and weight.default_value == 0.0,
+          "fixture Weight is unlinked 0")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = _for_mat(records, "BareTrans")
+    check(all(r["class"] != dc.KEEP_GLASS for r in hits),
+          "unlinked Transmission 0 is not KEEP_GLASS")
+    check(all(r["class"] != dc.PRUNE_TRANSMISSION for r in hits),
+          "unlinked Transmission 0 emits no PRUNE_TRANSMISSION")
+    check(all(r.get("socket") != "Transmission Weight" for r in hits),
+          "unlinked Weight emits no Transmission Weight record")
+
+
+def test_apply_transmission_unlink_and_revert():
+    section("apply unlinks PRUNE_TRANSMISSION Weight; revert restores")
+    mat = _value_transmission_mat("PbrDump", value=0.0)
+    scene = _with_obj(mat, "Wall")
+    scene.cycles = Obj(samples=256)
+    weight = None
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            weight = node.inputs.get("Transmission Weight")
+    check(weight is not None and weight.is_linked, "fixture Weight starts linked")
+    records = dc.classify_dead_closures(scene)
+    jrnl = _Journal()
+    applied = dc.apply_dead_closures(scene, jrnl, records)
+    hits = [a for a in applied if a.get("socket") == "Transmission Weight"]
+    check(len(hits) == 1, "apply unlinks the PRUNE_TRANSMISSION socket")
+    check(not weight.is_linked, "Weight is unlinked after apply")
+    check(scene.cycles.samples == 256, "apply never writes scene.cycles.*")
+    check(jrnl.entries and jrnl.entries[0]["kind"] == "NODE_UNLINK",
+          "journal kind is NODE_UNLINK")
+    payload = jrnl.entries[0]["payload"]
+    check(payload["material"] == "PbrDump"
+          and payload["node"] == "Principled BSDF"
+          and payload["socket"] == "Transmission Weight"
+          and payload["from_node"] == "Value"
+          and payload["from_socket"] == "Value",
+          "journal payload is material/node/socket/from_node/from_socket")
+    restored = dc.revert_dead_closures(scene, jrnl)
+    check(restored == 1 and weight.is_linked, "revert restores the Weight link")
+    check(not jrnl.entries, "successful revert consumes the NODE_UNLINK entry")
+
+
 def main():
     test_value_one_prunes_alpha()
     test_jpeg_prunes_alpha()
@@ -1100,6 +1257,12 @@ def main():
     test_emission_strength_zero_prunes()
     test_emission_strength_one_kept()
     test_apply_sss_unlink_and_revert()
+    test_transmission_weight_zero_not_glass_prunes()
+    test_transmission_zero_also_prunes_sss()
+    test_transmission_weight_one_is_glass()
+    test_transmission_weight_tex_image_is_glass()
+    test_transmission_unlinked_zero_neither()
+    test_apply_transmission_unlink_and_revert()
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
     test_default_plan_kind_absent_empty()

@@ -256,11 +256,50 @@ def _tree_has_group(tree):
     return False
 
 
+def _proven_zero_scalar(sock):
+    """True iff sock is unlinked ~0 or a Value node ~0. One hop. No Math.
+
+    Local copy (eps 1e-4). Do not import dead_closures here.
+    """
+    if sock is None:
+        return False
+    eps = 1e-4
+    if not getattr(sock, "is_linked", False):
+        value = getattr(sock, "default_value", None)
+        return isinstance(value, (int, float)) and abs(float(value)) <= eps
+    from_node, from_sock = _link_source(sock)
+    if from_node is None or _is_group_node(from_node):
+        return False
+    ntype = _node_type(from_node)
+    bl_id = getattr(from_node, "bl_idname", "") or ""
+    if ntype != "VALUE" and bl_id != "ShaderNodeValue":
+        return False
+    value = None
+    if from_sock is not None:
+        raw = getattr(from_sock, "default_value", None)
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+    if value is None:
+        out = _sock(from_node, "Value", "Fac", collection="outputs")
+        raw = getattr(out, "default_value", None) if out is not None else None
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+    return value is not None and abs(value) <= eps
+
+
 def _principled_transmits(node):
+    """True iff this Principled is real glass / refraction.
+
+    Linked Transmission Weight at proven 0 is NOT glass. Cycles 4.5
+    has no has_surface_transmission link-OR latch. Texture / Math /
+    GROUP stay glass. Unlinked default > 0.2 stays glass.
+    """
     sock = _sock(node, "Transmission Weight", "Transmission")
     if sock is None:
         return False
     if getattr(sock, "is_linked", False):
+        if _proven_zero_scalar(sock):
+            return False
         return True
     value = getattr(sock, "default_value", 0.0)
     return isinstance(value, (int, float)) and value > 0.2
