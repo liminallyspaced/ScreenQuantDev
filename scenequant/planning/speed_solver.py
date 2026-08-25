@@ -1671,13 +1671,18 @@ def dead_closure_prune_actions(scene, caveats=None):
                  if r.get("class") == dead_closures.PRUNE_EMISSION)
     n_trans = sum(1 for r in prunes
                   if r.get("class") == dead_closures.PRUNE_TRANSMISSION)
-    n_hit = n_alpha + n_vol + n_mix + n_disp + n_sss + n_emit + n_trans
+    n_bump = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_BUMP)
+    n_bevel = sum(1 for r in prunes
+                  if r.get("class") == dead_closures.PRUNE_BEVEL)
+    n_hit = (n_alpha + n_vol + n_mix + n_disp + n_sss + n_emit + n_trans
+             + n_bump + n_bevel)
     if n_hit < 1:
         return []
     return [SpeedAction(
         "DEAD_CLOSURE_PRUNE",
         "%d false-transparent / empty-volume / mix-transparent / "
-        "zero-displace / false-sss / false-emission / false-transmission "
+        "zero-displace / false-sss / false-emission / false-transmission / "
+        "zero-bump / zero-bevel "
         "socket(s) → unlink (manual)"
         % n_hit,
         "dead", 2, 1.0, 1,

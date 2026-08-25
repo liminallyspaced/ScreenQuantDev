@@ -17,6 +17,15 @@
 # Transmission Weight proven-zero is PRUNE_TRANSMISSION. Linked 0 is
 # not glass (Cycles has no has_surface_transmission link latch).
 # Same NODE_UNLINK apply. Not in Auto.
+# Bump Strength proven-zero is PRUNE_BUMP. Cycles 4.5 constant_fold
+# does not fold Strength 0 (TODO in BumpNode::constant_fold);
+# get_feature still ORs KERNEL_FEATURE_NODE_BUMP scene-wide. Unlink
+# the consumer Normal (never Strength — default 1.0 would ENABLE
+# bump). Height-unlinked with Strength not proven-0 is already folded.
+# Bevel Radius proven-zero is PRUNE_BEVEL. Radius 0 still latches
+# KERNEL_FEATURE_NODE_RAYTRACE. Unlink consumer Normal (never Radius
+# — default 0.05 would ENABLE bevel). Same NODE_UNLINK apply.
+# Not in Auto. Skip Ambient Occlusion this pass.
 # Never writes scene.cycles.* or use_transparent_shadow.
 
 import os
@@ -28,6 +37,8 @@ PRUNE_DISPLACE = "PRUNE_DISPLACE"
 PRUNE_SSS = "PRUNE_SSS"
 PRUNE_EMISSION = "PRUNE_EMISSION"
 PRUNE_TRANSMISSION = "PRUNE_TRANSMISSION"
+PRUNE_BUMP = "PRUNE_BUMP"
+PRUNE_BEVEL = "PRUNE_BEVEL"
 PRUNE_AOV = "PRUNE_AOV"
 KEEP_REAL_CUTOUT = "KEEP_REAL_CUTOUT"
 KEEP_GLASS = "KEEP_GLASS"
@@ -36,12 +47,14 @@ SKIP_LINKED = "SKIP_LINKED"
 
 ALL_CLASSES = (
     PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_DISPLACE,
-    PRUNE_SSS, PRUNE_EMISSION, PRUNE_TRANSMISSION, PRUNE_AOV,
+    PRUNE_SSS, PRUNE_EMISSION, PRUNE_TRANSMISSION, PRUNE_BUMP,
+    PRUNE_BEVEL, PRUNE_AOV,
     KEEP_REAL_CUTOUT, KEEP_GLASS, SKIP_GROUP, SKIP_LINKED,
 )
 PRUNE_CLASSES = frozenset({
     PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_DISPLACE,
-    PRUNE_SSS, PRUNE_EMISSION, PRUNE_TRANSMISSION, PRUNE_AOV,
+    PRUNE_SSS, PRUNE_EMISSION, PRUNE_TRANSMISSION, PRUNE_BUMP,
+    PRUNE_BEVEL, PRUNE_AOV,
 })
 
 # Cycles CLOSURE_WEIGHT_CUTOFF is ~1e-5. Only treat a constant as opaque
@@ -849,6 +862,164 @@ def _classify_transmission(principled_node):
             from_node, from_sock)
 
 
+def _is_bump_noop(node):
+    """True iff this is a Bump whose Strength is proven 0.
+
+    Cycles 4.5 BumpNode::constant_fold only bypasses when Height is
+    unlinked. Strength 0 (linked Value or unlinked default) is a
+    TODO — the node stays and get_feature ORs KERNEL_FEATURE_NODE_BUMP.
+    Height-unlinked with Strength not proven-0 is already folded:
+    do not write.
+    """
+    if node is None:
+        return False
+    ntype = _node_type(node)
+    bl_id = getattr(node, "bl_idname", "") or ""
+    if ntype != "BUMP" and bl_id != "ShaderNodeBump":
+        return False
+    strength = _sock(node, "Strength")
+    if _proven_zero_scalar(strength):
+        return True
+    return False
+
+
+def _is_bevel_noop(node):
+    """True iff this is a Bevel whose Radius is proven 0.
+
+    Unlinked default is 0.05 (not zero) — that would ENABLE bevel.
+    Radius 0 still sets KERNEL_FEATURE_NODE_RAYTRACE via get_feature.
+    """
+    if node is None:
+        return False
+    ntype = _node_type(node)
+    bl_id = getattr(node, "bl_idname", "") or ""
+    if ntype != "BEVEL" and bl_id != "ShaderNodeBevel":
+        return False
+    return _proven_zero_scalar(_sock(node, "Radius"))
+
+
+def _consumers_of(tree, from_node, out_names=("Normal",)):
+    """Yield (to_node, to_sock, from_sock) for links from this node's outputs."""
+    wanted = frozenset(out_names)
+    seen = set()
+
+    def _from_wanted(from_sock):
+        if from_sock is None:
+            return False
+        return (
+            getattr(from_sock, "identifier", None) in wanted
+            or getattr(from_sock, "name", None) in wanted
+        )
+
+    def _consider(link, implied_from=None):
+        src = getattr(link, "from_node", None)
+        if src is None:
+            src = implied_from
+        if src is not from_node:
+            return
+        from_sock = getattr(link, "from_socket", None)
+        if not _from_wanted(from_sock):
+            return
+        to_node = getattr(link, "to_node", None)
+        to_sock = getattr(link, "to_socket", None)
+        if to_node is None or to_sock is None:
+            return
+        key = (id(to_node), id(to_sock), id(from_sock))
+        if key in seen:
+            return
+        seen.add(key)
+        found.append((to_node, to_sock, from_sock))
+
+    found = []
+    for link in getattr(tree, "links", None) or ():
+        _consider(link)
+    if from_node is not None:
+        for out in _iter_socks(from_node, "outputs"):
+            if not _from_wanted(out):
+                continue
+            for link in _iter_links(out):
+                _consider(link, implied_from=from_node)
+    for item in found:
+        yield item
+
+
+_BSDF_OR_OUTPUT_TYPES = frozenset({
+    "OUTPUT_MATERIAL",
+    "BSDF_DIFFUSE", "BSDF_GLOSSY", "BSDF_PRINCIPLED",
+    "BSDF_TRANSPARENT", "BSDF_REFRACTION", "BSDF_GLASS",
+    "BSDF_TRANSLUCENT", "BSDF_VELVET", "BSDF_TOON",
+    "BSDF_HAIR", "BSDF_HAIR_PRINCIPLED", "BSDF_ANISOTROPIC",
+    "BSDF_SHEEN", "EMISSION", "SUBSURFACE_SCATTERING",
+    "HOLDOUT", "BACKGROUND",
+})
+
+
+def _is_bsdf_or_output(node):
+    ntype = _node_type(node)
+    if ntype in _BSDF_OR_OUTPUT_TYPES:
+        return True
+    bl_id = getattr(node, "bl_idname", "") or ""
+    return bl_id == "ShaderNodeOutputMaterial"
+
+
+def _classify_bump_bevel(tree, material, users):
+    """Unlink consumer Normal of a proven-noop Bump / Bevel.
+
+    One record per consumer: node is the consumer (typically Principled),
+    socket is the consumer socket (usually Normal). Never unlink
+    Strength / Radius (defaults 1.0 / 0.05 would ENABLE the feature).
+    GROUP trees are skipped upstream. GROUP consumers are skipped here.
+    Conservative reachability: prefer Surface-reachable consumers; if
+    that walk is empty, still require a live BSDF/Output Normal link.
+    """
+    records = []
+    reachable_ids = set()
+    have_surface_walk = False
+    for output in _find_output_nodes(tree):
+        surface = _sock(output, "Surface")
+        if surface is None or not getattr(surface, "is_linked", False):
+            continue
+        have_surface_walk = True
+        for node in _reachable_nodes(surface):
+            reachable_ids.add(id(node))
+    for node in getattr(tree, "nodes", ()) or ():
+        if _is_bump_noop(node):
+            cls = PRUNE_BUMP
+            reason = (
+                "Bump Strength proven-zero (Cycles does not fold; "
+                "KERNEL_FEATURE_NODE_BUMP)"
+            )
+        elif _is_bevel_noop(node):
+            cls = PRUNE_BEVEL
+            reason = (
+                "Bevel Radius proven-zero "
+                "(KERNEL_FEATURE_NODE_RAYTRACE latch)"
+            )
+        else:
+            continue
+        for to_node, to_sock, from_sock in _consumers_of(
+                tree, node, ("Normal",)):
+            if to_node is None or to_sock is None:
+                continue
+            if _is_group_node(to_node):
+                continue
+            sock_name = _socket_name(to_sock)
+            if sock_name not in ("Normal",):
+                continue
+            if have_surface_walk:
+                if id(to_node) not in reachable_ids:
+                    continue
+            elif not _is_bsdf_or_output(to_node):
+                continue
+            if not getattr(to_sock, "is_linked", False):
+                continue
+            records.append(_record(
+                material, to_node, sock_name, cls, reason, users,
+                from_node=getattr(node, "name", "") or "",
+                from_socket=_socket_name(from_sock) or "Normal"))
+    return records
+
+
 def _aov_name(node):
     for attr in ("aov_name", "name"):
         value = getattr(node, attr, None)
@@ -931,7 +1102,8 @@ def classify_dead_closures(scene):
     Each record has: material, node, socket, class, reason, users.
     class is one of PRUNE_ALPHA | PRUNE_VOLUME | PRUNE_MIX_TRANSPARENT |
     PRUNE_DISPLACE | PRUNE_SSS | PRUNE_EMISSION | PRUNE_TRANSMISSION |
-    PRUNE_AOV | KEEP_REAL_CUTOUT | KEEP_GLASS | SKIP_GROUP | SKIP_LINKED.
+    PRUNE_BUMP | PRUNE_BEVEL | PRUNE_AOV | KEEP_REAL_CUTOUT |
+    KEEP_GLASS | SKIP_GROUP | SKIP_LINKED.
     HERO / EXCLUDE-shared materials are skipped (no record).
     """
     records = []
@@ -1034,6 +1206,7 @@ def classify_dead_closures(scene):
                     from_node=getattr(from_node, "name", "") if from_node else "",
                     from_socket=_socket_name(from_sock)))
         records.extend(_classify_aovs(tree, scene, material, users))
+        records.extend(_classify_bump_bevel(tree, material, users))
     return records
 
 
@@ -1056,13 +1229,15 @@ def format_inventory(records):
         "DEAD_CLOSURE_PRUNE inventory (analyze only; no writes; no time claim)",
         "  PRUNE_ALPHA=%d  PRUNE_VOLUME=%d  PRUNE_MIX_TRANSPARENT=%d  "
         "PRUNE_DISPLACE=%d  PRUNE_SSS=%d  PRUNE_EMISSION=%d  "
-        "PRUNE_TRANSMISSION=%d  PRUNE_AOV=%d  KEEP_REAL_CUTOUT=%d  "
+        "PRUNE_TRANSMISSION=%d  PRUNE_BUMP=%d  PRUNE_BEVEL=%d  "
+        "PRUNE_AOV=%d  KEEP_REAL_CUTOUT=%d  "
         "KEEP_GLASS=%d  SKIP_GROUP=%d  SKIP_LINKED=%d"
         % (counts.get(PRUNE_ALPHA, 0), counts.get(PRUNE_VOLUME, 0),
            counts.get(PRUNE_MIX_TRANSPARENT, 0),
            counts.get(PRUNE_DISPLACE, 0),
            counts.get(PRUNE_SSS, 0), counts.get(PRUNE_EMISSION, 0),
            counts.get(PRUNE_TRANSMISSION, 0),
+           counts.get(PRUNE_BUMP, 0), counts.get(PRUNE_BEVEL, 0),
            counts.get(PRUNE_AOV, 0), counts.get(KEEP_REAL_CUTOUT, 0),
            counts.get(KEEP_GLASS, 0), counts.get(SKIP_GROUP, 0),
            counts.get(SKIP_LINKED, 0)),

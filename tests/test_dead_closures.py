@@ -166,6 +166,7 @@ def _principled():
             _Sock("Subsurface Scale", 0.1),  # Cycles default
             _Sock("Emission Color", (1.0, 1.0, 1.0, 1.0)),
             _Sock("Emission Strength", 0.0),
+            _Sock("Normal"),
         ],
         outputs=[_Sock("BSDF")],
     )
@@ -176,6 +177,59 @@ def _output():
         "Material Output", "OUTPUT_MATERIAL",
         inputs=[_Sock("Surface"), _Sock("Volume"), _Sock("Displacement")],
     )
+
+
+def _bump(name="Bump", strength=1.0):
+    return _Node(
+        name, "BUMP",
+        inputs=[
+            _Sock("Strength", strength),
+            _Sock("Height", 0.0),
+            _Sock("Distance", 1.0),
+            _Sock("Normal"),
+        ],
+        outputs=[_Sock("Normal")],
+        bl_idname="ShaderNodeBump",
+    )
+
+
+def _bevel(name="Bevel", radius=0.05):
+    return _Node(
+        name, "BEVEL",
+        inputs=[_Sock("Radius", radius), _Sock("Normal")],
+        outputs=[_Sock("Normal")],
+        bl_idname="ShaderNodeBevel",
+    )
+
+
+def _bump_strength_mat(name, value=0.0, height_linked=True, library=None):
+    val = _Node("Value", "VALUE", outputs=[_Sock("Value", value)])
+    bump = _bump()
+    prin = _principled()
+    out = _output()
+    nodes = [val, bump, prin, out]
+    links = [
+        (val, "Value", bump, "Strength"),
+        (bump, "Normal", prin, "Normal"),
+        (prin, "BSDF", out, "Surface"),
+    ]
+    if height_linked:
+        hval = _Node("Value.001", "VALUE", outputs=[_Sock("Value", 0.5)])
+        nodes.append(hval)
+        links.append((hval, "Value", bump, "Height"))
+    return _mat(name, nodes, links, library=library)
+
+
+def _bevel_radius_mat(name, value=0.0, library=None):
+    val = _Node("Value", "VALUE", outputs=[_Sock("Value", value)])
+    bevel = _bevel()
+    prin = _principled()
+    out = _output()
+    return _mat(name, [val, bevel, prin, out], [
+        (val, "Value", bevel, "Radius"),
+        (bevel, "Normal", prin, "Normal"),
+        (prin, "BSDF", out, "Surface"),
+    ], library=library)
 
 
 def _mat(name, nodes, links, library=None, blend="OPAQUE"):
@@ -706,6 +760,8 @@ def test_not_in_default_auto_plan():
     sss = _value_sss_mat("Skin")
     emit = _value_emission_mat("DarkEmit")
     trans = _value_transmission_mat("DeadGlass")
+    bump = _bump_strength_mat("DeadBump", value=0.0)
+    bevel = _bevel_radius_mat("DeadBevel", value=0.0)
     scene = speed_solver_scene([
         _mesh("Wall", material_slots=[Obj(material=mat)]),
         _mesh("Box", material_slots=[Obj(material=vol)]),
@@ -714,6 +770,8 @@ def test_not_in_default_auto_plan():
         _mesh("Arm", material_slots=[Obj(material=sss)]),
         _mesh("Card", material_slots=[Obj(material=emit)]),
         _mesh("Dump", material_slots=[Obj(material=trans)]),
+        _mesh("BumpMesh", material_slots=[Obj(material=bump)]),
+        _mesh("BevelMesh", material_slots=[Obj(material=bevel)]),
     ])
     plan = speed_solver.build_speed_plan(
         scene, {}, Obj(total_mb=400.0, caveats=[], per_object_geo_mb={},
@@ -730,6 +788,10 @@ def test_not_in_default_auto_plan():
           "default Auto plan does not include PRUNE_EMISSION actions")
     check("PRUNE_TRANSMISSION" not in kinds and "PRUNE_TRANSMISSION" not in blob,
           "default Auto plan does not include PRUNE_TRANSMISSION actions")
+    check("PRUNE_BUMP" not in kinds and "PRUNE_BUMP" not in blob,
+          "default Auto plan does not include PRUNE_BUMP actions")
+    check("PRUNE_BEVEL" not in kinds and "PRUNE_BEVEL" not in blob,
+          "default Auto plan does not include PRUNE_BEVEL actions")
     inventory = dc.classify_dead_closures(scene)
     check(any(r["class"] == dc.PRUNE_ALPHA for r in inventory),
           "inventory still sees PRUNE_ALPHA (Auto is a separate gate)")
@@ -745,6 +807,10 @@ def test_not_in_default_auto_plan():
           "inventory still sees PRUNE_EMISSION (Auto is a separate gate)")
     check(any(r["class"] == dc.PRUNE_TRANSMISSION for r in inventory),
           "inventory still sees PRUNE_TRANSMISSION (Auto is a separate gate)")
+    check(any(r["class"] == dc.PRUNE_BUMP for r in inventory),
+          "inventory still sees PRUNE_BUMP (Auto is a separate gate)")
+    check(any(r["class"] == dc.PRUNE_BEVEL for r in inventory),
+          "inventory still sees PRUNE_BEVEL (Auto is a separate gate)")
     path = os.path.join(PROJECT_ROOT, "scenequant", "planning",
                         "speed_solver.py")
     with open(path, encoding="utf-8") as handle:
@@ -784,8 +850,10 @@ def test_inventory_print_shape():
     check("PRUNE_ALPHA=" in text and "PRUNE_MIX_TRANSPARENT=" in text
           and "PRUNE_DISPLACE=" in text and "PRUNE_SSS=" in text
           and "PRUNE_EMISSION=" in text and "PRUNE_TRANSMISSION=" in text
+          and "PRUNE_BUMP=" in text and "PRUNE_BEVEL=" in text
           and "Paint" in text,
-          "table lists PRUNE_ALPHA / MIX / DISPLACE / SSS / EMISSION / TRANSMISSION")
+          "table lists PRUNE_ALPHA / MIX / DISPLACE / SSS / EMISSION / "
+          "TRANSMISSION / BUMP / BEVEL")
     check("alpha_src=" in text, "PRUNE_ALPHA row prints alpha_src")
 
 
@@ -801,9 +869,11 @@ def test_default_plan_kind_absent_empty():
     check("DEAD_CLOSURE_PRUNE" not in kinds
           and "PRUNE_SSS" not in kinds
           and "PRUNE_EMISSION" not in kinds
-          and "PRUNE_TRANSMISSION" not in kinds,
+          and "PRUNE_TRANSMISSION" not in kinds
+          and "PRUNE_BUMP" not in kinds
+          and "PRUNE_BEVEL" not in kinds,
           "empty default plan has no DEAD_CLOSURE_PRUNE / PRUNE_SSS / "
-          "PRUNE_EMISSION / PRUNE_TRANSMISSION")
+          "PRUNE_EMISSION / PRUNE_TRANSMISSION / PRUNE_BUMP / PRUNE_BEVEL")
 
 
 
@@ -1224,6 +1294,165 @@ def test_apply_transmission_unlink_and_revert():
     check(not jrnl.entries, "successful revert consumes the NODE_UNLINK entry")
 
 
+def test_bump_strength_zero_prunes_consumer_normal():
+    section("Bump Strength linked Value 0, Normal → Principled Normal → PRUNE_BUMP")
+    mat = _bump_strength_mat("DeadBump", value=0.0)
+    prin = None
+    bump = None
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            prin = node
+        if node.type == "BUMP":
+            bump = node
+    strength = bump.inputs.get("Strength")
+    normal = prin.inputs.get("Normal")
+    check(strength is not None and strength.is_linked,
+          "fixture Strength starts linked")
+    check(normal is not None and normal.is_linked,
+          "fixture Principled Normal starts linked")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = [r for r in _for_mat(records, "DeadBump") if r["class"] == dc.PRUNE_BUMP]
+    check(len(hits) == 1, "Strength=0 → one PRUNE_BUMP")
+    check(hits[0]["node"] == "Principled BSDF", "record.node is Principled BSDF")
+    check(hits[0]["socket"] == "Normal", "record.socket is consumer Normal")
+    check(hits[0]["from_node"] == "Bump", "from_node is Bump")
+    check(hits[0]["from_socket"] == "Normal", "from_socket is Bump Normal")
+    check(all(r.get("socket") != "Strength" for r in _for_mat(records, "DeadBump")),
+          "never classifies Bump Strength")
+    scene = _with_obj(mat, "Wall")
+    scene.cycles = Obj(samples=256)
+    jrnl = _Journal()
+    applied = dc.apply_dead_closures(scene, jrnl, records)
+    hits_a = [a for a in applied if a.get("socket") == "Normal"]
+    check(len(hits_a) == 1, "apply unlinks Principled Normal")
+    check(not normal.is_linked, "Principled Normal is unlinked after apply")
+    check(strength.is_linked, "apply never unlinks Bump Strength")
+    check(scene.cycles.samples == 256, "apply never writes scene.cycles.*")
+    check(jrnl.entries and jrnl.entries[0]["kind"] == "NODE_UNLINK",
+          "journal kind is NODE_UNLINK")
+    payload = jrnl.entries[0]["payload"]
+    check(payload["material"] == "DeadBump"
+          and payload["node"] == "Principled BSDF"
+          and payload["socket"] == "Normal"
+          and payload["from_node"] == "Bump"
+          and payload["from_socket"] == "Normal",
+          "journal payload is consumer Normal, not Strength")
+    restored = dc.revert_dead_closures(scene, jrnl)
+    check(restored == 1 and normal.is_linked, "revert restores the Normal link")
+    check(not jrnl.entries, "successful revert consumes the NODE_UNLINK entry")
+
+
+def test_bump_strength_one_kept():
+    section("Bump Strength linked Value 1.0 → no PRUNE_BUMP")
+    mat = _bump_strength_mat("LiveBump", value=1.0)
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    check(all(r["class"] != dc.PRUNE_BUMP for r in _for_mat(records, "LiveBump")),
+          "Value=1.0 Strength is not PRUNE_BUMP")
+
+
+def test_bump_height_unlinked_strength_one_kept():
+    section("Bump Height unlinked, Strength unlinked 1.0 → no PRUNE_BUMP")
+    bump = _bump(strength=1.0)
+    prin = _principled()
+    out = _output()
+    mat = _mat("FoldedBump", [bump, prin, out], [
+        (bump, "Normal", prin, "Normal"),
+        (prin, "BSDF", out, "Surface"),
+    ])
+    height = bump.inputs.get("Height")
+    strength = bump.inputs.get("Strength")
+    check(height is not None and not height.is_linked,
+          "fixture Height is unlinked")
+    check(strength is not None and not strength.is_linked
+          and strength.default_value == 1.0,
+          "fixture Strength is unlinked default 1.0")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    check(all(r["class"] != dc.PRUNE_BUMP for r in _for_mat(records, "FoldedBump")),
+          "Height-unlinked Strength 1.0 is not PRUNE_BUMP (Cycles already folds)")
+
+
+def test_bump_strength_unlinked_zero_prunes():
+    section("Bump Strength unlinked default 0.0 → PRUNE_BUMP")
+    bump = _bump(strength=0.0)
+    prin = _principled()
+    out = _output()
+    mat = _mat("ZeroStrBump", [bump, prin, out], [
+        (bump, "Normal", prin, "Normal"),
+        (prin, "BSDF", out, "Surface"),
+    ])
+    strength = bump.inputs.get("Strength")
+    check(strength is not None and not strength.is_linked
+          and strength.default_value == 0.0,
+          "fixture Strength is unlinked 0")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = [r for r in _for_mat(records, "ZeroStrBump")
+            if r["class"] == dc.PRUNE_BUMP]
+    check(len(hits) == 1, "unlinked Strength 0 → one PRUNE_BUMP")
+    check(hits[0]["node"] == "Principled BSDF" and hits[0]["socket"] == "Normal",
+          "record is consumer Normal")
+
+
+def test_bevel_radius_zero_prunes():
+    section("Bevel Radius linked Value 0 → Principled Normal → PRUNE_BEVEL")
+    mat = _bevel_radius_mat("DeadBevel", value=0.0)
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    hits = [r for r in _for_mat(records, "DeadBevel") if r["class"] == dc.PRUNE_BEVEL]
+    check(len(hits) == 1, "Radius=0 → one PRUNE_BEVEL")
+    check(hits[0]["node"] == "Principled BSDF", "record.node is Principled BSDF")
+    check(hits[0]["socket"] == "Normal", "record.socket is consumer Normal")
+    check(hits[0]["from_node"] == "Bevel", "from_node is Bevel")
+    check(all(r.get("socket") != "Radius" for r in _for_mat(records, "DeadBevel")),
+          "never classifies Bevel Radius")
+    scene = _with_obj(mat, "Wall")
+    actions = speed_solver.dead_closure_prune_actions(scene)
+    check(len(actions) == 1 and actions[0].kind == "DEAD_CLOSURE_PRUNE"
+          and actions[0].time_factor == 1.0,
+          "manual hook counts PRUNE_BEVEL")
+
+
+def test_bevel_radius_default_kept():
+    section("Bevel Radius unlinked 0.05 → no PRUNE_BEVEL")
+    bevel = _bevel(radius=0.05)
+    prin = _principled()
+    out = _output()
+    mat = _mat("LiveBevel", [bevel, prin, out], [
+        (bevel, "Normal", prin, "Normal"),
+        (prin, "BSDF", out, "Surface"),
+    ])
+    radius = bevel.inputs.get("Radius")
+    check(radius is not None and not radius.is_linked
+          and abs(radius.default_value - 0.05) < 1e-9,
+          "fixture Radius is unlinked default 0.05")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    check(all(r["class"] != dc.PRUNE_BEVEL for r in _for_mat(records, "LiveBevel")),
+          "unlinked Radius 0.05 is not PRUNE_BEVEL")
+
+
+def test_glass_zero_bump_skipped():
+    section("BSDF_GLASS tree with zero-strength bump → KEEP_GLASS, no PRUNE_BUMP")
+    glass = _Node(
+        "Glass BSDF", "BSDF_GLASS",
+        inputs=[_Sock("Normal")],
+        outputs=[_Sock("BSDF")],
+    )
+    bump = _bump(strength=0.0)
+    val = _Node("Value", "VALUE", outputs=[_Sock("Value", 0.0)])
+    out = _output()
+    mat = _mat("WindowBump", [val, bump, glass, out], [
+        (val, "Value", bump, "Strength"),
+        (bump, "Normal", glass, "Normal"),
+        (glass, "BSDF", out, "Surface"),
+    ])
+    records = dc.classify_dead_closures(_with_obj(mat, "Pane"))
+    hits = _for_mat(records, "WindowBump")
+    check(any(r["class"] == dc.KEEP_GLASS for r in hits),
+          "BSDF_GLASS + zero bump → KEEP_GLASS")
+    check(all(r["class"] != dc.PRUNE_BUMP for r in hits),
+          "glass skip blocks PRUNE_BUMP")
+    check(all(r["class"] not in dc.PRUNE_CLASSES for r in hits),
+          "glass material has no PRUNE_* writes")
+
+
 def main():
     test_value_one_prunes_alpha()
     test_jpeg_prunes_alpha()
@@ -1263,6 +1492,13 @@ def main():
     test_transmission_weight_tex_image_is_glass()
     test_transmission_unlinked_zero_neither()
     test_apply_transmission_unlink_and_revert()
+    test_bump_strength_zero_prunes_consumer_normal()
+    test_bump_strength_one_kept()
+    test_bump_height_unlinked_strength_one_kept()
+    test_bump_strength_unlinked_zero_prunes()
+    test_bevel_radius_zero_prunes()
+    test_bevel_radius_default_kept()
+    test_glass_zero_bump_skipped()
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
     test_default_plan_kind_absent_empty()

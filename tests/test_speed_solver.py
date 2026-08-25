@@ -116,6 +116,8 @@ def test_default_plan_filters():
     check("LOCK_INTERFACE" in kinds, "unlocked interface proposes LOCK_INTERFACE")
     check("DEAD_CLOSURE_PRUNE" not in kinds,
           "DEAD_CLOSURE_PRUNE is not in the default Auto plan")
+    check("PRUNE_BUMP" not in kinds and "PRUNE_BEVEL" not in kinds,
+          "PRUNE_BUMP / PRUNE_BEVEL are not in the default Auto plan")
     check("UNUSED_SLOTS" not in kinds,
           "UNUSED_SLOTS is not in the default Auto plan")
     check("UNUSED_COLOR_ATTRS" not in kinds,
