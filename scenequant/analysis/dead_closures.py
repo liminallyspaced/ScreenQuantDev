@@ -10,6 +10,10 @@
 # (NODE_UNLINK passthrough). It is NOT wired into Make it Fast Auto.
 # Displacement proven-zero is PRUNE_DISPLACE (L1.6). Unlink the
 # Displacement socket so Cycles drops has_displacement. Same apply.
+# Subsurface Weight proven-zero is PRUNE_SSS (L1.7). Unlink Weight
+# only (Scale default 0.1; unlinking Scale would ENABLE SSS).
+# Emission Strength proven-zero is PRUNE_EMISSION. Unlink Strength
+# only (Color default white). Same NODE_UNLINK apply. Not in Auto.
 # Never writes scene.cycles.* or use_transparent_shadow.
 
 import os
@@ -18,6 +22,8 @@ PRUNE_ALPHA = "PRUNE_ALPHA"
 PRUNE_VOLUME = "PRUNE_VOLUME"
 PRUNE_MIX_TRANSPARENT = "PRUNE_MIX_TRANSPARENT"
 PRUNE_DISPLACE = "PRUNE_DISPLACE"
+PRUNE_SSS = "PRUNE_SSS"
+PRUNE_EMISSION = "PRUNE_EMISSION"
 PRUNE_AOV = "PRUNE_AOV"
 KEEP_REAL_CUTOUT = "KEEP_REAL_CUTOUT"
 KEEP_GLASS = "KEEP_GLASS"
@@ -26,11 +32,12 @@ SKIP_LINKED = "SKIP_LINKED"
 
 ALL_CLASSES = (
     PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_DISPLACE,
-    PRUNE_AOV, KEEP_REAL_CUTOUT, KEEP_GLASS, SKIP_GROUP, SKIP_LINKED,
+    PRUNE_SSS, PRUNE_EMISSION, PRUNE_AOV, KEEP_REAL_CUTOUT, KEEP_GLASS,
+    SKIP_GROUP, SKIP_LINKED,
 )
 PRUNE_CLASSES = frozenset({
     PRUNE_ALPHA, PRUNE_VOLUME, PRUNE_MIX_TRANSPARENT, PRUNE_DISPLACE,
-    PRUNE_AOV,
+    PRUNE_SSS, PRUNE_EMISSION, PRUNE_AOV,
 })
 
 # Cycles CLOSURE_WEIGHT_CUTOFF is ~1e-5. Only treat a constant as opaque
@@ -745,6 +752,64 @@ def _classify_displace(output_node, tree):
             from_node, from_sock)
 
 
+def _is_float_sock(sock):
+    """True when default_value is a scalar (not Color / vector)."""
+    if sock is None:
+        return False
+    stype = getattr(sock, "type", None)
+    if stype in ("VALUE", "INT"):
+        return True
+    if stype in ("RGBA", "VECTOR", "SHADER", "COLOR"):
+        return False
+    value = getattr(sock, "default_value", None)
+    return isinstance(value, (int, float))
+
+
+def _classify_sss(principled_node):
+    """Return prune tuple if Subsurface Weight is linked to proven-zero.
+
+    A link alone on Weight latches KERNEL_FEATURE_SUBSURFACE because
+    Scale default is 0.1 (not zero). Unlink Weight only (default 0).
+    Never unlink Scale — that would ENABLE SSS on a real-weight material.
+    Weight unlinked 0 is already dead — no record.
+    """
+    sock = _sock(principled_node, "Subsurface Weight")
+    if sock is None:
+        sock = _sock(principled_node, "Subsurface")
+        if sock is None or not _is_float_sock(sock):
+            return None
+    if not getattr(sock, "is_linked", False):
+        return None
+    if not _proven_zero_scalar(sock):
+        return None
+    from_node, from_sock = _link_source(sock)
+    return (principled_node, _socket_name(sock), PRUNE_SSS,
+            "Principled Subsurface Weight linked to proven-zero (false SSS latch)",
+            from_node, from_sock)
+
+
+def _classify_emission(principled_node):
+    """Return prune tuple if Emission Strength is linked to proven-zero.
+
+    A link alone on Strength latches has_surface_emission because Color
+    default is white. Unlink Strength only (default 0). Never unlink Color.
+    After unlink, has_surface_emission is false even if Color is white.
+    """
+    sock = _sock(principled_node, "Emission Strength")
+    if sock is None:
+        sock = _sock(principled_node, "Emission")
+        if sock is None or not _is_float_sock(sock):
+            return None
+    if not getattr(sock, "is_linked", False):
+        return None
+    if not _proven_zero_scalar(sock):
+        return None
+    from_node, from_sock = _link_source(sock)
+    return (principled_node, _socket_name(sock), PRUNE_EMISSION,
+            "Principled Emission Strength linked to proven-zero "
+            "(false mesh-light latch)",
+            from_node, from_sock)
+
 
 def _aov_name(node):
     for attr in ("aov_name", "name"):
@@ -827,8 +892,8 @@ def classify_dead_closures(scene):
 
     Each record has: material, node, socket, class, reason, users.
     class is one of PRUNE_ALPHA | PRUNE_VOLUME | PRUNE_MIX_TRANSPARENT |
-    PRUNE_DISPLACE | PRUNE_AOV | KEEP_REAL_CUTOUT | KEEP_GLASS |
-    SKIP_GROUP | SKIP_LINKED.
+    PRUNE_DISPLACE | PRUNE_SSS | PRUNE_EMISSION | PRUNE_AOV |
+    KEEP_REAL_CUTOUT | KEEP_GLASS | SKIP_GROUP | SKIP_LINKED.
     HERO / EXCLUDE-shared materials are skipped (no record).
     """
     records = []
@@ -873,22 +938,33 @@ def classify_dead_closures(scene):
                                if _node_type(n) == "BSDF_PRINCIPLED"]
             for node in principleds:
                 alpha = _sock(node, "Alpha")
-                if alpha is None or not getattr(alpha, "is_linked", False):
-                    continue
-                from_node, from_sock = _link_source(alpha)
-                verdict = _classify_alpha_source(from_node, from_sock, tree)
-                if verdict is None:
-                    continue
-                cls, reason, alpha_src = verdict
-                if cls == PRUNE_ALPHA and saw_cutout:
-                    continue
-                if cls == KEEP_REAL_CUTOUT:
-                    saw_cutout = True
-                records.append(_record(
-                    material, node, "Alpha", cls, reason, users,
-                    alpha_src=alpha_src,
-                    from_node=getattr(from_node, "name", "") if from_node else "",
-                    from_socket=_socket_name(from_sock)))
+                if alpha is not None and getattr(alpha, "is_linked", False):
+                    from_node, from_sock = _link_source(alpha)
+                    verdict = _classify_alpha_source(from_node, from_sock, tree)
+                    if verdict is not None:
+                        cls, reason, alpha_src = verdict
+                        if not (cls == PRUNE_ALPHA and saw_cutout):
+                            if cls == KEEP_REAL_CUTOUT:
+                                saw_cutout = True
+                            records.append(_record(
+                                material, node, "Alpha", cls, reason, users,
+                                alpha_src=alpha_src,
+                                from_node=getattr(from_node, "name", "") if from_node else "",
+                                from_socket=_socket_name(from_sock)))
+                sss = _classify_sss(node)
+                if sss is not None:
+                    snode, ssock, cls, reason, from_node, from_sock = sss
+                    records.append(_record(
+                        material, snode, ssock, cls, reason, users,
+                        from_node=getattr(from_node, "name", "") if from_node else "",
+                        from_socket=_socket_name(from_sock)))
+                emission = _classify_emission(node)
+                if emission is not None:
+                    enode, esock, cls, reason, from_node, from_sock = emission
+                    records.append(_record(
+                        material, enode, esock, cls, reason, users,
+                        from_node=getattr(from_node, "name", "") if from_node else "",
+                        from_socket=_socket_name(from_sock)))
             vol = _classify_volume(output, tree)
             if vol is not None:
                 vnode, vsock, cls, reason, from_node, from_sock = vol
@@ -934,11 +1010,13 @@ def format_inventory(records):
     lines = [
         "DEAD_CLOSURE_PRUNE inventory (analyze only; no writes; no time claim)",
         "  PRUNE_ALPHA=%d  PRUNE_VOLUME=%d  PRUNE_MIX_TRANSPARENT=%d  "
-        "PRUNE_DISPLACE=%d  PRUNE_AOV=%d  KEEP_REAL_CUTOUT=%d  "
+        "PRUNE_DISPLACE=%d  PRUNE_SSS=%d  PRUNE_EMISSION=%d  "
+        "PRUNE_AOV=%d  KEEP_REAL_CUTOUT=%d  "
         "KEEP_GLASS=%d  SKIP_GROUP=%d  SKIP_LINKED=%d"
         % (counts.get(PRUNE_ALPHA, 0), counts.get(PRUNE_VOLUME, 0),
            counts.get(PRUNE_MIX_TRANSPARENT, 0),
            counts.get(PRUNE_DISPLACE, 0),
+           counts.get(PRUNE_SSS, 0), counts.get(PRUNE_EMISSION, 0),
            counts.get(PRUNE_AOV, 0), counts.get(KEEP_REAL_CUTOUT, 0),
            counts.get(KEEP_GLASS, 0), counts.get(SKIP_GROUP, 0),
            counts.get(SKIP_LINKED, 0)),

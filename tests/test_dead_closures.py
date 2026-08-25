@@ -162,6 +162,10 @@ def _principled():
             _Sock("Alpha", 1.0),
             _Sock("Transmission Weight", 0.0),
             _Sock("Transmission", 0.0),
+            _Sock("Subsurface Weight", 0.0),
+            _Sock("Subsurface Scale", 0.1),  # Cycles default
+            _Sock("Emission Color", (1.0, 1.0, 1.0, 1.0)),
+            _Sock("Emission Strength", 0.0),
         ],
         outputs=[_Sock("BSDF")],
     )
@@ -201,6 +205,42 @@ def _value_alpha_mat(name, value=1.0, library=None):
         (val, "Value", prin, "Alpha"),
         (prin, "BSDF", out, "Surface"),
     ], library=library)
+
+
+def _value_sss_mat(name, value=0.0, library=None):
+    val = _Node("Value", "VALUE", outputs=[_Sock("Value", value)])
+    prin = _principled()
+    out = _output()
+    return _mat(name, [val, prin, out], [
+        (val, "Value", prin, "Subsurface Weight"),
+        (prin, "BSDF", out, "Surface"),
+    ], library=library)
+
+
+def _value_emission_mat(name, value=0.0, library=None):
+    val = _Node("Value", "VALUE", outputs=[_Sock("Value", value)])
+    prin = _principled()
+    out = _output()
+    return _mat(name, [val, prin, out], [
+        (val, "Value", prin, "Emission Strength"),
+        (prin, "BSDF", out, "Surface"),
+    ], library=library)
+
+
+def _image_sss_mat(name):
+    img = Obj(filepath="//skin.png", channels=4, alpha_mode="STRAIGHT",
+              file_format="PNG", name="skin.png")
+    tex = _Node(
+        "Image Texture", "TEX_IMAGE",
+        outputs=[_Sock("Color"), _Sock("Alpha", 1.0)],
+        image=img, bl_idname="ShaderNodeTexImage",
+    )
+    prin = _principled()
+    out = _output()
+    return _mat(name, [tex, prin, out], [
+        (tex, "Color", prin, "Subsurface Weight"),
+        (prin, "BSDF", out, "Surface"),
+    ])
 
 
 def _image_alpha_mat(name, channels, filepath, alpha_mode="STRAIGHT",
@@ -625,19 +665,29 @@ def test_not_in_default_auto_plan():
     vol = _empty_volume_mat("Hollow")
     mix = _mix_transparent_mat("Passthrough", fac=1.0)
     disp = _zero_disp_mat("Flat")
+    sss = _value_sss_mat("Skin")
+    emit = _value_emission_mat("DarkEmit")
     scene = speed_solver_scene([
         _mesh("Wall", material_slots=[Obj(material=mat)]),
         _mesh("Box", material_slots=[Obj(material=vol)]),
         _mesh("Car", material_slots=[Obj(material=mix)]),
         _mesh("Floor", material_slots=[Obj(material=disp)]),
+        _mesh("Arm", material_slots=[Obj(material=sss)]),
+        _mesh("Card", material_slots=[Obj(material=emit)]),
     ])
     plan = speed_solver.build_speed_plan(
         scene, {}, Obj(total_mb=400.0, caveats=[], per_object_geo_mb={},
                        per_image_mb={}),
         Obj(vram_budget_gb=8.0, min_texture_size=256,
             coverage_frame_samples=5, quality_factor=2.0))
-    check(all(a.kind != "DEAD_CLOSURE_PRUNE" for a in plan.actions),
+    kinds = [a.kind for a in plan.actions]
+    blob = " ".join("%s %s" % (a.kind, a.label) for a in plan.actions)
+    check("DEAD_CLOSURE_PRUNE" not in kinds,
           "default Auto plan does not include DEAD_CLOSURE_PRUNE")
+    check("PRUNE_SSS" not in kinds and "PRUNE_SSS" not in blob,
+          "default Auto plan does not include PRUNE_SSS actions")
+    check("PRUNE_EMISSION" not in kinds and "PRUNE_EMISSION" not in blob,
+          "default Auto plan does not include PRUNE_EMISSION actions")
     inventory = dc.classify_dead_closures(scene)
     check(any(r["class"] == dc.PRUNE_ALPHA for r in inventory),
           "inventory still sees PRUNE_ALPHA (Auto is a separate gate)")
@@ -647,6 +697,10 @@ def test_not_in_default_auto_plan():
           "inventory still sees PRUNE_MIX_TRANSPARENT (Auto is a separate gate)")
     check(any(r["class"] == dc.PRUNE_DISPLACE for r in inventory),
           "inventory still sees PRUNE_DISPLACE (Auto is a separate gate)")
+    check(any(r["class"] == dc.PRUNE_SSS for r in inventory),
+          "inventory still sees PRUNE_SSS (Auto is a separate gate)")
+    check(any(r["class"] == dc.PRUNE_EMISSION for r in inventory),
+          "inventory still sees PRUNE_EMISSION (Auto is a separate gate)")
     path = os.path.join(PROJECT_ROOT, "scenequant", "planning",
                         "speed_solver.py")
     with open(path, encoding="utf-8") as handle:
@@ -684,8 +738,9 @@ def test_inventory_print_shape():
     check("no writes" in text and "no time claim" in text,
           "inventory header refuses a time claim")
     check("PRUNE_ALPHA=" in text and "PRUNE_MIX_TRANSPARENT=" in text
-          and "PRUNE_DISPLACE=" in text and "Paint" in text,
-          "table lists PRUNE_ALPHA / PRUNE_MIX_TRANSPARENT / PRUNE_DISPLACE")
+          and "PRUNE_DISPLACE=" in text and "PRUNE_SSS=" in text
+          and "PRUNE_EMISSION=" in text and "Paint" in text,
+          "table lists PRUNE_ALPHA / MIX / DISPLACE / SSS / EMISSION")
     check("alpha_src=" in text, "PRUNE_ALPHA row prints alpha_src")
 
 
@@ -697,8 +752,11 @@ def test_default_plan_kind_absent_empty():
                        per_image_mb={}),
         Obj(vram_budget_gb=8.0, min_texture_size=256,
             coverage_frame_samples=5, quality_factor=2.0))
-    check(all(a.kind != "DEAD_CLOSURE_PRUNE" for a in plan.actions),
-          "empty default plan has no DEAD_CLOSURE_PRUNE")
+    kinds = [a.kind for a in plan.actions]
+    check("DEAD_CLOSURE_PRUNE" not in kinds
+          and "PRUNE_SSS" not in kinds
+          and "PRUNE_EMISSION" not in kinds,
+          "empty default plan has no DEAD_CLOSURE_PRUNE / PRUNE_SSS / PRUNE_EMISSION")
 
 
 
@@ -878,6 +936,137 @@ def test_apply_displace_unlink_and_revert():
     check(restored == 1 and disp.is_linked, "revert restores the Displacement link")
 
 
+
+def test_sss_weight_zero_prunes():
+    section("Subsurface Weight linked to Value=0, Scale default 0.1 → PRUNE_SSS")
+    mat = _value_sss_mat("Skin", value=0.0)
+    prin = None
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            prin = node
+    check(prin is not None, "fixture has Principled")
+    check(prin.inputs.get("Subsurface Scale").default_value == 0.1,
+          "Scale stays Cycles default 0.1")
+    check(not prin.inputs.get("Subsurface Scale").is_linked,
+          "Scale is not linked (must not be the write)")
+    records = dc.classify_dead_closures(_with_obj(mat, "Arm"))
+    hits = [r for r in _for_mat(records, "Skin") if r["class"] == dc.PRUNE_SSS]
+    check(len(hits) == 1, "Weight=0 → one PRUNE_SSS")
+    check(hits[0]["node"] == "Principled BSDF", "record.node is Principled BSDF")
+    check(hits[0]["socket"] == "Subsurface Weight",
+          "record.socket is Subsurface Weight")
+    check("Arm" in hits[0]["users"], "users lists the mesh")
+    scene = _with_obj(mat, "Arm")
+    actions = speed_solver.dead_closure_prune_actions(scene)
+    check(len(actions) == 1 and actions[0].kind == "DEAD_CLOSURE_PRUNE"
+          and actions[0].time_factor == 1.0,
+          "manual hook counts PRUNE_SSS")
+
+
+def test_sss_weight_half_kept():
+    section("Subsurface Weight linked to Value=0.5 → no PRUNE_SSS")
+    mat = _value_sss_mat("RealSSS", value=0.5)
+    records = dc.classify_dead_closures(_with_obj(mat, "Arm"))
+    check(all(r["class"] != dc.PRUNE_SSS for r in _for_mat(records, "RealSSS")),
+          "Value=0.5 Weight is not PRUNE_SSS")
+
+
+def test_sss_weight_unlinked_zero_no_record():
+    section("Subsurface Weight unlinked 0 → no PRUNE_SSS")
+    prin = _principled()
+    out = _output()
+    mat = _mat("BareSSS", [prin, out], [
+        (prin, "BSDF", out, "Surface"),
+    ])
+    weight = prin.inputs.get("Subsurface Weight")
+    check(weight is not None and not weight.is_linked
+          and weight.default_value == 0.0,
+          "fixture Weight is unlinked 0")
+    records = dc.classify_dead_closures(_with_obj(mat, "Wall"))
+    check(all(r["class"] != dc.PRUNE_SSS for r in _for_mat(records, "BareSSS")),
+          "unlinked Weight 0 emits no PRUNE_SSS")
+    check(all(r.get("socket") != "Subsurface Weight"
+              for r in _for_mat(records, "BareSSS")),
+          "unlinked Weight emits no Subsurface Weight record")
+
+
+def test_sss_weight_tex_image_kept():
+    section("Subsurface Weight linked to TEX_IMAGE → no PRUNE_SSS")
+    mat = _image_sss_mat("TexSSS")
+    records = dc.classify_dead_closures(_with_obj(mat, "Arm"))
+    check(all(r["class"] != dc.PRUNE_SSS for r in _for_mat(records, "TexSSS")),
+          "TEX_IMAGE Weight is not PRUNE_SSS")
+
+
+def test_emission_strength_zero_prunes():
+    section("Emission Strength linked to Value=0, Color default white → PRUNE_EMISSION")
+    mat = _value_emission_mat("DarkEmit", value=0.0)
+    prin = None
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            prin = node
+    color = prin.inputs.get("Emission Color")
+    check(color is not None and not color.is_linked
+          and tuple(color.default_value) == (1.0, 1.0, 1.0, 1.0),
+          "Color stays default white unlinked")
+    records = dc.classify_dead_closures(_with_obj(mat, "Card"))
+    hits = [r for r in _for_mat(records, "DarkEmit")
+            if r["class"] == dc.PRUNE_EMISSION]
+    check(len(hits) == 1, "Strength=0 → one PRUNE_EMISSION")
+    check(hits[0]["node"] == "Principled BSDF", "record.node is Principled BSDF")
+    check(hits[0]["socket"] == "Emission Strength",
+          "record.socket is Emission Strength")
+    check(all(r.get("socket") != "Emission Color"
+              for r in _for_mat(records, "DarkEmit")),
+          "never classifies Emission Color")
+
+
+def test_emission_strength_one_kept():
+    section("Emission Strength linked to Value=1.0 → no PRUNE_EMISSION")
+    mat = _value_emission_mat("Lit", value=1.0)
+    records = dc.classify_dead_closures(_with_obj(mat, "Card"))
+    check(all(r["class"] != dc.PRUNE_EMISSION for r in _for_mat(records, "Lit")),
+          "Value=1.0 Strength is not PRUNE_EMISSION")
+
+
+def test_apply_sss_unlink_and_revert():
+    section("apply unlinks PRUNE_SSS Weight; revert restores")
+    mat = _value_sss_mat("Skin", value=0.0)
+    scene = _with_obj(mat, "Arm")
+    scene.cycles = Obj(samples=256)
+    weight = None
+    scale = None
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            weight = node.inputs.get("Subsurface Weight")
+            scale = node.inputs.get("Subsurface Scale")
+    check(weight is not None and weight.is_linked, "fixture Weight starts linked")
+    check(scale is not None and not scale.is_linked
+          and scale.default_value == 0.1,
+          "fixture Scale stays unlinked default 0.1")
+    records = dc.classify_dead_closures(scene)
+    jrnl = _Journal()
+    applied = dc.apply_dead_closures(scene, jrnl, records)
+    hits = [a for a in applied if a.get("socket") == "Subsurface Weight"]
+    check(len(hits) == 1, "apply unlinks the PRUNE_SSS socket")
+    check(not weight.is_linked, "Weight is unlinked after apply")
+    check(not scale.is_linked and scale.default_value == 0.1,
+          "apply never unlinks Subsurface Scale")
+    check(scene.cycles.samples == 256, "apply never writes scene.cycles.*")
+    check(jrnl.entries and jrnl.entries[0]["kind"] == "NODE_UNLINK",
+          "journal kind is NODE_UNLINK")
+    payload = jrnl.entries[0]["payload"]
+    check(payload["material"] == "Skin"
+          and payload["node"] == "Principled BSDF"
+          and payload["socket"] == "Subsurface Weight"
+          and payload["from_node"] == "Value"
+          and payload["from_socket"] == "Value",
+          "journal payload is material/node/socket/from_node/from_socket")
+    restored = dc.revert_dead_closures(scene, jrnl)
+    check(restored == 1 and weight.is_linked, "revert restores the Weight link")
+    check(not jrnl.entries, "successful revert consumes the NODE_UNLINK entry")
+
+
 def main():
     test_value_one_prunes_alpha()
     test_jpeg_prunes_alpha()
@@ -904,6 +1093,13 @@ def main():
     test_displace_noise_and_group_kept()
     test_displace_unconnected_no_record()
     test_apply_displace_unlink_and_revert()
+    test_sss_weight_zero_prunes()
+    test_sss_weight_half_kept()
+    test_sss_weight_unlinked_zero_no_record()
+    test_sss_weight_tex_image_kept()
+    test_emission_strength_zero_prunes()
+    test_emission_strength_one_kept()
+    test_apply_sss_unlink_and_revert()
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
     test_default_plan_kind_absent_empty()
