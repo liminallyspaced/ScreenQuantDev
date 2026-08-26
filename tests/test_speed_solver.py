@@ -130,6 +130,8 @@ def test_default_plan_filters():
           "MESH_EMIT_SHADOW_SKIP is not in the default Auto plan")
     check("CLAMP_INDIRECT" not in kinds,
           "CLAMP_INDIRECT is not in the default Auto plan")
+    check("ZERO_ENERGY_LIGHT" not in kinds,
+          "ZERO_ENERGY_LIGHT is not in the default Auto plan")
     expected = speed_solver.multiply_factors(
         speed_solver.strongest_per_class(plan.actions))
     check(abs(plan.est_factor - expected) < 1e-9,

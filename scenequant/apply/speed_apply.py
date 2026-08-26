@@ -412,6 +412,42 @@ def _apply_clamp_indirect(scene, settings, jrnl, payload, cache, skipped, progre
     return None
 
 
+def _apply_zero_energy_lights(scene, settings, jrnl, payload, cache, skipped, progress):
+    """hide_render on local energy-0 lights. Re-prove. Never portals."""
+    try:
+        from ..analysis import zero_energy_lights
+    except Exception:
+        skipped.append(_skip("ZERO_ENERGY_LIGHT", "-", "zero_energy_lights module missing"))
+        return None
+    records = payload.get("records")
+    if not records:
+        records = zero_energy_lights.classify_zero_energy_lights(scene)
+    if not records:
+        return None
+    guard_cache = {}
+    keep = []
+    for rec in records:
+        name = rec.get("object")
+        obj = scene.objects.get(name) if hasattr(scene.objects, "get") else None
+        if obj is None:
+            for candidate in getattr(scene, "objects", ()) or ():
+                if getattr(candidate, "name", None) == name:
+                    obj = candidate
+                    break
+        if obj is None:
+            skipped.append(_skip("ZERO_ENERGY_LIGHT", name or "-", "object missing"))
+            continue
+        reason = _object_write_skip(obj, scene, guard_cache)
+        if reason:
+            skipped.append(_skip("ZERO_ENERGY_LIGHT", name, reason))
+            continue
+        keep.append(rec)
+    applied = zero_energy_lights.apply_zero_energy_lights(scene, jrnl, records=keep)
+    if applied:
+        return "hid %d energy-0 light(s)" % len(applied)
+    return None
+
+
 def _apply_light_sampling_threshold(scene, settings, jrnl, payload, cache, skipped, progress):
     cycles = getattr(scene, "cycles", None)
     if cycles is None or not hasattr(cycles, "light_sampling_threshold"):
@@ -761,6 +797,7 @@ _HANDLERS = {
     "WORLD_MIS_NONE": _apply_world_mis_none,
     "LIGHT_SAMPLING_THRESHOLD": _apply_light_sampling_threshold,
     "CLAMP_INDIRECT": _apply_clamp_indirect,
+    "ZERO_ENERGY_LIGHT": _apply_zero_energy_lights,
     "TRANSPARENT_SHADOW_CAP": _apply_transparent_shadow_cap,
     "FILTER_GLOSSY": _apply_filter_glossy,
     "AUTO_SCRAMBLE": _apply_auto_scramble,
