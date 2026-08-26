@@ -1,4 +1,34 @@
-# Next lever (2026-08-26 4pm ET PlugWalk)
+# Next lever (2026-08-26 5pm ET PlugWalk)
+
+## 5pm DNA inventory attempt — Classroom / loft unreachable
+
+Goal this hour: DNA-inventory today's four Auto-off levers on official
+Classroom and loft (no GPU, no renders, no zip). Script ready:
+`tools/_inventory_today_levers_dna.py` (blendfile.py, no bpy).
+
+**Result: empty. Counts not invented.**
+
+| Source | Status |
+|---|---|
+| User PC (`ExternalShell`) | **Offline** — Grok Bot desktop app not connected. Cannot search Downloads / Documents / Desktop / `C:\Users\nicks\...`. |
+| Box `/workspace/scenequant` | No `classroom*.blend` / `loft*.blend`. Only official `.blend` remains `work/bench/BMW27.blend` (4pm inventory: all four FIRED=0). |
+| Box `/workspace` tree | PNG proofs + historical `loft-dna-out.txt` (dead-closure inventory only). **Not** today's four-lever DNA. Do not reuse as FIRED counts. |
+
+Historical path hint (when PC returns; not verified this hour):
+`C:\Users\nicks\Downloads\scenequant-bench\loft.blend`. Official
+blender.org Classroom / loft only. Skip Crow / raven / pole / artist.
+Nick is **not** needed for DNA file reads. Never start Blender GPU.
+Never re-ask about 2080.
+
+| File | CLAMP_INDIRECT | ZERO_ENERGY_LIGHT | ZERO_SHADER_LIGHT | ZERO_WORLD_BG |
+|---|---|---|---|---|
+| Classroom (official) | **UNKNOWN** (file missing) | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** |
+| loft (official) | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** |
+| BMW27 (box) | 0 (key missing → hasattr fire=0) | 0 | 0 | 0 |
+
+FIRED > 0 on Classroom/loft would gate future Auto — still **do not** turn
+Auto on without a timed pair. No Auto change this hour.
+
 
 This note is the stop for a fifth Auto-off lever this hour. It records what
 already shipped, the only official `.blend` DNA on the box, and why a new
