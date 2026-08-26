@@ -387,6 +387,9 @@ def _path_actions(scene, caveats):
     actions.extend(_light_sampling_actions(scene))
     actions.extend(_transparent_shadow_actions(scene, caveats))
     actions.extend(_filter_glossy_actions(scene, caveats))
+    # CLAMP_INDIRECT lives in clamp_indirect_actions (manual-later).
+    # 0 → Cycles factory 10. Not in the default Auto plan until a
+    # measured pair. Never writes sample_clamp_direct. No time claim.
     return actions
 
 
@@ -1503,6 +1506,49 @@ def _load_unused_color_attrs():
         return mod
     except Exception:
         return None
+
+
+
+def _load_clamp_indirect():
+    try:
+        from ..analysis import clamp_indirect
+        return clamp_indirect
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        import os
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "analysis", "clamp_indirect.py"))
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.analysis.clamp_indirect", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def clamp_indirect_actions(scene, caveats=None):
+    """Manual-later planner hook for CLAMP_INDIRECT.
+
+    NOT called from build_speed_plan / _path_actions. Auto stays off
+    until a measured pair exists. time_factor is 1.0 (no claim).
+    Integrator-state lever: sample_clamp_indirect 0 (disabled) →
+    Cycles factory 10. Scene-agnostic — fires from DNA, not file
+    class. Never writes sample_clamp_direct.
+    """
+    clamp_indirect = _load_clamp_indirect()
+    if clamp_indirect is None:
+        return []
+    records = clamp_indirect.classify_clamp_indirect(scene)
+    if not records:
+        return []
+    return [SpeedAction(
+        "CLAMP_INDIRECT",
+        "Clamp indirect 10 (was disabled; Cycles factory)",
+        "paths", 2, 1.0, 1,
+        {"value": clamp_indirect.CLAMP_INDIRECT_VALUE, "records": records})]
 
 
 def unused_color_attrs_actions(scene, caveats=None):

@@ -128,6 +128,8 @@ def test_default_plan_filters():
           "BACKFACE_EMIT_OPAQUE is not in the default Auto plan")
     check("MESH_EMIT_SHADOW_SKIP" not in kinds,
           "MESH_EMIT_SHADOW_SKIP is not in the default Auto plan")
+    check("CLAMP_INDIRECT" not in kinds,
+          "CLAMP_INDIRECT is not in the default Auto plan")
     expected = speed_solver.multiply_factors(
         speed_solver.strongest_per_class(plan.actions))
     check(abs(plan.est_factor - expected) < 1e-9,

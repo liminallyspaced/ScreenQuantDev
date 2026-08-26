@@ -387,6 +387,31 @@ def _apply_world_mis_none(scene, settings, jrnl, payload, cache, skipped, progre
     return None
 
 
+
+def _apply_clamp_indirect(scene, settings, jrnl, payload, cache, skipped, progress):
+    """0 → factory 10. Re-prove disabled. Never write sample_clamp_direct."""
+    try:
+        from ..analysis import clamp_indirect
+    except Exception:
+        skipped.append(_skip("CLAMP_INDIRECT", "-", "clamp_indirect module missing"))
+        return None
+    cycles = getattr(scene, "cycles", None)
+    if cycles is None or not hasattr(cycles, "sample_clamp_indirect"):
+        skipped.append(_skip("CLAMP_INDIRECT", "-", "no sample_clamp_indirect attr"))
+        return None
+    current = getattr(cycles, "sample_clamp_indirect", None)
+    if current != 0:
+        skipped.append(_skip(
+            "CLAMP_INDIRECT", "-", "user clamp already enabled"))
+        return None
+    target = payload.get("value", clamp_indirect.CLAMP_INDIRECT_VALUE)
+    applied = clamp_indirect.apply_clamp_indirect(
+        scene, jrnl, target=target)
+    if applied:
+        return "clamp indirect %s (was disabled)" % target
+    return None
+
+
 def _apply_light_sampling_threshold(scene, settings, jrnl, payload, cache, skipped, progress):
     cycles = getattr(scene, "cycles", None)
     if cycles is None or not hasattr(cycles, "light_sampling_threshold"):
@@ -735,6 +760,7 @@ _HANDLERS = {
     "PATH_GUIDING_OFF": _apply_path_guiding_off,
     "WORLD_MIS_NONE": _apply_world_mis_none,
     "LIGHT_SAMPLING_THRESHOLD": _apply_light_sampling_threshold,
+    "CLAMP_INDIRECT": _apply_clamp_indirect,
     "TRANSPARENT_SHADOW_CAP": _apply_transparent_shadow_cap,
     "FILTER_GLOSSY": _apply_filter_glossy,
     "AUTO_SCRAMBLE": _apply_auto_scramble,
