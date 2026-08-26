@@ -673,6 +673,11 @@ def _dead_actions(scene, coverage, caveats):
     # ZERO_ENERGY_LIGHT lives in zero_energy_light_actions (manual-later).
     # hide_render on local energy-0 lights. Not in the default Auto plan
     # until a measured pair. No time claim. Never portals. Never energy writes.
+    # ZERO_SHADER_LIGHT lives in zero_shader_light_actions (manual-later).
+    # hide_render on local use_nodes lights whose shader emission_estimate
+    # is proven 0 while RNA energy is not. Not in the default Auto plan
+    # until a measured pair. No time claim. Never portals. Never energy /
+    # node-unlink writes. Complementary to ZERO_ENERGY_LIGHT.
     return actions
 
 
@@ -1596,6 +1601,55 @@ def zero_energy_light_actions(scene, caveats=None):
     return [SpeedAction(
         "ZERO_ENERGY_LIGHT",
         "%d energy-0 light(s) → hide_render (manual; never portal)" % n,
+        "dead", 2, 1.0, 1,
+        {"records": records})]
+
+
+def _load_zero_shader_lights():
+    try:
+        from ..analysis import zero_shader_lights
+        return zero_shader_lights
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        import os
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "analysis",
+            "zero_shader_lights.py"))
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.analysis.zero_shader_lights", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def zero_shader_light_actions(scene, caveats=None):
+    """Manual-later planner hook for ZERO_SHADER_LIGHT.
+
+    NOT called from build_speed_plan / _dead_actions. Auto stays off
+    until a measured pair exists. time_factor is 1.0 (no claim).
+    Object-DNA + light-tree lever: local Light.use_nodes and proven-zero
+    shader emission_estimate → hide_render. RNA energy == 0 is
+    ZERO_ENERGY_LIGHT. intern/cycles/blender/shader.cpp sync_lights
+    reads the node tree only when use_nodes; light.cpp still writes RNA
+    energy as strength with no early-out; has_contribution then returns
+    false on emission_estimate == 0 after the object is synced.
+    Scene-agnostic — fires from DNA, not file class. Never portals.
+    Never writes Light.energy. Never unlinks nodes.
+    """
+    zero_shader_lights = _load_zero_shader_lights()
+    if zero_shader_lights is None:
+        return []
+    records = zero_shader_lights.classify_zero_shader_lights(scene)
+    n = len(records)
+    if n < 1:
+        return []
+    return [SpeedAction(
+        "ZERO_SHADER_LIGHT",
+        "%d shader-zero light(s) → hide_render (manual; never portal)" % n,
         "dead", 2, 1.0, 1,
         {"records": records})]
 
