@@ -134,6 +134,8 @@ def test_default_plan_filters():
           "ZERO_ENERGY_LIGHT is not in the default Auto plan")
     check("ZERO_SHADER_LIGHT" not in kinds,
           "ZERO_SHADER_LIGHT is not in the default Auto plan")
+    check("ZERO_WORLD_BG" not in kinds,
+          "ZERO_WORLD_BG is not in the default Auto plan")
     expected = speed_solver.multiply_factors(
         speed_solver.strongest_per_class(plan.actions))
     check(abs(plan.est_factor - expected) < 1e-9,

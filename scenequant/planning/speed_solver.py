@@ -390,6 +390,11 @@ def _path_actions(scene, caveats):
     # CLAMP_INDIRECT lives in clamp_indirect_actions (manual-later).
     # 0 → Cycles factory 10. Not in the default Auto plan until a
     # measured pair. Never writes sample_clamp_direct. No time claim.
+    # ZERO_WORLD_BG lives in zero_world_bg_actions (manual-later).
+    # sampling_method NONE when World Surface is proven-zero AND a
+    # spatial texture still feeds Color (WORLD_MIS_NONE already owns
+    # solid). Not in the default Auto plan until a measured pair.
+    # No time claim. Never unlinks. Never portals.
     return actions
 
 
@@ -678,6 +683,8 @@ def _dead_actions(scene, coverage, caveats):
     # is proven 0 while RNA energy is not. Not in the default Auto plan
     # until a measured pair. No time claim. Never portals. Never energy /
     # node-unlink writes. Complementary to ZERO_ENERGY_LIGHT.
+    # ZERO_WORLD_BG lives in zero_world_bg_actions (manual-later) under
+    # _path_actions, not here. World MIS RNA, not object hide_render.
     return actions
 
 
@@ -1651,6 +1658,56 @@ def zero_shader_light_actions(scene, caveats=None):
         "ZERO_SHADER_LIGHT",
         "%d shader-zero light(s) → hide_render (manual; never portal)" % n,
         "dead", 2, 1.0, 1,
+        {"records": records})]
+
+
+
+
+def _load_zero_world_bg():
+    try:
+        from ..analysis import zero_world_bg
+        return zero_world_bg
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        import os
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "analysis",
+            "zero_world_bg.py"))
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.analysis.zero_world_bg", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def zero_world_bg_actions(scene, caveats=None):
+    """Manual-later planner hook for ZERO_WORLD_BG.
+
+    NOT called from build_speed_plan / _path_actions. Auto stays off
+    until a measured pair exists. time_factor is 1.0 (no claim).
+    World-DNA lever: noded World Surface proven-zero emission AND a
+    spatial texture on the Color path → sampling_method NONE.
+    WORLD_MIS_NONE owns solid (no spatial). intern/cycles/scene/light.cpp
+    test_enabled_lights only auto-disables MIS when
+    !has_surface_spatial_varying; Strength 0 + connected HDRI still
+    builds shade_background_pixels. Scene-agnostic — fires from DNA,
+    not file class. Never portals. Never unlinks.
+    """
+    zero_world_bg = _load_zero_world_bg()
+    if zero_world_bg is None:
+        return []
+    records = zero_world_bg.classify_zero_world_bg(scene)
+    n = len(records)
+    if n < 1:
+        return []
+    return [SpeedAction(
+        "ZERO_WORLD_BG",
+        "World MIS off (proven-zero background + spatial tex; manual)",
+        "paths", 2, 1.0, 1,
         {"records": records})]
 
 

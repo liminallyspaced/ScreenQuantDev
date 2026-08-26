@@ -484,6 +484,34 @@ def _apply_zero_shader_lights(scene, settings, jrnl, payload, cache, skipped, pr
     return None
 
 
+def _apply_zero_world_bg(scene, settings, jrnl, payload, cache, skipped, progress):
+    """sampling_method NONE on proven-zero + spatial world. Re-prove."""
+    try:
+        from ..analysis import zero_world_bg
+    except Exception:
+        skipped.append(_skip("ZERO_WORLD_BG", "-", "zero_world_bg module missing"))
+        return None
+    world = getattr(scene, "world", None)
+    if world is None:
+        skipped.append(_skip("ZERO_WORLD_BG", "-", "no world"))
+        return None
+    from .. import compat
+    if compat.is_linked(world):
+        skipped.append(_skip("ZERO_WORLD_BG", "-", "linked world"))
+        return None
+    records = payload.get("records")
+    if not records:
+        records = zero_world_bg.classify_zero_world_bg(scene)
+    applied = zero_world_bg.apply_zero_world_bg(scene, jrnl, records=records)
+    if applied:
+        return "world MIS off (proven-zero background + spatial tex)"
+    skipped.append(_skip(
+        "ZERO_WORLD_BG", "-",
+        "world is not proven-zero + spatial (or already NONE)"))
+    return None
+
+
+
 def _apply_light_sampling_threshold(scene, settings, jrnl, payload, cache, skipped, progress):
     cycles = getattr(scene, "cycles", None)
     if cycles is None or not hasattr(cycles, "light_sampling_threshold"):
@@ -835,6 +863,7 @@ _HANDLERS = {
     "CLAMP_INDIRECT": _apply_clamp_indirect,
     "ZERO_ENERGY_LIGHT": _apply_zero_energy_lights,
     "ZERO_SHADER_LIGHT": _apply_zero_shader_lights,
+    "ZERO_WORLD_BG": _apply_zero_world_bg,
     "TRANSPARENT_SHADOW_CAP": _apply_transparent_shadow_cap,
     "FILTER_GLOSSY": _apply_filter_glossy,
     "AUTO_SCRAMBLE": _apply_auto_scramble,
