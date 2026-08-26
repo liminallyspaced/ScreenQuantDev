@@ -1,4 +1,123 @@
-# Next lever (2026-08-26 6pm ET PlugWalk)
+# Next lever (2026-08-26 7pm ET PlugWalk)
+
+## 7pm — clean demo bill (docs only; no 5th leftover lever)
+
+Nick: cuts for ALL scenes including clean official demos. Stop shipping
+leftover-state levers that miss the kitchen. This hour hunted ONE new
+general structural lever that fires on Classroom **or** loft. None found
+that is not already a shipped Auto-off classifier.
+
+**Honesty:** leftover-zero levers (CLAMP_INDIRECT, ZERO_ENERGY_LIGHT,
+ZERO_SHADER_LIGHT, ZERO_WORLD_BG) still FIRED=0 on official Classroom,
+loft, and BMW27. Unbuilt L1.10 `PRUNE_NORMALMAP` FIRED=0 (loft has 83
+live tangent maps; Strength is 1.0 / 0.14–0.5, not 0). Identity-Hook,
+empty volume, light-linking, motion-BVH, and proven-zero Bump/Bevel/SSS/
+Emission/Transmission/Volume all miss. Do not invent a decorative 5th
+leftover write.
+
+No new classifier. No Auto change. No zip. No time claim. No user 2080.
+QuantTrace stays research-only.
+
+Official files (DNA only so far, plus one Classroom CPU classify):
+
+| File | bytes | sha256 | method |
+|---|---|---|---|
+| Classroom | 32045332 | `5c526ea3f280566e80253673c9955640527cd0f247ea41b1742620b5bc39f7a4` | DNA `tools/_inventory_blend_dna.py` + Blender 5.2.0 CPU `--background --python` classify (no F12) |
+| loft | 561122088 | `96d31b9c0df55592bde4a82d875e05acece67201d5df9cac40ef9d164a7c1840` | DNA only (535 MB; no F12) |
+| BMW27 | 3148419 | `98306c8affc0a4513e6998a1c2813a66083264e7e28b5e853975555b55c308e4` | DNA only |
+
+### What clean demos pay for (live structure, not leftover zeros)
+
+Classroom (Seux, `BLENDER-v279`, live 5.2 `_mainScene`):
+
+| Bill | Count / proof | Already a lever? |
+|---|---|---|
+| Sample overkill | 300 spp, adaptive off → knee 128 | **Auto** (most of the 41%) |
+| Linked scatter (chairs/desks/lamps) | 11 `LI` (assets not kept on box); 56 instance collections | **Auto CAMERA_CULL** (Cycles flags, not hide_render) |
+| Enclosed GI | `max_bounces=8` already; leftover is per-sample PT | settings stack; next cut is GPU path guiding / QuantTrace, not Auto RNA |
+| Window mesh lights | `MESH_EMIT_BACKFACE=2` (`dayLight_portal` on hallWindow / windows). Live 5.2 `SHADOW_SKIP_OK=1` | **shipped Auto-off** `MESH_EMIT_SHADOW_SKIP` |
+| Live Bump | 16, Height linked, Strength 0.006–0.2 (none 0) | not a prune — the picture |
+| Real glass | `KEEP_GLASS=1` frostedGlass | never prune |
+| Live Hook deform | 48, force **1.0**, all have an object (Cylinder.* → Cube.*) | not identity; do not disable |
+| Live Subsurf | 12 local (`renderLevels` 1–3; thumbtack 3) | **Auto SUBDIV_TRIM** (coverage-gated) |
+| Live lamps | sun 1.0 / corridor POINT 60 / blackboard AREA 0.79 / fill AREA 1963 (5.2 physical units) | not energy-0 |
+| World | Strength proven 0, `sampling_method=NONE`, no env tex; `world.cycles.max_bounces=1024` | already the ZERO_WORLD / WORLD_MIS write; 1024 is RNA leftover, not a new structural class (world is not sampled) |
+| Clamp | `sample_clamp_indirect=3.0` (user value stays) | CLAMP_INDIRECT fire=0 |
+| Volumes / Normal Map / Principled / light linking / motion | 0 / 0 / 0 / 0 / False | nothing to write |
+
+loft (Blender Studio, `BLENDER-v292`):
+
+| Bill | Count / proof | Already a lever? |
+|---|---|---|
+| Paths + dicing + denoise + plant cutouts | R4/R6 recipe | **Auto** (the 52%) |
+| False-transparent JPEG Alpha | **PRUNE_ALPHA=7** (Carpet Low Grey + six bed mats; packed JPEG `Baxter marilyn-Dirt 2.jpg`) | **shipped Auto-off** `DEAD_CLOSURE_PRUNE` / L1. Auto-gate (PRUNE_ALPHA+VOLUME≥1 on a non-hero official interior) **is met on loft**, still 0 on Classroom. Unmeasured. Do not re-implement. |
+| Unused-slot attr union | UNIQUE_UNUSED_SLOTS=21077 / EXTRA_ATTR_APPLY=4865 / 15 shaders | **shipped Auto-off** `UNUSED_SLOTS` |
+| Real plant cutouts | KEEP_REAL_CUTOUT=5 | keep |
+| Real glass + glass volume | KEEP_GLASS=8; `Realistic_Glass_01` Volume linked, scatter density 0.05 / absorb 1.0 | keep; PRUNE_VOLUME=0 |
+| Live tangent Normal Maps | **83** (Strength 1.0×75, 0.18×3, 0.5×2, 0.34 / 0.2 / 0.14; **2 linked, none proven 0**) | L1.10 `PRUNE_NORMALMAP` **FIRED=0**. MikkT is the PBR bill. Cannot unlink live maps. |
+| Live Bump / Bevel / AO | 49 Bump (Strength 0.008–0.5); 3 Bevel (0.02 / 0.05); 1 AO Distance 1.0 | PRUNE_BUMP=0 PRUNE_BEVEL=0; AO skip (feeds Color) |
+| Live area lights | 10 / 10 / 100 / 200, nodeless | ZERO_ENERGY=0 ZERO_SHADER=0 |
+| Live HDR | EasyHDR, Strength LINKED, `TEX_ENVIRONMENT` | ZERO_WORLD_BG=0 (not proven 0) |
+| Principled dumps | 176; SSS unlinked 174×0 + 2 live; Transmission 172×0 + 4 live; Alpha linked 8 (the 7 JPEG + 1 cutout) | PRUNE_SSS/EMISSION/TRANSMISSION=0 (need a *link* to proven 0) |
+| Clamp key | missing in 2.92 IDP → UNKNOWN, hasattr fire=0 | not 0 |
+
+BMW27: leftover-zeros 0; unique unused slots 0; 25 live Subsurf (existing TRIM); 1 Normal Map Strength 0.01 (live). The 79% was 1225 spp.
+
+### Already-shipped Auto-off that *do* fire on the kitchen
+
+Do not re-implement. Document only.
+
+| Lever | Classroom | loft | BMW27 | Auto | Blocked on |
+|---|---|---|---|---|---|
+| PRUNE_ALPHA (JPEG / no-alpha Principled Alpha unlink) | 0 | **7** | 0 | off | timed GPU pair on top of current stack + HDR-FLIP |
+| UNUSED_SLOTS extra-attr pop | 0 | **4865** apply of 21077 | 0 | off | separate VRAM/attr pair, not a % claim |
+| MESH_EMIT_SHADOW_SKIP | **2** cards; live 5.2 `SHADOW_SKIP_OK=1` | 0 | 0 | off | HDR-FLIP on Classroom **and** loft |
+| CAMERA_CULL linked scatter | fires (Auto) | fires | — | **on** | already in the 41% |
+| Sample knee | 300→128 | 512→256 pad | 1225→128 | **on** | already the store plates |
+
+PRUNE_MIX / DISPLACE / SSS / EMISSION / TRANSMISSION / BUMP / BEVEL / VOLUME / AOV = **0** on both interiors (DNA). Classroom live 5.2 agrees.
+
+### Leftover-zero four (6pm) — still miss the kitchen
+
+```
+Classroom  CLAMP_INDIRECT=0 ZERO_ENERGY_LIGHT=0 ZERO_SHADER_LIGHT=0 ZERO_WORLD_BG=0
+loft       CLAMP_INDIRECT=0 ZERO_ENERGY_LIGHT=0 ZERO_SHADER_LIGHT=0 ZERO_WORLD_BG=0
+BMW27      CLAMP_INDIRECT=0 ZERO_ENERGY_LIGHT=0 ZERO_SHADER_LIGHT=0 ZERO_WORLD_BG=0
+```
+
+Classroom live 5.2: clamp 3.0, four lamps energy ≠ 0, world already NONE, classifiers return `[]`.
+
+### Unbuilt candidates checked this hour (all miss)
+
+1. **L1.10 PRUNE_NORMALMAP** (Cycles `NormalMapNode::attributes` always requests MikkT; Strength 0 still compiles). loft 83 / Classroom 0 / BMW27 1. Strength proven-0 = **0**. Default Strength is 1.0 — do not unlink Strength. Parked until a file with Strength 0 exists.
+2. **Identity Hook / dead deform.** Classroom 48 Hooks, force 1.0, object present. loft type-1/19/33 are live Subsurf/Particle/Solidify. Not a no-op.
+3. **Empty volume.** Classroom volume sockets 0, `VO` blocks 0. loft volume is live glass. `volumeLight` / `dustParticules` are other scenes, not `_mainScene` leftovers.
+4. **Light linking / shadow linking.** 2.79/2.92 DNA has no fields. Live 5.2 Classroom `light_linking` sets = 0. Policy-heavy (`INTERNALS` §2.5). Manual-later.
+5. **Motion BVH skip.** Live 5.2 Classroom `use_motion_blur=False`.
+6. **emission_sampling NONE on dim mesh lights.** 170 Classroom mats `AUTO`; only the two portal cards emit. Do not NONE a live window lamp.
+7. **world.max_bounces 1024** (Classroom live). RNA dump; world Strength 0 + NONE so it is not sampled. Not a new structural class.
+8. **Instance-from-duplicate** on loft 1184 unique meshes. `INTERNALS` §2.4: will not close Classroom/loft; VRAM DEDUP is forbidden on the speed plan.
+9. **QuantTrace.** Research-only. Never Auto.
+
+### Why no new lever this hour
+
+A new write needed (1) a Cycles leftover the shipped classifiers do not own, (2) general DNA / live classify, (3) FIRED>0 on Classroom or loft. (3) failed for every *new* class. The fires that exist are PRUNE_ALPHA=7, UNUSED_SLOTS extra-attr=4865, MESH_EMIT_BACKFACE=2 — all already coded, Auto off, waiting on a GPU pair Nick has not freed.
+
+Shipping another leftover-state classifier that the official kitchen cannot trip is the thing Nick asked to stop.
+
+### Next
+
+1. Do **not** turn Auto on for PRUNE_ALPHA / UNUSED_SLOTS / MESH_EMIT_SHADOW_SKIP / today's four zeros.
+2. First GPU pair when the 2080 is free: loft Make it Fast vs same + journaled PRUNE_ALPHA (7 JPEG unlinks) only. Persistent off. HDR-FLIP. Do not re-claim 52%.
+3. Do **not** implement L1.10 until an official (or any) inventory shows Strength proven 0.
+4. Interior gap after the knee is enclosed GI + live transparent windows + linked chairs. That is QuantTrace / GPU guiding / already-Auto cull — not a fifth energy-0 hide.
+
+Classroom 41% / loft 52% unchanged.
+
+---
+
+# Next lever (2026-08-26 6pm ET PlugWalk) — kept below
+
 
 ## 6pm DNA inventory — official Classroom + loft on the box
 
