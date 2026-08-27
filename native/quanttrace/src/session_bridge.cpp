@@ -4,8 +4,11 @@
  * next to hello.c. quanttrace_is_tracer() stays 0 in hello.c.
  *
  * -DQT_WITH_CYCLES=1: this file WILL call ccl::Session / Scene / Mesh /
- * AreaLight / PrincipledBsdfNode once include+link paths exist. It still
+ * AreaLight / PrincipledBsdfNode. After Session::wait it writes Combined
+ * as linear RGBA float OpenEXR (zip) when exr_path is set. It still
  * does not flip is_tracer. Pixel-match vs stock Cycles Combined is later.
+ * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override the locked 256/256/128
+ * defaults (smoke: 32/32/4).
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
  *       src/app/cycles_standalone.cpp, src/app/cycles_xml.cpp
@@ -30,8 +33,11 @@ extern "C" int quanttrace_render_cube(const char * /*exr_path*/)
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
+
+#include <OpenImageIO/imageio.h>
 
 #include "device/device.h"
 #include "scene/background.h"
@@ -243,6 +249,69 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     pass->set_type(PASS_COMBINED);
 }
 
+/* QUANTTRACE-CUBE.md defaults stay 256 / 256 / 128. Smoke this hour:
+ * QUANTTRACE_CUBE_WIDTH=32 HEIGHT=32 SAMPLES=4. Invalid values fall back.
+ */
+static int env_positive_int(const char *name, int fallback)
+{
+    const char *v = std::getenv(name);
+    if (!v || !v[0]) {
+        return fallback;
+    }
+    char *end = nullptr;
+    const long n = std::strtol(v, &end, 10);
+    if (end == v || *end != 0 || n <= 0 || n > 8192) {
+        fprintf(stderr,
+                "quanttrace: ignoring invalid %s=%s (using %d)\n",
+                name,
+                v,
+                fallback);
+        return fallback;
+    }
+    return static_cast<int>(n);
+}
+
+/* Linear RGBA float OpenEXR. Codec: zip (OIIO ImageSpec compression=zip;
+ * same ZIP class QUANTTRACE-CUBE.md allows). Combined from Cycles Session
+ * is bottom-up; flip Y so the file is top-down — same convention as
+ * cycles_standalone OIIOOutputDriver. No gamma: EXR stays scene-linear.
+ */
+static bool write_combined_exr(const char *path,
+                               const int width,
+                               const int height,
+                               const float *rgba)
+{
+    OIIO::ImageOutput::unique_ptr out = OIIO::ImageOutput::create(path);
+    if (!out) {
+        fprintf(stderr,
+                "quanttrace: ImageOutput::create failed for %s: %s\n",
+                path,
+                OIIO::geterror().c_str());
+        return false;
+    }
+
+    OIIO::ImageSpec spec(width, height, 4, OIIO::TypeDesc::FLOAT);
+    spec.attribute("compression", "zip");
+    spec.attribute("oiio:ColorSpace", "Linear");
+    if (!out->open(path, spec)) {
+        fprintf(stderr,
+                "quanttrace: ImageOutput::open failed: %s\n",
+                out->geterror().c_str());
+        return false;
+    }
+
+    const OIIO::stride_t xstride = static_cast<OIIO::stride_t>(4 * sizeof(float));
+    const OIIO::stride_t ystride = -static_cast<OIIO::stride_t>(width) * xstride;
+    const float *origin = rgba +
+                          static_cast<size_t>(height - 1) * static_cast<size_t>(width) * 4u;
+    const bool ok = out->write_image(OIIO::TypeDesc::FLOAT, origin, xstride, ystride);
+    if (!ok) {
+        fprintf(stderr, "quanttrace: write_image failed: %s\n", out->geterror().c_str());
+    }
+    out->close();
+    return ok;
+}
+
 static int run_cube_session(const char *exr_path)
 {
     log_init(nullptr);
@@ -254,11 +323,15 @@ static int run_cube_session(const char *exr_path)
         return -1;
     }
 
+    const int width = env_positive_int("QUANTTRACE_CUBE_WIDTH", 256);
+    const int height = env_positive_int("QUANTTRACE_CUBE_HEIGHT", 256);
+    const int samples = env_positive_int("QUANTTRACE_CUBE_SAMPLES", 128);
+
     SessionParams session_params;
     session_params.device = devices.front();
     session_params.background = true;
     session_params.headless = true;
-    session_params.samples = 128;
+    session_params.samples = samples;
     session_params.threads = 0;
     session_params.use_auto_tile = false;
     session_params.shadingsystem = SHADINGSYSTEM_SVM;
@@ -271,8 +344,6 @@ static int run_cube_session(const char *exr_path)
     unique_ptr<Session> session = make_unique<Session>(session_params, scene_params);
     Scene *scene = session->scene.get();
 
-    const int width = 256;
-    const int height = 256;
     build_cube_scene(scene, width, height);
 
     std::vector<float> rgba;
@@ -288,21 +359,29 @@ static int run_cube_session(const char *exr_path)
     session->start();
     session->wait();
 
-    if (exr_path && exr_path[0] && !rgba.empty()) {
-        /* EXR write needs OIIO; leave a note if the path is set but we do
-         * not pull app/oiio_output_driver into this .so yet. Combined lives
-         * in `rgba` (linear RGBA, 256x256). Next hour: OIIO write or reuse
-         * cycles_standalone OIIOOutputDriver once we link libcycles.
-         */
+    const size_t expect = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+    if (rgba.empty() || rgba.size() != expect) {
         fprintf(stderr,
-                "quanttrace: Combined buffer %zu floats (linear). EXR write "
-                "not wired in this sketch (%s)\n",
+                "quanttrace: Combined empty or size mismatch %zu vs %dx%d\n",
                 rgba.size(),
+                width,
+                height);
+        return -1;
+    }
+
+    if (exr_path && exr_path[0]) {
+        if (!write_combined_exr(exr_path, width, height, rgba.data())) {
+            return -1;
+        }
+        fprintf(stderr,
+                "quanttrace: wrote linear RGBA float OpenEXR (zip) %dx%d %d spp %s\n",
+                width,
+                height,
+                samples,
                 exr_path);
     }
 
-    (void)exr_path;
-    return rgba.empty() ? -1 : 0;
+    return 0;
 }
 
 }  /* namespace */

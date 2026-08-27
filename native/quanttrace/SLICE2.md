@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Cycles standalone CPU Session works; addon `.so` with `QT_WITH_CYCLES=ON` now `dlopen`s** (2026-08-27 9am PlugWalk ET). `is_tracer` still 0. Cube Combined pair not written.
+Status: **Session Combined EXR write + 32x32/4spp smoke** (2026-08-27 9:15am PlugWalk ET). `is_tracer` still 0. Smoke Combined is opaque-film black (A=1). Cube dmax gate unmet.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -268,6 +268,64 @@ Did **not** call `quanttrace_render_cube` (256² / 128 spp). hello.c still owns 
 ### Still not true
 
 - Cube Combined EXR pair / Δmax gate (next: OIIO write or reuse standalone driver, then 256²/128)
+- `is_tracer=1`
+- Make it Fast / Auto / zip / Classroom 41% / loft 52% change
+- User 2080 / listing / gibby
+
+---
+
+## 9:15am PlugWalk (2026-08-27) — Combined EXR write + Session smoke
+
+Box: Linux, 8 cores, ~17G free. Did **not** `make update`, `git lfs pull`,
+or rebuild `native/cycles-src`. Rebuilt only `native/quanttrace/build`
+(`-DQT_WITH_CYCLES=ON`, session_bridge.cpp recompile ~7 s). No user 2080.
+
+### EXR write
+
+`session_bridge.cpp` now calls OIIO `ImageOutput` after `Session::wait` when
+`exr_path` is non-empty. Not the standalone `OIIOOutputDriver` class (that
+lives under `src/app/` and is not in `libcycles_*.a`); same write shape:
+
+- linear RGBA float (`TypeDesc::FLOAT`, 4 ch)
+- codec **zip** (`ImageSpec` `compression=zip`)
+- Y flip (Cycles Combined is bottom-up; file is top-down, same as
+  `oiio_output_driver.cpp`)
+- no gamma (EXR stays scene-linear)
+
+Locked defaults remain 256 / 256 / 128 (`QUANTTRACE-CUBE.md`). Overrides:
+`QUANTTRACE_CUBE_WIDTH` / `HEIGHT` / `SAMPLES` (invalid values fall back).
+
+### Smoke (not the cube gate)
+
+```
+env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
+```
+
+| Item | Result |
+|---|---|
+| `.so` load (empty `LD_LIBRARY_PATH`) | ok |
+| version | `0.0.1-hello` |
+| `is_tracer` | **0** |
+| `session_probe` | **1** |
+| env | 32 x 32, 4 spp |
+| `quanttrace_render_cube` | **0** |
+| wall | **0.027 s** (box CPU) |
+| EXR path | `/tmp/qt_session_smoke_1t5mvnto.exr` |
+| size | **823** bytes |
+| magic | `76 2f 31 01` (OpenEXR) |
+| `iinfo` | 32 x 32, 4 channel, float openexr, compression zip |
+| pixels | **RGB constant 0, A constant 1** (opaque-film Combined, cube not lit / not visible) |
+
+`get_pass_pixels("combined")` succeeded (A=1; a failed read would have left
+the pre-zeroed A=0). Session ran. Combined is a real buffer, not a stub file.
+It is **not** a cube image. Do **not** call this a pixel-match.
+
+Full 256^2 / 128 **not run** this hour.
+
+### Still not true
+
+- Cube Combined pair / dmax < 1e-3 gate (black smoke Combined is a blocker
+  before even running 256/128 vs stock Cycles)
 - `is_tracer=1`
 - Make it Fast / Auto / zip / Classroom 41% / loft 52% change
 - User 2080 / listing / gibby

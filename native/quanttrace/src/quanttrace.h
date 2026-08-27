@@ -27,8 +27,11 @@ QT_EXPORT int quanttrace_is_tracer(void);
 QT_EXPORT int quanttrace_session_probe(void);
 
 /* Render the locked cube via ccl::Session once linked. Returns 0 on
- * success, -1 if the Session path is not compiled / not linked.
- * exr_path may be NULL (Combined is still produced into an in-memory buffer).
+ * success, -1 if the Session path is not compiled / Combined empty / EXR
+ * write failed. exr_path may be NULL or empty (Combined stays in-memory).
+ * When non-empty, writes linear RGBA float OpenEXR (zip).
+ * QUANTTRACE_CUBE_WIDTH / HEIGHT / SAMPLES override locked 256 / 256 / 128
+ * (QUANTTRACE-CUBE.md). Smoke this hour: 32 / 32 / 4.
  */
 QT_EXPORT int quanttrace_render_cube(const char *exr_path);
 

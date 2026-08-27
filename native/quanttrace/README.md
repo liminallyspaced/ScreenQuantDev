@@ -11,7 +11,7 @@ this tree never feeds Auto clocks.
 | Slice | Status | What |
 |---|---|---|
 | **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` and `quanttrace_is_tracer()` (`0`). |
-| **2 — cube pixel-match** | in progress | Cycles standalone CPU Session **works**. Addon `.so` with `QT_WITH_CYCLES=ON` now **loads** (`is_tracer=0`, `session_probe=1`, empty `LD_LIBRARY_PATH`). Pixel-match / Combined EXR pair not run. |
+| **2 — cube pixel-match** | in progress | Cycles standalone CPU Session **works**. Addon `.so` loads (`is_tracer=0`, `session_probe=1`). Combined EXR write wired (OIIO zip). 32x32/4spp Session smoke only; cube dmax gate unmet. |
 
 Do not pretend this traces. Python `SQ_QUANTTRACE` keeps `kernel_ready` False and refuses F12.
 
@@ -35,7 +35,10 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=0, session_probe=1. Do not call render_cube (256^2 / 128).
+# ABI: is_tracer=0, session_probe=1.
+# Smoke (not the cube gate):
+QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
+  env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 ```
 
 RPATH is baked; ctypes does not need `LD_LIBRARY_PATH`.
@@ -52,7 +55,8 @@ See `SLICE2.md`. Working CPU binary after `make update` + cmake:
 const char *quanttrace_version(void);   /* "0.0.1-hello" */
 int quanttrace_is_tracer(void);         /* 0 until Combined exists */
 int quanttrace_session_probe(void);     /* 0 stub / 1 if QT_WITH_CYCLES compiled in */
-int quanttrace_render_cube(const char *exr_path); /* -1 until Session .so loads */
+int quanttrace_render_cube(const char *exr_path); /* 0 writes linear RGBA zip EXR when path set */
+/* env QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES default 256/256/128 */
 ```
 
 ## Out of scope until pixel-match
