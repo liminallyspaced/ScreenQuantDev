@@ -90,6 +90,7 @@ extern "C" int quanttrace_render_qt_scene_rgba(const QT_Scene * /*scene*/,
 #include "util/log.h"
 #include "util/path.h"
 #include "util/transform.h"
+#include "util/hash.h"
 #include "util/string.h"
 #include "util/unique_ptr.h"
 
@@ -239,12 +240,17 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->metallic = s->metallic;
     mesh->ior = s->ior;
     mesh->alpha = s->alpha;
+    mesh->name = "Cube"; /* locked-cube Blender object name */
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
     light->sizeu = s->light_sizeu;
     light->sizev = s->light_sizev;
     std::memcpy(light->strength, s->light_strength, sizeof(light->strength));
+    light->name = "Area";
+    light->kind = QT_LIGHT_AREA;
+    light->radius = 0.0f;
+    light->angle = 0.0f;
 
     std::memset(out, 0, sizeof(*out));
     out->width = s->width;
@@ -329,29 +335,54 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
     Object *mesh_obj = scene->create_node<Object>();
     mesh_obj->set_geometry(mesh);
     mesh_obj->set_tfm(tfm_from_12(m->tfm));
+    /* Match Blender sync: hash_uint2(hash_string(name), 0). */
+    if (m->name && m->name[0]) {
+        mesh_obj->name = m->name;
+        mesh_obj->set_random_id(hash_uint2(hash_string(m->name), 0));
+    }
 }
 
-static void add_area_light(Scene *scene, Shader *lamp_shader, const QT_Light *L)
+static void add_qt_light(Scene *scene, Shader *lamp_shader, const QT_Light *L)
 {
-    AreaLight *area = scene->create_node<AreaLight>();
-    area->set_sizeu(L->sizeu);
-    area->set_sizev(L->sizev);
-    area->set_ellipse(false);
-    area->set_spread(3.1415926535897932f);
-    area->set_normalize(true);
-    area->set_strength(make_float3(L->strength[0], L->strength[1], L->strength[2]));
-    area->set_use_mis(true);
-    area->set_cast_shadow(true);
+    Light *light = nullptr;
+    const int kind = L->kind;
+    if (kind == QT_LIGHT_POINT) {
+        PointLight *point = scene->create_node<PointLight>();
+        point->set_radius(L->radius > 0.0f ? L->radius : 0.0f);
+        point->set_is_sphere(true);
+        light = point;
+    }
+    else if (kind == QT_LIGHT_SUN) {
+        SunLight *sun = scene->create_node<SunLight>();
+        sun->set_angle(L->angle > 0.0f ? L->angle : 0.009180f); /* ~0.526 deg default */
+        light = sun;
+    }
+    else {
+        AreaLight *area = scene->create_node<AreaLight>();
+        area->set_sizeu(L->sizeu);
+        area->set_sizev(L->sizev);
+        area->set_ellipse(false);
+        area->set_spread(3.1415926535897932f);
+        light = area;
+    }
+    light->set_normalize(true);
+    light->set_strength(make_float3(L->strength[0], L->strength[1], L->strength[2]));
+    light->set_use_mis(true);
+    light->set_cast_shadow(true);
     {
         array<Node *> used;
         used.push_back_slow(lamp_shader);
-        area->set_used_shaders(used);
+        light->set_used_shaders(used);
     }
 
     Object *light_obj = scene->create_node<Object>();
-    light_obj->set_geometry(area);
+    light_obj->set_geometry(light);
     light_obj->set_visibility(PATH_RAY_VISIBILITY_ALL & ~PATH_RAY_VISIBILITY_CAMERA);
     light_obj->set_tfm(tfm_from_12(L->tfm));
+    if (L->name && L->name[0]) {
+        light_obj->name = L->name;
+        light_obj->set_random_id(hash_uint2(hash_string(L->name), 0));
+    }
 }
 
 static void build_qt_scene(Scene *scene, const QT_Scene *desc)
@@ -420,7 +451,7 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
         add_mesh_object(scene, surf, m);
     }
     for (int i = 0; i < desc->nlights; i++) {
-        add_area_light(scene, lamp_shader, &desc->lights[i]);
+        add_qt_light(scene, lamp_shader, &desc->lights[i]);
     }
 
     Pass *pass = scene->create_node<Pass>();

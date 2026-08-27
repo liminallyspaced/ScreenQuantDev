@@ -95,8 +95,8 @@ QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
                                            int *out_h);
 
 /* Slice 2c: N meshes + N AREA lights (constant Principled per mesh).
- * Caps: QT_MAX_MESHES / QT_MAX_LIGHTS. Textured Principled, POINT/SUN/SPOT,
- * HDR worlds still refuse on the Python packer.
+ * Caps: QT_MAX_MESHES / QT_MAX_LIGHTS. AREA + POINT + SUN.
+ * Textured Principled / SPOT / HDR worlds still refuse on the Python packer.
  */
 typedef struct QT_Mesh {
   int nverts;
@@ -109,13 +109,23 @@ typedef struct QT_Mesh {
   float metallic;
   float ior;
   float alpha;
+  const char *name; /* Blender object name for random_id; may be NULL */
 } QT_Mesh;
 
+/* Light kinds for QT_Light.kind */
+#define QT_LIGHT_AREA  0
+#define QT_LIGHT_POINT 1
+#define QT_LIGHT_SUN   2
+
 typedef struct QT_Light {
-  float tfm[12]; /* area light matrix_world 3x4 (emit -Z) */
-  float sizeu;
-  float sizev;
+  float tfm[12]; /* object matrix_world 3x4 (AREA emit -Z; SUN dir -Z) */
+  float sizeu;   /* AREA sizeu; POINT unused; SUN unused */
+  float sizev;   /* AREA sizev */
   float strength[3]; /* color * energy * exp2(exposure) */
+  const char *name; /* Blender object name for random_id; may be NULL */
+  int kind;      /* QT_LIGHT_AREA / POINT / SUN */
+  float radius;  /* POINT soft radius (shadow_soft_size) */
+  float angle;   /* SUN angular diameter (radians) */
 } QT_Light;
 
 typedef struct QT_Scene {

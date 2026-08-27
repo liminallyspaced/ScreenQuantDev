@@ -109,14 +109,8 @@ def build_still_life():
             fill.data.size = 0.8
         _look_at(fill, (0.0, 0.0, 0.0), track="-Z", up="Y")
 
-    # Bake loc/scale into mesh DNA so stock Cycles and the Session packer
-    # share the same world-space verts (avoids 1-pixel silhouette ULP).
-    bpy.ops.object.select_all(action="DESELECT")
-    cube_obj.select_set(True)
-    cube_red.select_set(True)
-    bpy.context.view_layer.objects.active = cube_obj
-    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-    bpy.ops.object.select_all(action="DESELECT")
+    # Keep object-local verts + matrix_world (Blender sync path). Slice 2d
+    # packer no longer bakes world verts.
     bpy.context.view_layer.update()
     return scene, (cube_obj, cube_red), tuple(x for x in (lamp, fill) if x is not None), cam
 

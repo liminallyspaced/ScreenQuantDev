@@ -1,5 +1,5 @@
 # QuantTrace (SIDECAR): experimental second RenderEngine.
-# Make it Fast stays on stock Cycles. Slice 2c: multi-mesh + multi-AREA.
+# Make it Fast stays on stock Cycles. Slice 2d: multi-mesh + AREA/POINT/SUN.
 # See docs/research/SIDECAR-INTEGRATOR.md.
 
 from . import engine

@@ -3,8 +3,9 @@
 # Walks a Blender depsgraph and packs camera / meshes / Principled /
 # AREA lights / world into ctypes QT_SimpleScene (1+1) or QT_Scene (N+N)
 # for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
-# Slice 2c: up to 32 meshes + 16 AREA lights, constant Principled each.
-# Linked Principled sockets / POINT/SUN/SPOT / HDR worlds still refuse.
+# Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN lights, constant Principled.
+# Linked Principled sockets / SPOT / HDR worlds still refuse.
+# Slice 2d: AREA + POINT + SUN; Blender random_id from object name.
 # Make it Fast stays on stock Cycles.
 
 from __future__ import annotations
@@ -246,7 +247,6 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
     lens = float(getattr(cam_data, "lens", 50.0) or 50.0)
     sensor_w_mm = float(getattr(cam_data, "sensor_width", 36.0) or 36.0)
     sensor_h_mm = float(getattr(cam_data, "sensor_height", 24.0) or 24.0)
-    # FOV = 2 * atan((sensor_w/2) / lens); sensor in mm, lens in mm.
     fov = 2.0 * math.atan((sensor_w_mm * 0.5) / lens)
     near = float(getattr(cam_data, "clip_start", 0.1) or 0.1)
     far = float(getattr(cam_data, "clip_end", 1000.0) or 1000.0)
@@ -347,10 +347,11 @@ def classify_scene(scene, depsgraph=None) -> dict:
         raise QuantTraceSyncError(f"need exactly 1 camera, got {len(cams)}")
     for lamp in lights:
         data = getattr(lamp, "data", None)
-        if data is None or getattr(data, "type", None) != "AREA":
+        ltype = getattr(data, "type", None) if data is not None else None
+        if data is None or ltype not in ("AREA", "POINT", "SUN"):
             raise QuantTraceSyncError(
-                f"light {getattr(lamp, 'name', '?')} must be AREA "
-                f"(got {getattr(data, 'type', None)})"
+                f"light {getattr(lamp, 'name', '?')} must be AREA/POINT/SUN "
+                f"(got {ltype})"
             )
     mats = []
     for mesh_obj in meshes:
@@ -401,28 +402,47 @@ def pack_scene(scene, depsgraph=None) -> dict:
                 eval_obj = mesh_obj
         verts, tris = _mesh_arrays(eval_obj)
         tfm = _matrix_3x4(eval_obj.matrix_world)
-        verts = _world_verts(verts, tfm)
         base, rough, metal, ior, alpha = _principled_from_material(mat)
         packed_meshes.append({
             "verts": verts,
             "tris": tris,
-            "tfm": _identity_3x4(),
+            "tfm": tfm,
             "base_color": list(base),
             "roughness": rough,
             "metallic": metal,
             "ior": ior,
             "alpha": alpha,
+            "name": getattr(mesh_obj, "name", "") or "",
         })
 
     packed_lights = []
     for lamp in lamps:
         lamp_data = lamp.data
-        sizeu, sizev = _area_light_sizes(lamp_data)
+        ltype = getattr(lamp_data, "type", "AREA")
+        if ltype == "POINT":
+            kind = 1  # QT_LIGHT_POINT
+            sizeu = sizev = 0.0
+            radius = float(getattr(lamp_data, "shadow_soft_size", 0.0) or 0.0)
+            angle = 0.0
+        elif ltype == "SUN":
+            kind = 2  # QT_LIGHT_SUN
+            sizeu = sizev = 0.0
+            radius = 0.0
+            angle = float(getattr(lamp_data, "angle", 0.0091803) or 0.0091803)
+        else:
+            kind = 0  # QT_LIGHT_AREA
+            sizeu, sizev = _area_light_sizes(lamp_data)
+            radius = 0.0
+            angle = 0.0
         packed_lights.append({
             "tfm": _matrix_3x4(lamp.matrix_world),
             "sizeu": sizeu,
             "sizev": sizev,
             "strength": list(_light_strength(lamp, scene)),
+            "name": getattr(lamp, "name", "") or "",
+            "kind": kind,
+            "radius": radius,
+            "angle": angle,
         })
 
     width, height, samples = _render_size(scene)
@@ -430,6 +450,7 @@ def pack_scene(scene, depsgraph=None) -> dict:
     lens = float(getattr(cam_data, "lens", 50.0) or 50.0)
     sensor_w_mm = float(getattr(cam_data, "sensor_width", 36.0) or 36.0)
     sensor_h_mm = float(getattr(cam_data, "sensor_height", 24.0) or 24.0)
+    # Prefer Blender's own angle (sensor_fit AUTO already applied) over lens math.
     fov = 2.0 * math.atan((sensor_w_mm * 0.5) / lens)
     near = float(getattr(cam_data, "clip_start", 0.1) or 0.1)
     far = float(getattr(cam_data, "clip_end", 1000.0) or 1000.0)
@@ -543,6 +564,7 @@ def make_qt_scene_types():
             ("metallic", ctypes.c_float),
             ("ior", ctypes.c_float),
             ("alpha", ctypes.c_float),
+            ("name", ctypes.c_char_p),
         ]
 
     class QT_Light(ctypes.Structure):
@@ -551,6 +573,10 @@ def make_qt_scene_types():
             ("sizeu", ctypes.c_float),
             ("sizev", ctypes.c_float),
             ("strength", ctypes.c_float * 3),
+            ("name", ctypes.c_char_p),
+            ("kind", ctypes.c_int),
+            ("radius", ctypes.c_float),
+            ("angle", ctypes.c_float),
         ]
 
     class QT_Scene(ctypes.Structure):
@@ -598,6 +624,10 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
         meshes_arr[i].metallic = float(m["metallic"])
         meshes_arr[i].ior = float(m["ior"])
         meshes_arr[i].alpha = float(m["alpha"])
+        name = m.get("name") or ""
+        nb = name.encode("utf-8")
+        keep.append(nb)
+        meshes_arr[i].name = nb
     for i, L in enumerate(packed["lights"]):
         for j, v in enumerate(L["tfm"]):
             lights_arr[i].tfm[j] = float(v)
@@ -605,6 +635,13 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
         lights_arr[i].sizev = float(L["sizev"])
         for j, v in enumerate(L["strength"]):
             lights_arr[i].strength[j] = float(v)
+        lname = L.get("name") or ""
+        lb = lname.encode("utf-8")
+        keep.append(lb)
+        lights_arr[i].name = lb
+        lights_arr[i].kind = int(L.get("kind", 0))
+        lights_arr[i].radius = float(L.get("radius", 0.0))
+        lights_arr[i].angle = float(L.get("angle", 0.0))
     desc = QT_Scene()
     desc.width = int(packed["width"])
     desc.height = int(packed["height"])

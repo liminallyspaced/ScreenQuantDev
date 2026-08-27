@@ -1,3 +1,4 @@
+<!-- Slice 2d: random_id + POINT/SUN; version 0.0.5-slice2d -->
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**

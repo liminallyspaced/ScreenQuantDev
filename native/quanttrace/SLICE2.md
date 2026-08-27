@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2c landed** (2026-08-27 3pm PlugWalk ET). Multi-mesh + multi-AREA ABI. Still-life 32²/4 Δmax=2.68e-6 PASS; 256²/128 Δmax=0.00668 FAIL (1 silhouette pixel). Cube 1+1 still PASS. `is_tracer=1` (QT_WITH_CYCLES).
+Status: **Slice 2d landed** (2026-08-27 4pm PlugWalk ET). Blender `random_id` parity + object-local tfm + AREA/POINT/SUN. Hard POINT 256²/128 Δmax=1.2e-7 PASS. Still-life 32²/4 PASS; 256² still 1px noise-class residue on off-center silhouettes. SUN ABI wired, strength parity not claimed. `is_tracer=1`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -633,3 +633,42 @@ Proof plate: `docs/proof/quanttrace-still-life-32-pair.png` (32² preview only).
 ### Next
 
 Close the 1-pixel second-mesh silhouette at 256²/128, then textured Principled / more light types. Not ReSTIR. Not Classroom time %.
+
+
+---
+
+## 4pm PlugWalk (2026-08-27) — Slice 2d: random_id + POINT/SUN
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| random_id | Blender sync: `hash_uint2(hash_string(name), 0)` on mesh + light Objects |
+| Mesh tfm | pack_scene keeps object-local verts + exact `matrix_world` (no world-bake) |
+| Lights | `QT_LIGHT_AREA` / `POINT` / `SUN`; Python accepts all three |
+| POINT gate | Hard point (`shadow_soft_size=0`) vs stock: 32²/4 Δmax=8.9e-8; **256²/128 Δmax=1.2e-7 PASS** |
+| SUN | ABI + Session render; strength vs stock **not** matched this hour (do not claim) |
+| Version | `0.0.5-slice2d` |
+| Tools | `tools/_quanttrace_point_scene.py`, `tools/_quanttrace_point_smoke.py` |
+
+### Still-life 256² residual (documented, not "fixed")
+
+Off-center scaled cube (+1.15, scale 0.7) leaves **1 pixel** Δmax≈0.0038 at 128 spp (MAE ~1e-7).
+Scales ~1/√spp (1024 spp → Δmax≈0.0017). Origin / −X / scale-only / translate-only PASS at 256.
+Not multi-mesh-specific; not light-tree; not random_id. Noise-class silhouette residue vs Blender
+5.2 Embree. Still-life **32²/4 still PASS** (Δmax=3.5e-6).
+
+### Honesty
+
+- Soft POINT (`shadow_soft_size>0`) not gated.
+- SUN strength parity unmet — refuse to claim.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Soft POINT radius parity, SUN strength factor, textured Principled. Not ReSTIR. Not Classroom time %.
+

@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.4-multimesh" in hello_c, "hello.c version string 0.0.4-multimesh")
+    check("0.0.5-slice2d" in hello_c, "hello.c version string 0.0.5-slice2d")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
