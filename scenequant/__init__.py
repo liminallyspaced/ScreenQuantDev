@@ -7,14 +7,14 @@ import logging
 import bpy
 from bpy.app.handlers import persistent
 
-from . import journal, props
+from . import journal, props, quanttrace
 from .ui import operators, panels
 
 logger = logging.getLogger("scenequant")
 
 MB_PER_GB = 1024.0
 # Registration order; unregister and rollback walk it in reverse.
-_MODULES = (props, journal, operators, panels)
+_MODULES = (props, journal, operators, panels, quanttrace)
 
 
 def _preflight_threshold_mb(settings):
