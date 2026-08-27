@@ -1,4 +1,4 @@
-# pack_scene POINT light → Session vs stock Cycles (Slice 2e soft radius).
+# pack_scene SUN → Session vs stock Cycles (Slice 2e strength parity).
 from __future__ import annotations
 import argparse, ctypes, os, sys, time, subprocess
 import bpy
@@ -11,10 +11,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--res", type=int, default=32)
     p.add_argument("--samples", type=int, default=4)
-    p.add_argument("--out", default="/tmp/quanttrace_point_session.exr")
+    p.add_argument("--out", default="/tmp/quanttrace_sun_session.exr")
     p.add_argument("--compare", default="")
-    p.add_argument("--soft-size", type=float, default=0.0)
-    p.add_argument("--no-soft-falloff", action="store_true", default=False)
+    p.add_argument("--energy", type=float, default=200.0)
+    p.add_argument("--angle", type=float, default=0.0091803)
     args = p.parse_args(_argv())
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if root not in sys.path:
@@ -24,19 +24,17 @@ def main():
     except Exception: pass
     from scenequant.quanttrace import sync as qt_sync, engine as qt_engine
     sys.path.insert(0, os.path.join(root, "tools"))
-    import _quanttrace_point_scene as pt
+    import _quanttrace_sun_scene as sunsc
     qt_engine._reset_native_probe_for_tests()
     assert qt_engine.kernel_ready()
-    soft_fo = not args.no_soft_falloff
-    scene, cube_obj, point, cam = pt.build_point_scene(
-        soft_size=args.soft_size, soft_falloff=soft_fo)
+    scene, cube_obj, sun, cam = sunsc.build_sun_scene(energy=args.energy, angle=args.angle)
     scene.render.resolution_x = scene.render.resolution_y = args.res
     scene.cycles.samples = args.samples
     deps = bpy.context.evaluated_depsgraph_get()
     packed = qt_sync.pack_scene(scene, depsgraph=deps)
-    print("QUANTTRACE_POINT_SMOKE lights",
-          [(L.get("name"), L.get("kind"), L.get("radius"), L.get("is_sphere"),
-            L.get("strength")) for L in packed["lights"]])
+    print("QUANTTRACE_SUN_SMOKE lights",
+          [(L.get("name"), L.get("kind"), L.get("angle"), L.get("strength"))
+           for L in packed["lights"]])
     QT_Mesh, QT_Light, QT_Scene = qt_sync.make_qt_scene_types()
     lib = qt_engine._native_lib
     ver = lib.quanttrace_version()
@@ -52,17 +50,17 @@ def main():
     if os.path.isfile(args.out): os.unlink(args.out)
     t0 = time.perf_counter()
     rc = lib.quanttrace_render_qt_scene_rgba(ctypes.byref(desc), buf, n, ctypes.byref(ow), ctypes.byref(oh))
-    print("QUANTTRACE_POINT_SMOKE rc", rc, "wall", round(time.perf_counter()-t0, 3), "ver", ver)
+    print("QUANTTRACE_SUN_SMOKE rc", rc, "wall", round(time.perf_counter()-t0, 3), "ver", ver)
     if rc != 0: raise RuntimeError(rc)
     if args.compare:
         r = subprocess.call(["blender","--background","--python",
             os.path.join(root,"tools","_quanttrace_exr_delta.py"),"--", args.compare, args.out])
-        print("QUANTTRACE_POINT_SMOKE compare rc", r)
+        print("QUANTTRACE_SUN_SMOKE compare rc", r)
         if r != 0: raise SystemExit(r)
-    print("QUANTTRACE_POINT_SMOKE OK")
+    print("QUANTTRACE_SUN_SMOKE OK")
     return 0
 
 if __name__ == "__main__":
     try: raise SystemExit(main() or 0)
     except Exception as e:
-        print("QUANTTRACE_POINT_SMOKE FAIL", type(e).__name__, e); raise
+        print("QUANTTRACE_SUN_SMOKE FAIL", type(e).__name__, e); raise

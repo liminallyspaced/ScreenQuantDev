@@ -1,10 +1,10 @@
-<!-- Slice 2d: random_id + POINT/SUN; version 0.0.5-slice2d -->
+<!-- Slice 2e: soft POINT is_sphere + SUN strength; version 0.0.6-slice2e -->
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.4-multimesh`.
+`-DQT_WITH_CYCLES=ON`. Native `0.0.6-slice2e`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -18,6 +18,8 @@ this tree never feeds Auto clocks.
 | **2 — cube pixel-match + F12** | **PASS** | 256²/128 stock vs Session / F12 Δmax **4.77e-7**. `is_tracer=1` (QT_WITH_CYCLES). |
 | **2b — depsgraph simple sync** | **PASS** | Stock vs depsgraph-fed Session 256²/128 Δmax **5.96e-7**. `QT_SimpleScene` + `sync.py`. Simple scenes only. |
 | **2c — multi-mesh + multi-AREA** | **32/4 PASS, 256/128 1-px FAIL** | `QT_Scene` + `pack_scene`. Still-life 32²/4 Δmax **2.68e-6**. 256²/128 Δmax **0.00668** (1 silhouette pixel). Caps 32/16. |
+| **2d — random_id + POINT/SUN** | **hard POINT PASS** | Hard POINT 256²/128 Δmax **1.2e-7**. SUN ABI only (strength not claimed then). Native `0.0.5-slice2d`. |
+| **2e — soft POINT + SUN** | **PASS** | Soft POINT disk soft=0.25 256²/128 Δmax **1.19e-7**. SUN energy=200 256²/128 Δmax **3.81e-6**. `is_sphere=!use_soft_falloff`. Native `0.0.6-slice2e`. |
 
 Kitchens / textured Principled / HDR worlds still refuse with a named reason.
 
@@ -39,7 +41,7 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=1, session_probe=1, version 0.0.4-multimesh
+# ABI: is_tracer=1, session_probe=1, version 0.0.6-slice2e
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 blender --background --python tools/_quanttrace_f12_smoke.py -- \
@@ -57,7 +59,7 @@ See `SLICE2.md`. Working CPU binary after `make update` + cmake:
 ## ABI
 
 ```c
-const char *quanttrace_version(void);   /* "0.0.4-multimesh" */
+const char *quanttrace_version(void);   /* "0.0.6-slice2e" */
 int quanttrace_is_tracer(void);         /* 1 when QT_WITH_CYCLES */
 int quanttrace_render_scene_rgba(...);  /* depsgraph-fed QT_SimpleScene (1+1) */
 int quanttrace_render_qt_scene_rgba(...); /* N mesh + N AREA QT_Scene */
@@ -69,5 +71,5 @@ int quanttrace_render_cube_rgba(float *out, int cap, int *w, int *h);
 
 ## Out of scope until shader / light-type expand
 
-- Kitchen F12 / textured Principled / POINT/SUN/SPOT / HDR world
+- Kitchen F12 / textured Principled / SPOT / HDR world
 - ReSTIR / OptiX / Make it Fast / zip / store % claims

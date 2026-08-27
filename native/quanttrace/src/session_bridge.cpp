@@ -349,7 +349,9 @@ static void add_qt_light(Scene *scene, Shader *lamp_shader, const QT_Light *L)
     if (kind == QT_LIGHT_POINT) {
         PointLight *point = scene->create_node<PointLight>();
         point->set_radius(L->radius > 0.0f ? L->radius : 0.0f);
-        point->set_is_sphere(true);
+        /* Blender sync: is_sphere = !use_soft_falloff. Default soft falloff
+         * → disk (is_sphere=false). Hard point radius=0 ignores this flag. */
+        point->set_is_sphere(L->is_sphere != 0);
         light = point;
     }
     else if (kind == QT_LIGHT_SUN) {

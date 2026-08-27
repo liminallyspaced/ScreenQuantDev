@@ -115,3 +115,24 @@ pass    = max_abs < 1e-3
 Native returns `is_tracer=1` with QT_WITH_CYCLES (F12 wired for locked cube). The cube Combined
 pair at 256²/128 **is** a pass (Δmax 4.77e-7). That is not a speed claim
 and not an `SQ_QUANTTRACE` F12.
+
+
+## Slice 2e measured (2026-08-27 5pm ET)
+
+Soft POINT (`shadow_soft_size=0.25`, `use_soft_falloff=True` → disk) stock vs Session,
+Tabulated Sobol both sides:
+
+| Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|
+| 32² / 4 | 8.94e-8 | 1.63e-9 | PASS |
+| 256² / 128 | 1.19e-7 | 1.00e-9 | PASS |
+
+SUN (`energy=200`, `angle=0.0091803`, -Z→origin):
+
+| Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|
+| 32² / 4 | 3.81e-6 | 5.59e-9 | PASS |
+| 256² / 128 | 3.81e-6 | 2.40e-9 | PASS |
+
+Fix: pack `is_sphere = !use_soft_falloff` (was always true). Native `0.0.6-slice2e`.
+Still-life 256² 1px noise-class residue unchanged. No Classroom/loft claims.

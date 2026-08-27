@@ -126,6 +126,7 @@ typedef struct QT_Light {
   int kind;      /* QT_LIGHT_AREA / POINT / SUN */
   float radius;  /* POINT soft radius (shadow_soft_size) */
   float angle;   /* SUN angular diameter (radians) */
+  int is_sphere; /* POINT: Blender sync is_sphere = !use_soft_falloff (1=sphere, 0=disk) */
 } QT_Light;
 
 typedef struct QT_Scene {

@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2d landed** (2026-08-27 4pm PlugWalk ET). Blender `random_id` parity + object-local tfm + AREA/POINT/SUN. Hard POINT 256²/128 Δmax=1.2e-7 PASS. Still-life 32²/4 PASS; 256² still 1px noise-class residue on off-center silhouettes. SUN ABI wired, strength parity not claimed. `is_tracer=1`.
+Status: **Slice 2e landed** (2026-08-27 5pm PlugWalk ET). Soft POINT radius + `is_sphere=!use_soft_falloff` + SUN strength. Soft POINT (disk, soft=0.25) 256²/128 Δmax=1.19e-7 PASS; SUN energy=200 256²/128 Δmax=3.81e-6 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -670,5 +670,71 @@ Not multi-mesh-specific; not light-tree; not random_id. Noise-class silhouette r
 
 ### Next
 
-Soft POINT radius parity, SUN strength factor, textured Principled. Not ReSTIR. Not Classroom time %.
+Done 5pm: soft POINT + SUN strength. See 5pm section.
+
+
+---
+
+## 5pm PlugWalk (2026-08-27) — Slice 2e: soft POINT + SUN strength
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### Root cause (soft POINT)
+
+Hard POINT (`shadow_soft_size=0`) already matched. Soft radius packing existed
+(`shadow_soft_size` → `PointLight::set_radius`), but Session always forced
+`set_is_sphere(true)`. Official Blender Cycles sync is:
+
+```
+is_sphere = !use_soft_falloff
+```
+
+New Blender POINT defaults: `use_soft_falloff=True` → **disk** soft point
+(`is_sphere=false`), not a true sphere. Mismatch would sample sphere cone vs
+stock disk.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `QT_Light.is_sphere` (int); POINT packs `!use_soft_falloff` |
+| Native | `PointLight::set_is_sphere(L->is_sphere != 0)` |
+| Soft gate | disk soft=0.25 m, normalize=True, Tabulated Sobol both sides |
+| SUN | same strength formula `color*energy*exp2(exposure)`; aim -Z at origin |
+| Version | `0.0.6-slice2e` |
+| Tools | `_quanttrace_point_scene/smoke.py` (`--soft-size`, `--no-soft-falloff`); `_quanttrace_sun_scene/smoke.py` |
+
+### Measured — soft POINT (disk, soft_falloff=True, soft=0.25)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Soft POINT Session | 32² / 4 | **8.94e-8** | 1.63e-9 | 0 / 1024 | **PASS** |
+| Soft POINT Session | 256² / 128 | **1.19e-7** | 1.00e-9 | 0 / 65536 | **PASS** |
+| Hard POINT regression | 32² / 4 | **8.94e-8** | 1.35e-9 | 0 / 1024 | **PASS** |
+| Sphere soft (`--no-soft-falloff`) | 32² / 4 | **2.98e-8** | 4.26e-10 | 0 / 1024 | **PASS** |
+
+### Measured — SUN (energy=200, angle=0.0091803, -Z→origin)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| SUN Session | 32² / 4 | **3.81e-6** | 5.59e-9 | 0 / 1024 | **PASS** |
+| SUN Session | 256² / 128 | **3.81e-6** | 2.40e-9 | 0 / 65536 | **PASS** |
+
+4pm "SUN strength unmet" was a bad orientation/energy probe, not a missing
+scale factor. With -Z aim + `color*energy*exp2(exposure)` the gate passes.
+
+Proof plate: `docs/proof/quanttrace-softpoint-32-pair.png` (32² preview only).
+
+### Honesty
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains
+  documented — not "fixed" this hour.
+- Textured Principled / SPOT / HDR / kitchens still refuse.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Textured Principled, SPOT, close still-life 1px residue. Not ReSTIR. Not Classroom time %.
 

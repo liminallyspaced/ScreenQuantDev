@@ -5,7 +5,7 @@
 # for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
 # Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN lights, constant Principled.
 # Linked Principled sockets / SPOT / HDR worlds still refuse.
-# Slice 2d: AREA + POINT + SUN; Blender random_id from object name.
+# Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Make it Fast stays on stock Cycles.
 
 from __future__ import annotations
@@ -424,16 +424,21 @@ def pack_scene(scene, depsgraph=None) -> dict:
             sizeu = sizev = 0.0
             radius = float(getattr(lamp_data, "shadow_soft_size", 0.0) or 0.0)
             angle = 0.0
+            # Blender Cycles sync: is_sphere = !use_soft_falloff
+            soft_fo = bool(getattr(lamp_data, "use_soft_falloff", True))
+            is_sphere = 0 if soft_fo else 1
         elif ltype == "SUN":
             kind = 2  # QT_LIGHT_SUN
             sizeu = sizev = 0.0
             radius = 0.0
             angle = float(getattr(lamp_data, "angle", 0.0091803) or 0.0091803)
+            is_sphere = 0
         else:
             kind = 0  # QT_LIGHT_AREA
             sizeu, sizev = _area_light_sizes(lamp_data)
             radius = 0.0
             angle = 0.0
+            is_sphere = 0
         packed_lights.append({
             "tfm": _matrix_3x4(lamp.matrix_world),
             "sizeu": sizeu,
@@ -443,6 +448,7 @@ def pack_scene(scene, depsgraph=None) -> dict:
             "kind": kind,
             "radius": radius,
             "angle": angle,
+            "is_sphere": is_sphere,
         })
 
     width, height, samples = _render_size(scene)
@@ -577,6 +583,7 @@ def make_qt_scene_types():
             ("kind", ctypes.c_int),
             ("radius", ctypes.c_float),
             ("angle", ctypes.c_float),
+            ("is_sphere", ctypes.c_int),
         ]
 
     class QT_Scene(ctypes.Structure):
@@ -642,6 +649,7 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
         lights_arr[i].kind = int(L.get("kind", 0))
         lights_arr[i].radius = float(L.get("radius", 0.0))
         lights_arr[i].angle = float(L.get("angle", 0.0))
+        lights_arr[i].is_sphere = int(L.get("is_sphere", 0))
     desc = QT_Scene()
     desc.width = int(packed["width"])
     desc.height = int(packed["height"])
