@@ -8,7 +8,8 @@
  * SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Slice 2b: quanttrace_render_scene_rgba builds from a QT_SimpleScene
  * packed by Python depsgraph walk (camera/mesh/Principled/area/world).
- * Slice 2c: quanttrace_render_qt_scene_rgba — N meshes + N AREA lights.
+ * Slice 2c: quanttrace_render_qt_scene_rgba — N meshes + N lights.
+ * Slice 2g: SPOT (spot_size/spot_blend).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -378,6 +379,18 @@ static void add_qt_light(Scene *scene, Shader *lamp_shader, const QT_Light *L)
          * → disk (is_sphere=false). Hard point radius=0 ignores this flag. */
         point->set_is_sphere(L->is_sphere != 0);
         light = point;
+    }
+    else if (kind == QT_LIGHT_SPOT) {
+        /* Blender sync (intern/cycles/blender/light.cpp):
+         * spotsize→angle, spotblend→smooth; PointLight base sets
+         * radius + is_sphere=!use_soft_falloff. Emit along object -Z. */
+        SpotLight *spot = scene->create_node<SpotLight>();
+        const float ang = L->angle > 0.0f ? L->angle : 0.785398f; /* π/4 default */
+        spot->set_angle(ang);
+        spot->set_smooth(L->smooth); /* RNA spot_blend, may be 0 */
+        spot->set_radius(L->radius > 0.0f ? L->radius : 0.0f);
+        spot->set_is_sphere(L->is_sphere != 0);
+        light = spot;
     }
     else if (kind == QT_LIGHT_SUN) {
         SunLight *sun = scene->create_node<SunLight>();

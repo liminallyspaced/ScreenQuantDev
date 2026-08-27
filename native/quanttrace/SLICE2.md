@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2e landed** (2026-08-27 5pm PlugWalk ET). Soft POINT radius + `is_sphere=!use_soft_falloff` + SUN strength. Soft POINT (disk, soft=0.25) 256²/128 Δmax=1.19e-7 PASS; SUN energy=200 256²/128 Δmax=3.81e-6 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`.
+Status: **Slice 2g landed** (2026-08-27 7pm PlugWalk ET). SPOT hard + soft PASS. Hard SPOT 256²/128 Δmax=1.19e-7; soft disk soft=0.25 256²/128 Δmax=1.19e-7. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.8-slice2g`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -778,5 +778,49 @@ Proof plate: `docs/proof/quanttrace-tex-32-pair.png` (32 preview only).
 
 ### Next
 
-SPOT, mapping/TEX_COORD, more Principled sockets, close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 7pm: SPOT. See 7pm section. Mapping/TEX_COORD / still-life 1px still open.
 
+
+---
+
+## 7pm PlugWalk (2026-08-27) — Slice 2g: SPOT
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `QT_LIGHT_SPOT=3` + `QT_Light.smooth` (spot_blend) |
+| Packer | accepts SPOT; `spot_size`→angle, `spot_blend`→smooth, soft radius + `is_sphere=!use_soft_falloff` |
+| Native | `SpotLight` via official Blender sync shape (`intern/cycles/blender/light.cpp`) |
+| Version | `0.0.8-slice2g` |
+| Tools | `_quanttrace_spot_scene/smoke.py` |
+
+### Measured — hard SPOT (size=π/4, blend=0.15, soft=0, energy=1000, -Z→origin)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Hard SPOT Session | 32² / 4 | **8.94e-8** | 1.35e-9 | 0 / 1024 | **PASS** |
+| Hard SPOT Session | 256² / 128 | **1.19e-7** | 1.02e-9 | 0 / 65536 | **PASS** |
+
+### Measured — soft SPOT (disk, soft_falloff=True, soft=0.25)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Soft SPOT Session | 32² / 4 | **8.94e-8** | — | 0 / 1024 | **PASS** |
+| Soft SPOT Session | 256² / 128 | **1.19e-7** | 1.00e-9 | 0 / 65536 | **PASS** |
+
+Proof plate: `docs/proof/quanttrace-spot-32-pair.png` (32² preview only).
+
+### Honesty
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented.
+- HDR / kitchens / mapping nodes still refuse.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Mapping/TEX_COORD, more Principled sockets, close still-life 1px. Not ReSTIR. Not Classroom time %.

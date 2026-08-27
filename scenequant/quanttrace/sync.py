@@ -3,10 +3,11 @@
 # Walks a Blender depsgraph and packs camera / meshes / Principled /
 # AREA lights / world into ctypes QT_SimpleScene (1+1) or QT_Scene (N+N)
 # for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
-# Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN lights, constant Principled.
+# Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN/SPOT lights, constant Principled.
 # Slice 2f: TEX_IMAGE → Principled Base Color (default UV, disk filepath).
-# Other linked sockets / SPOT / HDR worlds still refuse.
+# Other linked sockets / HDR worlds still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
+# Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
 
 from __future__ import annotations
@@ -474,9 +475,9 @@ def classify_scene(scene, depsgraph=None) -> dict:
     for lamp in lights:
         data = getattr(lamp, "data", None)
         ltype = getattr(data, "type", None) if data is not None else None
-        if data is None or ltype not in ("AREA", "POINT", "SUN"):
+        if data is None or ltype not in ("AREA", "POINT", "SUN", "SPOT"):
             raise QuantTraceSyncError(
-                f"light {getattr(lamp, 'name', '?')} must be AREA/POINT/SUN "
+                f"light {getattr(lamp, 'name', '?')} must be AREA/POINT/SUN/SPOT "
                 f"(got {ltype})"
             )
     mats = []
@@ -561,6 +562,7 @@ def pack_scene(scene, depsgraph=None) -> dict:
             sizeu = sizev = 0.0
             radius = float(getattr(lamp_data, "shadow_soft_size", 0.0) or 0.0)
             angle = 0.0
+            smooth = 0.0
             # Blender Cycles sync: is_sphere = !use_soft_falloff
             soft_fo = bool(getattr(lamp_data, "use_soft_falloff", True))
             is_sphere = 0 if soft_fo else 1
@@ -569,12 +571,23 @@ def pack_scene(scene, depsgraph=None) -> dict:
             sizeu = sizev = 0.0
             radius = 0.0
             angle = float(getattr(lamp_data, "angle", 0.0091803) or 0.0091803)
+            smooth = 0.0
             is_sphere = 0
+        elif ltype == "SPOT":
+            kind = 3  # QT_LIGHT_SPOT
+            sizeu = sizev = 0.0
+            radius = float(getattr(lamp_data, "shadow_soft_size", 0.0) or 0.0)
+            # Blender: spotsize→angle, spotblend→smooth
+            angle = float(getattr(lamp_data, "spot_size", 0.785398) or 0.785398)
+            smooth = float(getattr(lamp_data, "spot_blend", 0.15) or 0.0)
+            soft_fo = bool(getattr(lamp_data, "use_soft_falloff", True))
+            is_sphere = 0 if soft_fo else 1
         else:
             kind = 0  # QT_LIGHT_AREA
             sizeu, sizev = _area_light_sizes(lamp_data)
             radius = 0.0
             angle = 0.0
+            smooth = 0.0
             is_sphere = 0
         packed_lights.append({
             "tfm": _matrix_3x4(lamp.matrix_world),
@@ -586,6 +599,7 @@ def pack_scene(scene, depsgraph=None) -> dict:
             "radius": radius,
             "angle": angle,
             "is_sphere": is_sphere,
+            "smooth": smooth,
         })
 
     width, height, samples = _render_size(scene)
@@ -737,6 +751,7 @@ def make_qt_scene_types():
             ("radius", ctypes.c_float),
             ("angle", ctypes.c_float),
             ("is_sphere", ctypes.c_int),
+            ("smooth", ctypes.c_float),
         ]
 
     class QT_Scene(ctypes.Structure):
@@ -816,6 +831,7 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
         lights_arr[i].radius = float(L.get("radius", 0.0))
         lights_arr[i].angle = float(L.get("angle", 0.0))
         lights_arr[i].is_sphere = int(L.get("is_sphere", 0))
+        lights_arr[i].smooth = float(L.get("smooth", 0.0))
     desc = QT_Scene()
     desc.width = int(packed["width"])
     desc.height = int(packed["height"])

@@ -5,6 +5,7 @@
  * Slice 2b: depsgraph-fed simple scene (camera/mesh/Principled/area/world).
  * Slice 2c: multi-mesh + multi-AREA (constant Principled per mesh).
  * Slice 2f: optional TEX_IMAGE on Principled Base Color + corner UVs.
+ * Slice 2g: SPOT (spot_size/spot_blend + soft radius / is_sphere).
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -99,8 +100,8 @@ QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
                                            int *out_h);
 
 /* Slice 2c: N meshes + N AREA lights (constant Principled per mesh).
- * Caps: QT_MAX_MESHES / QT_MAX_LIGHTS. AREA + POINT + SUN.
- * SPOT / HDR worlds still refuse on the Python packer.
+ * Caps: QT_MAX_MESHES / QT_MAX_LIGHTS. AREA + POINT + SUN + SPOT.
+ * HDR worlds still refuse on the Python packer.
  */
 typedef struct QT_Mesh {
   int nverts;
@@ -123,17 +124,19 @@ typedef struct QT_Mesh {
 #define QT_LIGHT_AREA  0
 #define QT_LIGHT_POINT 1
 #define QT_LIGHT_SUN   2
+#define QT_LIGHT_SPOT  3
 
 typedef struct QT_Light {
-  float tfm[12]; /* object matrix_world 3x4 (AREA emit -Z; SUN dir -Z) */
-  float sizeu;   /* AREA sizeu; POINT unused; SUN unused */
+  float tfm[12]; /* object matrix_world 3x4 (AREA/SPOT emit -Z; SUN dir -Z) */
+  float sizeu;   /* AREA sizeu; POINT unused; SUN unused; SPOT unused */
   float sizev;   /* AREA sizev */
   float strength[3]; /* color * energy * exp2(exposure) */
   const char *name; /* Blender object name for random_id; may be NULL */
-  int kind;      /* QT_LIGHT_AREA / POINT / SUN */
-  float radius;  /* POINT soft radius (shadow_soft_size) */
-  float angle;   /* SUN angular diameter (radians) */
-  int is_sphere; /* POINT: Blender sync is_sphere = !use_soft_falloff (1=sphere, 0=disk) */
+  int kind;      /* QT_LIGHT_AREA / POINT / SUN / SPOT */
+  float radius;  /* POINT/SPOT soft radius (shadow_soft_size) */
+  float angle;   /* SUN angular diameter; SPOT spot_size (radians) */
+  int is_sphere; /* POINT/SPOT: is_sphere = !use_soft_falloff (1=sphere, 0=disk) */
+  float smooth;  /* SPOT spot_blend (0..1); unused otherwise */
 } QT_Light;
 
 typedef struct QT_Scene {
