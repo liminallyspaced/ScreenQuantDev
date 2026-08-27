@@ -1,7 +1,7 @@
 # QuantTrace cube pixel-match — acceptance gate
 
 Date: 2026-08-27 (7am PlugWalk)
-Status: **gate PASS** (2026-08-27 12pm) — stock Cycles vs Session Combined at 256²/128: Δmax=4.77e-7 < 1e-3 (MAE 3.57e-9). `quanttrace_is_tracer()` still **0** (SQ_QUANTTRACE.render is not wired; F12 still refuses). See `native/quanttrace/SLICE2.md` 12pm.
+Status: **gate PASS** + **F12 wire** (2026-08-27 1pm) — stock Cycles vs `SQ_QUANTTRACE` F12 Combined at 256²/128: Δmax=4.77e-7 < 1e-3 (MAE 3.57e-9). `quanttrace_is_tracer()` **1** when `QT_WITH_CYCLES`. Locked cube only; depsgraph sync not yet. See `native/quanttrace/SLICE2.md` 1pm.
 Design parent: `docs/research/SIDECAR-INTEGRATOR.md` Slice 1.
 Build order: `native/quanttrace/SLICE2.md`.
 
@@ -112,6 +112,6 @@ pass    = max_abs < 1e-3
 
 ## Honesty
 
-Hello lib still returns `is_tracer=0` (F12 not wired). The cube Combined
+Native returns `is_tracer=1` with QT_WITH_CYCLES (F12 wired for locked cube). The cube Combined
 pair at 256²/128 **is** a pass (Δmax 4.77e-7). That is not a speed claim
 and not an `SQ_QUANTTRACE` F12.

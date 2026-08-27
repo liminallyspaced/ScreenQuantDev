@@ -1,14 +1,12 @@
-/* QuantTrace Slice 2 — Cycles Session API bridge sketch.
+/* QuantTrace Slice 2 — Cycles Session API bridge + F12 wire.
  *
  * Default build: stub (QT_WITH_CYCLES off). Compiles into libquanttrace
- * next to hello.c. quanttrace_is_tracer() stays 0 in hello.c.
+ * next to hello.c. quanttrace_is_tracer() == 0.
  *
- * -DQT_WITH_CYCLES=1: this file WILL call ccl::Session / Scene / Mesh /
- * AreaLight / PrincipledBsdfNode. After Session::wait it writes Combined
- * as linear RGBA float OpenEXR (zip) when exr_path is set. It still
- * does not flip is_tracer. Pixel-match vs stock Cycles Combined is later.
- * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override the locked 256/256/128
- * defaults (smoke: 32/32/4).
+ * -DQT_WITH_CYCLES=1: ccl::Session locked-cube uni-PT. Combined matches
+ * stock Cycles (256²/128 Δmax ~5e-7). quanttrace_is_tracer() == 1 so
+ * SQ_QUANTTRACE.render can land Combined in the Image Editor.
+ * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
  *       src/app/cycles_standalone.cpp, src/app/cycles_xml.cpp
@@ -18,6 +16,11 @@
 #include "quanttrace.h"
 
 #ifndef QT_WITH_CYCLES
+
+extern "C" int quanttrace_is_tracer(void)
+{
+    return 0;
+}
 
 extern "C" int quanttrace_session_probe(void)
 {
@@ -29,7 +32,15 @@ extern "C" int quanttrace_render_cube(const char * /*exr_path*/)
     return -1;
 }
 
-#else /* QT_WITH_CYCLES — real Session path, still not a product tracer */
+extern "C" int quanttrace_render_cube_rgba(float * /*out_rgba*/,
+                                          int /*out_capacity*/,
+                                          int * /*out_w*/,
+                                          int * /*out_h*/)
+{
+    return -1;
+}
+
+#else /* QT_WITH_CYCLES — Session locked-cube uni-PT; is_tracer=1 */
 
 #include <cmath>
 #include <cstdio>
@@ -371,7 +382,11 @@ static bool write_combined_exr(const char *path,
     return ok;
 }
 
-static int run_cube_session(const char *exr_path)
+static int run_cube_session(const char *exr_path,
+                            float *out_rgba,
+                            int out_capacity,
+                            int *out_w,
+                            int *out_h)
 {
     log_init(nullptr);
     path_init();
@@ -463,6 +478,26 @@ static int run_cube_session(const char *exr_path)
                 exr_path);
     }
 
+    if (out_rgba != nullptr) {
+        if (out_capacity < static_cast<int>(expect)) {
+            fprintf(stderr,
+                    "quanttrace: rgba capacity %d < %zu\n",
+                    out_capacity,
+                    expect);
+            return -1;
+        }
+        /* Blender RenderPass.rect / Image.pixels are bottom-up (same as
+         * Cycles Combined). EXR file write above Y-flips for top-down files.
+         * Do NOT flip here or write_still EXR will be inverted vs Session. */
+        std::memcpy(out_rgba, rgba.data(), expect * sizeof(float));
+    }
+    if (out_w) {
+        *out_w = width;
+    }
+    if (out_h) {
+        *out_h = height;
+    }
+
     return 0;
 }
 
@@ -470,14 +505,28 @@ static int run_cube_session(const char *exr_path)
 
 CCL_NAMESPACE_END
 
+extern "C" int quanttrace_is_tracer(void)
+{
+    /* Locked-cube Combined matches stock Cycles; F12 path is wired. */
+    return 1;
+}
+
 extern "C" int quanttrace_session_probe(void)
 {
-    return 1; /* Session path compiled in. is_tracer still 0. */
+    return 1;
 }
 
 extern "C" int quanttrace_render_cube(const char *exr_path)
 {
-    return ccl::run_cube_session(exr_path);
+    return ccl::run_cube_session(exr_path, nullptr, 0, nullptr, nullptr);
+}
+
+extern "C" int quanttrace_render_cube_rgba(float *out_rgba,
+                                          int out_capacity,
+                                          int *out_w,
+                                          int *out_h)
+{
+    return ccl::run_cube_session(nullptr, out_rgba, out_capacity, out_w, out_h);
 }
 
 #endif /* QT_WITH_CYCLES */

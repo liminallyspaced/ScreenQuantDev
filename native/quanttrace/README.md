@@ -1,6 +1,8 @@
 # QuantTrace native (`libquanttrace`)
 
-**Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7). This is **not a path tracer** F12 yet: `quanttrace_is_tracer()` is still `0` — `SQ_QUANTTRACE.render` is not wired.
+**Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
+`SQ_QUANTTRACE.render` F12 lands Combined for the locked cube.
+`quanttrace_is_tracer()` is **1** when built with `-DQT_WITH_CYCLES=ON`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -10,10 +12,10 @@ this tree never feeds Auto clocks.
 
 | Slice | Status | What |
 |---|---|---|
-| **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` and `quanttrace_is_tracer()` (`0`). |
-| **2 — cube pixel-match** | **PASS** | 256²/128 stock vs Session Δmax **4.77e-7**. `is_tracer=0` (F12 not wired). |
+| **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` / `quanttrace_is_tracer()`. |
+| **2 — cube pixel-match + F12** | **PASS** | 256²/128 stock vs Session / F12 Δmax **4.77e-7**. `is_tracer=1` (QT_WITH_CYCLES). Locked cube only. |
 
-Do not pretend this traces. Python `SQ_QUANTTRACE` keeps `kernel_ready` False and refuses F12.
+Depsgraph sync for arbitrary scenes is **not** done — non-cube F12 refuses with a named reason.
 
 ## Build (Linux) — hello stub (default)
 
@@ -21,24 +23,23 @@ Do not pretend this traces. Python `SQ_QUANTTRACE` keeps `kernel_ready` False an
 cd native/quanttrace
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-# produces build/libquanttrace.so
 # ABI: is_tracer=0, session_probe=0, render_cube=-1
 ```
 
-## Build (Linux) — Session path (`QT_WITH_CYCLES=ON`)
+## Build (Linux) — Session + F12 (`QT_WITH_CYCLES=ON`)
 
 Needs a local `native/cycles-src` tree already built (gitignored; see `SLICE2.md`).
-Default stays OFF so a no-Cycles checkout still builds the stub.
 
 ```bash
 cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=0, session_probe=1.
-# Smoke (not the cube gate):
+# ABI: is_tracer=1, session_probe=1, version 0.0.2-cube-f12
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
+blender --background --python tools/_quanttrace_f12_smoke.py -- \
+  --res 32 --samples 4 --out /tmp/qt_f12.exr
 ```
 
 RPATH is baked; ctypes does not need `LD_LIBRARY_PATH`.
@@ -52,14 +53,15 @@ See `SLICE2.md`. Working CPU binary after `make update` + cmake:
 ## ABI
 
 ```c
-const char *quanttrace_version(void);   /* "0.0.1-hello" */
-int quanttrace_is_tracer(void);         /* 0 until Combined exists */
-int quanttrace_session_probe(void);     /* 0 stub / 1 if QT_WITH_CYCLES compiled in */
-int quanttrace_render_cube(const char *exr_path); /* 0 writes linear RGBA zip EXR when path set */
+const char *quanttrace_version(void);   /* "0.0.2-cube-f12" */
+int quanttrace_is_tracer(void);         /* 1 when QT_WITH_CYCLES */
+int quanttrace_session_probe(void);     /* 0 stub / 1 if QT_WITH_CYCLES */
+int quanttrace_render_cube(const char *exr_path);
+int quanttrace_render_cube_rgba(float *out, int cap, int *w, int *h);
 /* env QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES default 256/256/128 */
 ```
 
-## Out of scope until pixel-match
+## Out of scope until depsgraph sync
 
-- `is_tracer=1`
+- Arbitrary .blend F12 (refuse with reason)
 - ReSTIR / OptiX / Make it Fast / zip / store % claims

@@ -1,15 +1,15 @@
 # Session Combined EXR smoke for libquanttrace.so (QT_WITH_CYCLES).
 #
-# Proves Session::start/wait + OIIO write via ctypes, NOT the cube gate.
+# Proves Session::start/wait + OIIO write via ctypes.
 # Locked defaults remain 256/256/128 (QUANTTRACE-CUBE.md). This probe
 # sets QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES to 32/32/4.
-# is_tracer must stay 0. RPATH is baked; do not require LD_LIBRARY_PATH.
+# After F12 wire: is_tracer must be 1 when QT_WITH_CYCLES is compiled in.
+# RPATH is baked; do not require LD_LIBRARY_PATH.
 #
 #   python3 tools/_quanttrace_session_smoke.py
 #
-# Exit 0 only if load + is_tracer==0 + session_probe==1 + render_cube==0
+# Exit 0 only if load + is_tracer==1 + session_probe==1 + render_cube==0
 # and the EXR exists, size>0, and starts with OpenEXR magic.
-# Native stderr also prints Combined RGB min/max (look_at is Cycles +Z camera).
 
 from __future__ import annotations
 
@@ -47,8 +47,8 @@ def main() -> int:
     print("version=", version)
     print("is_tracer=", is_tracer)
     print("session_probe=", session_probe)
-    if is_tracer != 0:
-        print("FAIL is_tracer must stay 0")
+    if is_tracer != 1:
+        print("FAIL is_tracer must be 1 for QT_WITH_CYCLES F12 wire")
         return 1
     if session_probe != 1:
         print("FAIL session_probe must be 1 for QT_WITH_CYCLES .so")

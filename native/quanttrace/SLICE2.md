@@ -1,11 +1,11 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **cube gate PASS** (2026-08-27 12pm PlugWalk ET). 256²/128 Δmax=4.77e-7 < 1e-3. `is_tracer` still **0** (F12 not wired). 11am FAIL was camera Y vs `blender_camera_matrix`.
+Status: **cube gate PASS + F12 wire** (2026-08-27 1pm PlugWalk ET). 256²/128 stock vs SQ_QUANTTRACE F12 Δmax=4.77e-7. `is_tracer=1` (QT_WITH_CYCLES). Locked cube only; depsgraph sync next.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 
-**Do not** set `is_tracer=1` until `SQ_QUANTTRACE.render` is wired to the Session kernel (cube Combined exists; F12 still refuses).
+`is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
 
@@ -510,3 +510,38 @@ EXR artifacts under `/tmp/quanttrace_cube_pair/` — **not** committed.
 
 Wire `SQ_QUANTTRACE.render` to Session for the locked cube (then is_tracer=1). Not ReSTIR. Not Classroom time %.
 
+---
+
+## 1pm PlugWalk (2026-08-27) — SQ_QUANTTRACE F12 wire
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `quanttrace_render_cube_rgba` (bottom-up Combined, Blender pass.rect) |
+| `is_tracer` | **1** in session_bridge when QT_WITH_CYCLES (hello.c owns version only → `0.0.2-cube-f12`) |
+| `SQ_QUANTTRACE.render` | `begin_result` / `foreach_set` / `end_result` when `kernel_ready` |
+| Gate | Non-cube scenes → `QuantTraceUnsupported` (loud refuse) |
+| Tools | `tools/_quanttrace_f12_smoke.py` |
+
+### Measured
+
+| Path | Res / spp | Wall | Δmax vs stock | Gate |
+|---|---|---|---|---|
+| Session EXR vs F12 EXR | 32² / 4 | F12 0.011 s | **0** | match |
+| Stock Cycles vs F12 | 256² / 128 | F12 0.348 s | **4.77e-7** | **PASS** |
+
+Proof plate: `docs/proof/quanttrace-f12-cube-pair.png` (preview only).
+
+### Honesty
+
+- Depsgraph sync **not** done — F12 still hardcodes the locked cube Session path.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Depsgraph → `ccl::Scene` exporter for camera / mesh / Principled / area / world (Slice 2 scene-agnostic). Not ReSTIR. Not Classroom time %.

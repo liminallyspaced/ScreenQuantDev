@@ -1,9 +1,10 @@
 /* QuantTrace native ABI.
  *
- * Slice 1: version + is_tracer (always 0 until a kernel exists).
- * Slice 2: optional Session probe / cube render entry. Probe==1 only means
- * the Cycles Session path was compiled in; it is NOT a tracer and does NOT
- * flip quanttrace_is_tracer(). Python SQ_QUANTTRACE still refuses F12.
+ * Slice 1: version + is_tracer.
+ * Slice 2: Session cube Combined (pixel-match PASS) + F12 wire.
+ *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
+ *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
+ * Make it Fast stays on stock Cycles.
  */
 #ifndef QUANTTRACE_H
 #define QUANTTRACE_H
@@ -19,21 +20,28 @@ extern "C" {
 #endif
 
 QT_EXPORT const char *quanttrace_version(void);
+
+/* 0 = stub / no Session. 1 = QT_WITH_CYCLES + locked-cube F12 path. */
 QT_EXPORT int quanttrace_is_tracer(void);
 
-/* 0 = Session path not compiled (stub). 1 = QT_WITH_CYCLES compiled in.
- * Never implies pixel-match or is_tracer=1.
- */
+/* 0 = Session path not compiled (stub). 1 = QT_WITH_CYCLES compiled in. */
 QT_EXPORT int quanttrace_session_probe(void);
 
-/* Render the locked cube via ccl::Session once linked. Returns 0 on
- * success, -1 if the Session path is not compiled / Combined empty / EXR
- * write failed. exr_path may be NULL or empty (Combined stays in-memory).
- * When non-empty, writes linear RGBA float OpenEXR (zip).
- * QUANTTRACE_CUBE_WIDTH / HEIGHT / SAMPLES override locked 256 / 256 / 128
- * (QUANTTRACE-CUBE.md). Smoke this hour: 32 / 32 / 4.
+/* Render the locked cube via ccl::Session. Returns 0 on success, -1 on
+ * failure. exr_path may be NULL/empty (Combined stays in-memory).
+ * When non-empty, writes linear RGBA float OpenEXR (zip), top-down.
+ * QUANTTRACE_CUBE_WIDTH / HEIGHT / SAMPLES override locked 256 / 256 / 128.
  */
 QT_EXPORT int quanttrace_render_cube(const char *exr_path);
+
+/* Same Session path; fills out_rgba with bottom-up linear RGBA float
+ * (Blender RenderPass.rect / Image.pixels convention). out_capacity is
+ * float count (must be >= w*h*4). Writes *out_w / *out_h. Returns 0.
+ */
+QT_EXPORT int quanttrace_render_cube_rgba(float *out_rgba,
+                                          int out_capacity,
+                                          int *out_w,
+                                          int *out_h);
 
 #ifdef __cplusplus
 }

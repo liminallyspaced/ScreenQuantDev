@@ -1,12 +1,12 @@
 # ctypes.CDLL probe for native/quanttrace/build/libquanttrace.so
 #
 # Proves the QT_WITH_CYCLES addon .so loads (version / is_tracer / session_probe).
-# Does NOT call quanttrace_render_cube (256^2 / 128 spp is not this gate).
-# Does NOT flip is_tracer. RPATH is baked; do not require LD_LIBRARY_PATH.
+# Does NOT call quanttrace_render_cube (that is session smoke / F12).
+# RPATH is baked; do not require LD_LIBRARY_PATH.
 #
 #   python3 tools/_quanttrace_load_probe.py
 #
-# Exit 0 only if load succeeds, is_tracer==0, session_probe==1.
+# Exit 0 only if load succeeds, is_tracer==1, session_probe==1.
 
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ def main() -> int:
     print("version=", version)
     print("is_tracer=", is_tracer)
     print("session_probe=", session_probe)
-    if is_tracer != 0:
-        print("FAIL is_tracer must stay 0")
+    if is_tracer != 1:
+        print("FAIL is_tracer must be 1 for QT_WITH_CYCLES F12 wire")
         return 1
     if session_probe != 1:
         print("FAIL session_probe must be 1 for QT_WITH_CYCLES .so")

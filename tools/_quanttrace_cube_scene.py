@@ -10,7 +10,8 @@
 #   blender --background --python tools/_quanttrace_cube_scene.py -- --save /tmp/quanttrace_cube.blend
 #   blender --background --python tools/_quanttrace_cube_scene.py -- --render --samples 8 --res 64
 #
-# CPU only. No user GPU. No Make it Fast. No QuantTrace F12 (is_tracer=0).
+# CPU only. No user GPU. No Make it Fast. Stock Cycles reference only
+# (QuantTrace F12 is tools/_quanttrace_f12_smoke.py).
 
 from __future__ import annotations
 
@@ -249,7 +250,7 @@ def describe(scene, cube, lamp, cam):
           if "Background" in scene.world.node_tree.nodes else "?")
     print("  view_transform", scene.view_settings.view_transform)
     print("  objects", [o.name for o in scene.objects])
-    print("  is_tracer=0 — this script only builds stock Cycles reference")
+    print("  stock Cycles reference only (QuantTrace F12 is _quanttrace_f12_smoke.py)")
 
 
 def maybe_render(scene, args):
