@@ -1,10 +1,11 @@
-# QuantTrace RenderEngine stub — class contract + refuse path.
+# QuantTrace RenderEngine stub — class contract + refuse + native hello load.
 # Duck-typed engine hooks; no bpy, no GPU, no F12.
 #   python3 tests/test_quanttrace.py
 
 import importlib.util
 import os
 import sys
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _harness  # noqa: E402
@@ -46,6 +47,21 @@ class FakeEngine:
         self.errors.append(message)
 
 
+class FakeCDLL:
+    """ctypes.CDLL stand-in for hello / tracer ABI."""
+
+    def __init__(self, version=b"0.0.1-hello", is_tracer=0, path="fake"):
+        self._version = version
+        self._is_tracer = is_tracer
+        self._path = path
+        self.quanttrace_version = mock.Mock(return_value=version)
+        self.quanttrace_version.restype = None
+        self.quanttrace_version.argtypes = None
+        self.quanttrace_is_tracer = mock.Mock(return_value=is_tracer)
+        self.quanttrace_is_tracer.restype = None
+        self.quanttrace_is_tracer.argtypes = None
+
+
 def main():
     engine = _load("scenequant/quanttrace/engine.py")
 
@@ -62,35 +78,124 @@ def main():
           "label does not claim speed or quality")
     check(callable(getattr(cls, "render", None)), "render method exists")
     check(engine.ENGINE_ID == "SQ_QUANTTRACE", "ENGINE_ID constant")
-    check(engine.kernel_ready() is False, "kernel_ready is False (no native .so)")
 
-    section("render refuses — not built")
-    fake = FakeEngine()
-    raised = None
-    try:
-        engine.refuse_render(fake, None)
-    except engine.QuantTraceNotBuilt as exc:
-        raised = exc
-    check(raised is not None, "refuse_render raises QuantTraceNotBuilt")
-    msg = str(raised).lower()
-    check("not built" in msg, "exception mentions not built")
-    check("cycles" in msg and "make it fast" in msg,
-          "exception points at stock Cycles / Make it Fast")
-    check("path-trace" in msg or "does not path-trace" in msg,
-          "exception says it does not path-trace")
-    check(any("not built" in str(item).lower() for item in fake.errors),
-          "error_set got the not-built message")
-    check(any("not built" in str(item).lower() for item in fake.reports),
-          "report() got the not-built message")
-    check(any("not built" in str(item).lower() for item in fake.stats),
-          "update_stats got the not-built message")
-    check(fake.progress == [1.0], "update_progress(1.0) on refuse")
+    section("fallback — no native lib")
+    engine._reset_native_probe_for_tests()
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("QUANTTRACE_LIB", None)
+        # Force every candidate path to miss; ignore a real build/ .so on disk.
+        with mock.patch.object(engine, "_candidate_lib_paths",
+                               return_value=iter(["/no/such/libquanttrace.so"])):
+            engine._reset_native_probe_for_tests()
+            check(engine.native_lib_loaded() is False, "native_lib_loaded False when missing")
+            check(engine.kernel_ready() is False, "kernel_ready False when missing")
+            msg = engine.not_built_message().lower()
+            check("not built" in msg, "fallback message mentions not built")
+            check("does not path-trace" in msg or "path-trace" in msg,
+                  "fallback message says does not path-trace")
+            check("make it fast" in msg, "fallback points at Make it Fast")
+            fake = FakeEngine()
+            raised = None
+            try:
+                engine.refuse_render(fake, None)
+            except engine.QuantTraceNotBuilt as exc:
+                raised = exc
+            check(raised is not None, "refuse_render raises when lib missing")
+            check("not built" in str(raised).lower(), "missing-lib exception: not built")
+            check(any("not built" in str(item).lower() for item in fake.errors),
+                  "error_set got fallback not-built message")
+
+    section("hello loaded — is_tracer==0 still refuses")
+    engine._reset_native_probe_for_tests()
+    fake_lib = FakeCDLL(version=b"0.0.1-hello", is_tracer=0)
+    hello_path = "/tmp/fake/libquanttrace.so"
+
+    def fake_loader(path):
+        check(path == hello_path, "loader called with QUANTTRACE_LIB path")
+        return fake_lib
+
+    with mock.patch.dict(os.environ, {"QUANTTRACE_LIB": hello_path}):
+        with mock.patch.object(engine.os.path, "isfile", return_value=True):
+            with mock.patch.object(engine, "_probe_native", wraps=None):
+                # Drive probe with injected loader via public reset + direct call.
+                pass
+            engine._reset_native_probe_for_tests()
+            loaded = engine._probe_native(loader=fake_loader)
+            check(loaded is True, "probe loads hello via QUANTTRACE_LIB")
+            check(engine.native_lib_loaded() is True, "native_lib_loaded True for hello")
+            check(engine.native_version() == "0.0.1-hello", "native_version from hello")
+            check(engine.native_is_tracer() is False, "is_tracer False for hello")
+            check(engine.kernel_ready() is False,
+                  "kernel_ready False while is_tracer==0")
+            hello_msg = engine.not_built_message()
+            hello_l = hello_msg.lower()
+            check("native hello loaded" in hello_l, "message: native hello loaded")
+            check("0.0.1-hello" in hello_msg, "message includes version")
+            check("tracer not built" in hello_l, "message: tracer not built")
+            check("does not path-trace" in hello_l, "hello path still refuses path-trace")
+            check("make it fast" in hello_l, "hello path points at Make it Fast")
+            fake2 = FakeEngine()
+            raised2 = None
+            try:
+                engine.refuse_render(fake2, None)
+            except engine.QuantTraceNotBuilt as exc:
+                raised2 = exc
+            check(raised2 is not None, "refuse_render raises with hello loaded")
+            check("native hello loaded" in str(raised2).lower(),
+                  "exception is hello-loaded refuse path")
+            check(any("hello" in str(item).lower() for item in fake2.errors),
+                  "error_set got hello-loaded message")
+
+    section("is_tracer==1 → kernel_ready True")
+    engine._reset_native_probe_for_tests()
+    tracer_lib = FakeCDLL(version=b"0.1.0-tracer", is_tracer=1)
+    tracer_path = "/tmp/fake/libquanttrace_tracer.so"
+
+    def tracer_loader(path):
+        return tracer_lib
+
+    with mock.patch.dict(os.environ, {"QUANTTRACE_LIB": tracer_path}):
+        with mock.patch.object(engine.os.path, "isfile", return_value=True):
+            engine._reset_native_probe_for_tests()
+            check(engine._probe_native(loader=tracer_loader) is True,
+                  "probe loads tracer stub")
+            check(engine.kernel_ready() is True,
+                  "kernel_ready True when is_tracer==1")
+            check(engine.native_is_tracer() is True, "native_is_tracer True")
+
+    section("render refuses — default probe (no fake tracer)")
+    engine._reset_native_probe_for_tests()
+    # Real hello .so may exist after local cmake; either fallback or hello
+    # message is fine — both refuse and never write pixels.
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("QUANTTRACE_LIB", None)
+        engine._reset_native_probe_for_tests()
+        check(engine.kernel_ready() is False,
+              "kernel_ready False on real probe (hello or missing)")
+        fake3 = FakeEngine()
+        raised3 = None
+        try:
+            engine.refuse_render(fake3, None)
+        except engine.QuantTraceNotBuilt as exc:
+            raised3 = exc
+        check(raised3 is not None, "refuse_render raises on real probe")
+        msg3 = str(raised3).lower()
+        check("not built" in msg3, "real-probe exception mentions not built")
+        check("path-trace" in msg3, "real-probe exception says no path-trace")
+        check("make it fast" in msg3 and "cycles" in msg3,
+              "real-probe points at stock Cycles / Make it Fast")
+        check(fake3.progress == [1.0], "update_progress(1.0) on refuse")
 
     inst = cls()
-    inst.error_set = fake.error_set
-    inst.report = fake.report
-    inst.update_stats = fake.update_stats
-    inst.update_progress = fake.update_progress
+    inst.error_set = fake3.error_set
+    inst.report = fake3.report
+    inst.update_stats = fake3.update_stats
+    inst.update_progress = fake3.update_progress
+    # reset reports from prior refuse
+    fake3.errors.clear()
+    fake3.reports.clear()
+    fake3.stats.clear()
+    fake3.progress.clear()
     raised_render = None
     try:
         inst.render(None)
@@ -98,15 +203,32 @@ def main():
         raised_render = exc
     check(raised_render is not None, "SQ_QUANTTRACE.render raises QuantTraceNotBuilt")
     check("not built" in str(raised_render).lower(),
-          "render() exception is the not-built path")
+          "render() exception is the not-built / hello path")
 
     section("stub does not pretend to path-trace")
     src = _read("scenequant/quanttrace/engine.py")
     check("begin_result" not in src, "engine.py has no begin_result")
     check("update_result" not in src, "engine.py has no update_result")
     check("end_result" not in src, "engine.py has no end_result")
-    check("libquanttrace" not in src and "ctypes" not in src,
-          "engine.py does not load a native .so")
+    check("ctypes" in src and "libquanttrace" in src,
+          "engine.py ctypes-loads libquanttrace")
+    check("quanttrace_is_tracer" in src, "engine.py consults quanttrace_is_tracer")
+    check("kernel_ready" in src, "engine.py defines kernel_ready")
+
+    section("native hello sources present")
+    check(os.path.isfile(os.path.join(PROJECT_ROOT, "native", "quanttrace", "src", "hello.c")),
+          "native/quanttrace/src/hello.c exists")
+    check(os.path.isfile(os.path.join(PROJECT_ROOT, "native", "quanttrace", "CMakeLists.txt")),
+          "native/quanttrace/CMakeLists.txt exists")
+    check(os.path.isfile(os.path.join(PROJECT_ROOT, "native", "quanttrace", "README.md")),
+          "native/quanttrace/README.md exists")
+    hello_c = _read("native/quanttrace/src/hello.c")
+    check("quanttrace_version" in hello_c and "quanttrace_is_tracer" in hello_c,
+          "hello.c exports version + is_tracer")
+    check("0.0.1-hello" in hello_c, "hello.c version string 0.0.1-hello")
+    readme = _read("native/quanttrace/README.md").lower()
+    check("not a path tracer" in readme, "native README says not a path tracer")
+    check("slice" in readme and "cube" in readme, "native README names future cube slice")
 
     section("registration hooks")
     check(callable(engine.register), "engine.register exists")
