@@ -1,9 +1,10 @@
-# QuantTrace RenderEngine — locked-cube Session F12 when is_tracer==1.
+# QuantTrace RenderEngine — depsgraph-fed Session F12 when is_tracer==1.
 #
-# Slice 2: native lib with QT_WITH_CYCLES returns is_tracer=1 and
-# SQ_QUANTTRACE.render lands Combined via begin_result / end_result.
-# The Session path still hardcodes the QUANTTRACE-CUBE.md toy (no full
-# depsgraph sync yet). Non-cube scenes refuse with a named reason.
+# Slice 2b: native lib with QT_WITH_CYCLES returns is_tracer=1 and
+# SQ_QUANTTRACE.render packs a simple depsgraph scene (one mesh +
+# Principled + one AREA + camera + black world) into QT_SimpleScene and
+# lands Combined via begin_result / end_result. Kitchens / multi-mesh /
+# linked shaders refuse with a named reason.
 # Make it Fast stays on stock Cycles.
 # Design: docs/research/SIDECAR-INTEGRATOR.md
 
@@ -24,14 +25,14 @@ HELLO_LOADED_MESSAGE = (
     "This engine does not path-trace. "
     "Make it Fast stays on stock Cycles."
 )
-CUBE_ONLY_MESSAGE = (
-    "QuantTrace F12 currently renders only the locked QUANTTRACE-CUBE "
-    "scene (one cube + one area light + one camera + black world). "
-    "Depsgraph sync for arbitrary scenes is not wired yet. "
-    "Make it Fast stays on stock Cycles."
+SIMPLE_ONLY_MESSAGE = (
+    "QuantTrace F12 currently syncs only simple scenes: one mesh with a "
+    "constant Principled BSDF, one AREA light (no nodes), one camera, "
+    "and a black/constant world. Multi-mesh / linked shaders / kitchens "
+    "are not wired yet. Make it Fast stays on stock Cycles."
 )
 PANEL_NOTE = (
-    "experimental — locked-cube uni-PT when native is_tracer=1; "
+    "experimental — simple-scene uni-PT when native is_tracer=1; "
     "Make it Fast is the product"
 )
 
@@ -261,53 +262,67 @@ def _render_size(scene):
     return width, height, samples
 
 
-def _bind_render_cube_rgba(lib):
-    lib.quanttrace_render_cube_rgba.argtypes = [
+def _bind_render_scene_rgba(lib):
+    from . import sync as qt_sync
+    QT_SimpleScene = qt_sync.make_qt_simple_scene_type()
+    lib.quanttrace_render_scene_rgba.argtypes = [
+        ctypes.POINTER(QT_SimpleScene),
         ctypes.POINTER(ctypes.c_float),
         ctypes.c_int,
         ctypes.POINTER(ctypes.c_int),
         ctypes.POINTER(ctypes.c_int),
     ]
-    lib.quanttrace_render_cube_rgba.restype = ctypes.c_int
+    lib.quanttrace_render_scene_rgba.restype = ctypes.c_int
+    return QT_SimpleScene
 
 
-def render_locked_cube(engine, depsgraph):
-    """Call Session locked-cube path and write Combined into the result."""
+def _refuse_unsupported(engine, message):
+    error_set = getattr(engine, "error_set", None)
+    if callable(error_set):
+        try:
+            error_set(message)
+        except TypeError:
+            pass
+    reporter = getattr(engine, "report", None)
+    if callable(reporter):
+        try:
+            reporter({"ERROR"}, message)
+        except TypeError:
+            pass
+    stats = getattr(engine, "update_stats", None)
+    if callable(stats):
+        try:
+            stats("QuantTrace", message)
+        except TypeError:
+            pass
+    print(f"[QuantTrace] {message}")
+    raise QuantTraceUnsupported(message)
+
+
+def render_simple_scene(engine, depsgraph):
+    """Pack depsgraph → QT_SimpleScene and write Combined into the result."""
+    from . import sync as qt_sync
+
     scene = _scene_from_depsgraph(depsgraph)
-    if not is_locked_cube_scene(scene):
-        message = CUBE_ONLY_MESSAGE
-        error_set = getattr(engine, "error_set", None)
-        if callable(error_set):
-            try:
-                error_set(message)
-            except TypeError:
-                pass
-        reporter = getattr(engine, "report", None)
-        if callable(reporter):
-            try:
-                reporter({"ERROR"}, message)
-            except TypeError:
-                pass
-        stats = getattr(engine, "update_stats", None)
-        if callable(stats):
-            try:
-                stats("QuantTrace", message)
-            except TypeError:
-                pass
-        print(f"[QuantTrace] {message}")
-        raise QuantTraceUnsupported(message)
+    try:
+        packed = qt_sync.pack_simple_scene(scene, depsgraph=depsgraph)
+    except qt_sync.QuantTraceSyncError as exc:
+        _refuse_unsupported(
+            engine,
+            f"{SIMPLE_ONLY_MESSAGE} ({exc})",
+        )
+        return
 
     if not kernel_ready() or _native_lib is None:
         refuse_render(engine, depsgraph)
         return
 
-    width, height, samples = _render_size(scene)
-    os.environ["QUANTTRACE_CUBE_WIDTH"] = str(width)
-    os.environ["QUANTTRACE_CUBE_HEIGHT"] = str(height)
-    os.environ["QUANTTRACE_CUBE_SAMPLES"] = str(samples)
-
     lib = _native_lib
-    _bind_render_cube_rgba(lib)
+    QT_SimpleScene = _bind_render_scene_rgba(lib)
+    desc = qt_sync.to_ctypes(packed, QT_SimpleScene)
+    width = int(packed["width"])
+    height = int(packed["height"])
+    samples = int(packed["samples"])
     nfloat = width * height * 4
     buf = (ctypes.c_float * nfloat)()
     out_w = ctypes.c_int(0)
@@ -318,8 +333,10 @@ def render_locked_cube(engine, depsgraph):
         try:
             stats(
                 "QuantTrace",
-                f"locked cube uni-PT {width}x{height} {samples} spp "
-                f"(v{native_version() or '?'})",
+                f"depsgraph simple uni-PT {width}x{height} {samples} spp "
+                f"v{native_version() or '?'} "
+                f"({packed['nverts'] if 'nverts' in packed else len(packed['verts']) // 3}v/"
+                f"{len(packed['tris']) // 3}t)",
             )
         except TypeError:
             pass
@@ -330,7 +347,9 @@ def render_locked_cube(engine, depsgraph):
         except TypeError:
             pass
 
-    rc = lib.quanttrace_render_cube_rgba(buf, nfloat, ctypes.byref(out_w), ctypes.byref(out_h))
+    rc = lib.quanttrace_render_scene_rgba(
+        ctypes.byref(desc), buf, nfloat, ctypes.byref(out_w), ctypes.byref(out_h)
+    )
     if rc != 0 or out_w.value != width or out_h.value != height:
         message = (
             f"QuantTrace Session render failed (rc={rc}, "
@@ -354,7 +373,6 @@ def render_locked_cube(engine, depsgraph):
     try:
         layer = result.layers[0]
         combined = None
-        # Prefer Combined; fall back to first pass.
         try:
             combined = layer.passes["Combined"]
         except (KeyError, TypeError, AttributeError):
@@ -362,13 +380,10 @@ def render_locked_cube(engine, depsgraph):
             combined = passes[0] if passes else None
         if combined is None:
             raise QuantTraceNotBuilt("no Combined pass on render result")
-        # Top-down linear RGBA float. Blender 5.x wants foreach_set on the
-        # bpy_prop_array (assigning a flat list raises TypeError).
         flat = [float(buf[i]) for i in range(nfloat)]
         try:
             combined.rect.foreach_set(flat)
         except (AttributeError, TypeError):
-            # Fallback: sequence of RGBA tuples.
             combined.rect = [
                 (flat[i], flat[i + 1], flat[i + 2], flat[i + 3])
                 for i in range(0, nfloat, 4)
@@ -387,16 +402,21 @@ def render_locked_cube(engine, depsgraph):
         except TypeError:
             pass
     print(
-        f"[QuantTrace] F12 locked cube Combined "
+        f"[QuantTrace] F12 depsgraph simple Combined "
         f"{width}x{height} {samples} spp v{native_version() or '?'}"
     )
+
+
+# Back-compat alias used by older tests / docs.
+def render_locked_cube(engine, depsgraph):
+    return render_simple_scene(engine, depsgraph)
 
 
 class SQ_QUANTTRACE(_RenderEngine):
     bl_idname = ENGINE_ID
     bl_label = ENGINE_LABEL
     bl_description = (
-        "Experimental QuantTrace. Locked-cube uni-PT when native is_tracer=1. "
+        "Experimental QuantTrace. Simple-scene uni-PT when native is_tracer=1. "
         "Make it Fast stays on stock Cycles."
     )
     bl_use_preview = False
@@ -418,7 +438,7 @@ class SQ_QUANTTRACE(_RenderEngine):
         if not kernel_ready():
             refuse_render(self, depsgraph)
             return
-        render_locked_cube(self, depsgraph)
+        render_simple_scene(self, depsgraph)
 
 
 class SQ_PT_quanttrace_note(_Panel):
@@ -442,7 +462,7 @@ class SQ_PT_quanttrace_note(_Panel):
         self.layout.label(text=PANEL_NOTE)
         if kernel_ready():
             self.layout.label(
-                text=f"native v{native_version() or '?'} — locked cube F12 ready"
+                text=f"native v{native_version() or '?'} — simple-scene F12 ready"
             )
         elif native_lib_loaded():
             self.layout.label(text=f"native v{native_version() or '?'} — tracer off")

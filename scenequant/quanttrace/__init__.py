@@ -1,5 +1,5 @@
 # QuantTrace (SIDECAR): experimental second RenderEngine.
-# Make it Fast stays on stock Cycles. This package only registers the stub.
+# Make it Fast stays on stock Cycles. Slice 2b: simple depsgraph sync.
 # See docs/research/SIDECAR-INTEGRATOR.md.
 
 from . import engine

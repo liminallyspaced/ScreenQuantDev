@@ -128,20 +128,17 @@ def main():
         print("QUANTTRACE_F12 skip OIIO max check")
 
     if args.compare:
+        import subprocess
         delta = os.path.join(root, "tools", "_quanttrace_exr_delta.py")
-        # Run in-process via blender's python if possible.
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("qt_delta", delta)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        # Prefer a main(argv) if present; else print paths for external compare.
-        if hasattr(mod, "main"):
-            rc = mod.main([args.compare, args.out])
-            print("QUANTTRACE_F12 compare rc", rc)
-            if rc not in (0, None):
-                raise SystemExit(rc)
-        else:
-            print("QUANTTRACE_F12 compare paths", args.compare, args.out)
+        cmd = [
+            "blender", "--background", "--python", delta, "--",
+            args.compare, args.out,
+        ]
+        print("QUANTTRACE_F12 compare", " ".join(cmd))
+        rc = subprocess.call(cmd)
+        print("QUANTTRACE_F12 compare rc", rc)
+        if rc != 0:
+            raise SystemExit(rc)
 
     print("QUANTTRACE_F12 OK")
     return 0

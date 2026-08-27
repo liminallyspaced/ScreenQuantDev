@@ -1,11 +1,13 @@
-/* QuantTrace Slice 2 — Cycles Session API bridge + F12 wire.
+/* QuantTrace Slice 2 — Cycles Session API bridge + F12 + depsgraph sync.
  *
  * Default build: stub (QT_WITH_CYCLES off). Compiles into libquanttrace
  * next to hello.c. quanttrace_is_tracer() == 0.
  *
- * -DQT_WITH_CYCLES=1: ccl::Session locked-cube uni-PT. Combined matches
+ * -DQT_WITH_CYCLES=1: ccl::Session uni-PT. Locked-cube Combined matches
  * stock Cycles (256²/128 Δmax ~5e-7). quanttrace_is_tracer() == 1 so
  * SQ_QUANTTRACE.render can land Combined in the Image Editor.
+ * Slice 2b: quanttrace_render_scene_rgba builds from a QT_SimpleScene
+ * packed by Python depsgraph walk (camera/mesh/Principled/area/world).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -40,7 +42,16 @@ extern "C" int quanttrace_render_cube_rgba(float * /*out_rgba*/,
     return -1;
 }
 
-#else /* QT_WITH_CYCLES — Session locked-cube uni-PT; is_tracer=1 */
+extern "C" int quanttrace_render_scene_rgba(const QT_SimpleScene * /*scene*/,
+                                            float * /*out_rgba*/,
+                                            int /*out_capacity*/,
+                                            int * /*out_w*/,
+                                            int * /*out_h*/)
+{
+    return -1;
+}
+
+#else /* QT_WITH_CYCLES — Session uni-PT + depsgraph-fed simple scene */
 
 #include <cmath>
 #include <cstdio>
@@ -149,20 +160,67 @@ class CombinedBufferDriver : public OutputDriver {
     std::vector<float> *rgba_;
 };
 
-static void build_cube_scene(Scene *scene, const int width, const int height)
+static Transform tfm_from_12(const float *m)
 {
-    /* Integrator: stock uni-PT, 128 spp, adaptive off, clamp 0/10.
-     * 12pm PlugWalk: pin sample pattern + bounce bill to match the locked
-     * cube script. Blender 5.2 factory sampling_pattern is AUTOMATIC
-     * (blue-noise on F12). That cannot bit-match Session's default
-     * TABULATED_SOBOL. Both sides now force Classic/Tabulated Sobol,
-     * scrambling 1.0, light-threshold 0, Blender factory bounce counts
-     * (12/4/4/12/0/8). Do not fudge strength.
+    return make_transform(
+        m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+}
+
+static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int samples)
+{
+    std::memset(d, 0, sizeof(*d));
+    d->width = width;
+    d->height = height;
+    d->samples = samples;
+    d->nverts = 8;
+    d->ntris = 12;
+    d->verts = &kCubeVerts[0][0];
+    d->tris = &kCubeTris[0][0];
+    /* identity mesh tfm */
+    d->mesh_tfm[0] = 1.0f;
+    d->mesh_tfm[5] = 1.0f;
+    d->mesh_tfm[10] = 1.0f;
+    /* Exact bpy matrix_world after depsgraph update (Blender 5.2 cube script). */
+    const float cam[12] = {
+        0.6853529810905457f, -0.3207705318927765f, 0.6537564992904663f, 7.358891010284424f,
+        0.7282110452651978f, 0.301891952753067f, -0.6152803897857666f, -6.925790786743164f,
+        -2.988588576613438e-08f, 0.8977569341659546f, 0.4404911696910858f, 4.958309173583984f};
+    std::memcpy(d->cam_tfm, cam, sizeof(cam));
+    d->cam_fov = 2.0f * atanf(18.0f / 50.0f);
+    d->cam_sensor_w = 0.036f;
+    d->cam_sensor_h = 0.024f;
+    d->cam_near = 0.1f;
+    d->cam_far = 1000.0f;
+    const float light[12] = {
+        -0.23948293924331665f, -0.7912328839302063f, 0.5626708269119263f, 4.076250076293945f,
+        0.9709005951881409f, -0.1951659470796585f, 0.13878880441188812f, 1.0054500102996826f,
+        -8.60238387190293e-08f, 0.5795349478721619f, 0.8149473667144775f, 5.903860092163086f};
+    std::memcpy(d->light_tfm, light, sizeof(light));
+    d->light_sizeu = 1.0f;
+    d->light_sizev = 1.0f;
+    d->light_strength[0] = 1000.0f;
+    d->light_strength[1] = 1000.0f;
+    d->light_strength[2] = 1000.0f;
+    d->base_color[0] = 0.8f;
+    d->base_color[1] = 0.8f;
+    d->base_color[2] = 0.8f;
+    d->roughness = 0.5f;
+    d->metallic = 0.0f;
+    d->ior = 1.45f;
+    d->alpha = 1.0f;
+    d->world_strength = 0.0f;
+    d->exr_path = nullptr;
+}
+
+static void build_simple_scene(Scene *scene, const QT_SimpleScene *desc)
+{
+    /* Integrator: stock uni-PT. Pin sample pattern + bounce bill to match
+     * Blender 5.2 Classic/Tabulated Sobol path used by the cube script.
      */
     Integrator *integrator = scene->integrator;
     integrator->set_use_adaptive_sampling(false);
     integrator->set_use_denoise(false);
-    integrator->set_seed(0); /* QUANTTRACE-CUBE.md locked seed */
+    integrator->set_seed(0);
     integrator->set_sample_clamp_direct(0.0f);
     integrator->set_sample_clamp_indirect(10.0f);
     integrator->set_sampling_pattern(SAMPLING_PATTERN_TABULATED_SOBOL);
@@ -187,75 +245,68 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     film->set_filter_type(FILTER_GAUSSIAN);
     film->set_filter_width(1.5f);
 
-    /* Camera: 50 mm on 36 mm sensor. FOV = 2*atan(18/50). */
     Camera *cam = scene->camera;
     cam->set_camera_type(CAMERA_PERSPECTIVE);
-    cam->set_fov(2.0f * atanf(18.0f / 50.0f));
-    cam->set_sensorwidth(0.036f);
-    cam->set_full_width(width);
-    cam->set_full_height(height);
-    cam->set_sensorheight(0.024f);
-    cam->set_nearclip(0.1f);
-    cam->set_farclip(1000.0f);
-    {
-        /* Exact bpy matrix_world after depsgraph update (Blender 5.2 cube
-         * script), then blender_camera_matrix: object * scale(1,1,-1). */
-        const Transform blender_cam = make_transform(
-            0.6853529810905457f, -0.3207705318927765f, 0.6537564992904663f, 7.358891010284424f,
-            0.7282110452651978f, 0.301891952753067f, -0.6152803897857666f, -6.925790786743164f,
-            -2.988588576613438e-08f, 0.8977569341659546f, 0.4404911696910858f, 4.958309173583984f);
-        cam->set_matrix(blender_cam * transform_scale(1.0f, 1.0f, -1.0f));
-    }
+    cam->set_fov(desc->cam_fov);
+    cam->set_sensorwidth(desc->cam_sensor_w);
+    cam->set_sensorheight(desc->cam_sensor_h);
+    cam->set_full_width(desc->width);
+    cam->set_full_height(desc->height);
+    cam->set_nearclip(desc->cam_near);
+    cam->set_farclip(desc->cam_far);
+    /* blender_camera_matrix: object * scale(1,1,-1). */
+    cam->set_matrix(tfm_from_12(desc->cam_tfm) * transform_scale(1.0f, 1.0f, -1.0f));
     cam->compute_auto_viewplane();
     cam->need_flags_update = true;
     cam->update(scene);
 
-    /* Black world. */
+    /* World Background: Color black, Strength from desc. */
     {
         unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
         BackgroundNode *bg = graph->create_node<BackgroundNode>();
         bg->set_color(make_float3(0.0f, 0.0f, 0.0f));
-        bg->set_strength(0.0f);
+        bg->set_strength(desc->world_strength);
         graph->connect(bg->output("Background"), graph->output()->input("Surface"));
         scene->default_background->set_graph(std::move(graph));
         scene->default_background->tag_update(scene);
     }
 
-    /* Principled: base 0.8, roughness 0.5, metal 0, IOR 1.45, alpha 1. */
     Shader *surf = scene->create_node<Shader>();
-    surf->name = "cube_principled";
+    surf->name = "qt_principled";
     {
         unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
         PrincipledBsdfNode *bsdf = graph->create_node<PrincipledBsdfNode>();
-        bsdf->set_base_color(make_float3(0.8f, 0.8f, 0.8f));
-        bsdf->set_roughness(0.5f);
-        bsdf->set_metallic(0.0f);
-        bsdf->set_ior(1.45f);
-        bsdf->set_alpha(1.0f);
+        bsdf->set_base_color(make_float3(
+            desc->base_color[0], desc->base_color[1], desc->base_color[2]));
+        bsdf->set_roughness(desc->roughness);
+        bsdf->set_metallic(desc->metallic);
+        bsdf->set_ior(desc->ior);
+        bsdf->set_alpha(desc->alpha);
         graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
         surf->set_graph(std::move(graph));
         surf->tag_update(scene);
     }
 
-    /* Mesh cube. */
     Mesh *mesh = scene->create_node<Mesh>();
     {
         array<Node *> used;
         used.push_back_slow(surf);
         mesh->set_used_shaders(used);
     }
-    mesh->resize_mesh(8, 12);
+    mesh->resize_mesh(desc->nverts, desc->ntris);
     packed_float3 *P = mesh->get_position_for_write();
-    for (int i = 0; i < 8; i++) {
-        P[i] = make_float3(kCubeVerts[i][0], kCubeVerts[i][1], kCubeVerts[i][2]);
+    for (int i = 0; i < desc->nverts; i++) {
+        P[i] = make_float3(desc->verts[i * 3 + 0],
+                           desc->verts[i * 3 + 1],
+                           desc->verts[i * 3 + 2]);
     }
     int *tris = mesh->get_triangles().data();
     int *shader_idx = mesh->get_shader().data();
     bool *smooth = mesh->get_smooth().data();
-    for (int t = 0; t < 12; t++) {
-        tris[t * 3 + 0] = kCubeTris[t][0];
-        tris[t * 3 + 1] = kCubeTris[t][1];
-        tris[t * 3 + 2] = kCubeTris[t][2];
+    for (int t = 0; t < desc->ntris; t++) {
+        tris[t * 3 + 0] = desc->tris[t * 3 + 0];
+        tris[t * 3 + 1] = desc->tris[t * 3 + 1];
+        tris[t * 3 + 2] = desc->tris[t * 3 + 2];
         shader_idx[t] = 0;
         smooth[t] = false;
     }
@@ -265,16 +316,10 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     mesh->tag_position_modified();
     mesh->add_vertex_normals();
 
-    Object *cube_obj = scene->create_node<Object>();
-    cube_obj->set_geometry(mesh);
-    cube_obj->set_tfm(transform_identity());
+    Object *mesh_obj = scene->create_node<Object>();
+    mesh_obj->set_geometry(mesh);
+    mesh_obj->set_tfm(tfm_from_12(desc->mesh_tfm));
 
-    /* Area light: size 1 m, energy 1000, white, Blender startup lamp pose,
-     * aimed at origin. Cycles area emits along object -Z. Official Blender
-     * sync (intern/cycles/blender/light.cpp): strength = color * energy *
-     * exp2(exposure). White × 1000 × exp2(0) → (1000,1000,1000). Normalize
-     * socket default true matches Blender (!LA_UNNORMALIZED). No extra scale.
-     */
     Shader *lamp_shader = scene->create_node<Shader>();
     lamp_shader->name = "area_emission";
     {
@@ -288,12 +333,13 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     }
 
     AreaLight *area = scene->create_node<AreaLight>();
-    area->set_sizeu(1.0f);
-    area->set_sizev(1.0f);
+    area->set_sizeu(desc->light_sizeu);
+    area->set_sizev(desc->light_sizev);
     area->set_ellipse(false);
-    area->set_spread(3.1415926535897932f); /* Blender area spread 180 deg */
+    area->set_spread(3.1415926535897932f);
     area->set_normalize(true);
-    area->set_strength(make_float3(1000.0f, 1000.0f, 1000.0f));
+    area->set_strength(make_float3(
+        desc->light_strength[0], desc->light_strength[1], desc->light_strength[2]));
     area->set_use_mis(true);
     area->set_cast_shadow(true);
     {
@@ -305,18 +351,14 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     Object *light_obj = scene->create_node<Object>();
     light_obj->set_geometry(area);
     light_obj->set_visibility(PATH_RAY_VISIBILITY_ALL & ~PATH_RAY_VISIBILITY_CAMERA);
-    /* Exact bpy matrix_world for the area light (look -Z, emit -Z). */
-    light_obj->set_tfm(make_transform(
-        -0.23948293924331665f, -0.7912328839302063f, 0.5626708269119263f, 4.076250076293945f,
-        0.9709005951881409f, -0.1951659470796585f, 0.13878880441188812f, 1.0054500102996826f,
-        -8.60238387190293e-08f, 0.5795349478721619f, 0.8149473667144775f, 5.903860092163086f));
+    light_obj->set_tfm(tfm_from_12(desc->light_tfm));
 
     Pass *pass = scene->create_node<Pass>();
     pass->set_name(ustring("combined"));
     pass->set_type(PASS_COMBINED);
 }
 
-/* QUANTTRACE-CUBE.md defaults stay 256 / 256 / 128. Smoke this hour:
+/* QUANTTRACE-CUBE.md defaults stay 256 / 256 / 128. Smoke:
  * QUANTTRACE_CUBE_WIDTH=32 HEIGHT=32 SAMPLES=4. Invalid values fall back.
  */
 static int env_positive_int(const char *name, int fallback)
@@ -367,7 +409,6 @@ static bool write_combined_exr(const char *path,
         return false;
     }
 
-    /* Y-flip: Combined is bottom-up; file is top-down like Blender / oiio_output_driver. */
     std::vector<float> flipped(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
     for (int y = 0; y < height; y++) {
         const float *src = rgba + (static_cast<size_t>(height - 1 - y) * static_cast<size_t>(width) * 4u);
@@ -382,12 +423,22 @@ static bool write_combined_exr(const char *path,
     return ok;
 }
 
-static int run_cube_session(const char *exr_path,
-                            float *out_rgba,
-                            int out_capacity,
-                            int *out_w,
-                            int *out_h)
+static int run_simple_session(const QT_SimpleScene *desc,
+                              float *out_rgba,
+                              int out_capacity,
+                              int *out_w,
+                              int *out_h)
 {
+    if (!desc || desc->width <= 0 || desc->height <= 0 || desc->samples <= 0 ||
+        desc->nverts <= 0 || desc->ntris <= 0 || !desc->verts || !desc->tris) {
+        fprintf(stderr, "quanttrace: invalid QT_SimpleScene\n");
+        return -1;
+    }
+    if (desc->nverts > 1000000 || desc->ntris > 2000000) {
+        fprintf(stderr, "quanttrace: scene too large for Slice 2b\n");
+        return -1;
+    }
+
     log_init(nullptr);
     path_init();
 
@@ -397,15 +448,11 @@ static int run_cube_session(const char *exr_path,
         return -1;
     }
 
-    const int width = env_positive_int("QUANTTRACE_CUBE_WIDTH", 256);
-    const int height = env_positive_int("QUANTTRACE_CUBE_HEIGHT", 256);
-    const int samples = env_positive_int("QUANTTRACE_CUBE_SAMPLES", 128);
-
     SessionParams session_params;
     session_params.device = devices.front();
     session_params.background = true;
     session_params.headless = true;
-    session_params.samples = samples;
+    session_params.samples = desc->samples;
     session_params.threads = 0;
     session_params.use_auto_tile = false;
     session_params.shadingsystem = SHADINGSYSTEM_SVM;
@@ -413,39 +460,39 @@ static int run_cube_session(const char *exr_path,
     SceneParams scene_params;
     scene_params.shadingsystem = SHADINGSYSTEM_SVM;
     scene_params.background = true;
-    scene_params.bvh_layout = BVH_LAYOUT_EMBREE; /* CPU Embree path */
+    scene_params.bvh_layout = BVH_LAYOUT_EMBREE;
 
     unique_ptr<Session> session = make_unique<Session>(session_params, scene_params);
     Scene *scene = session->scene.get();
 
-    build_cube_scene(scene, width, height);
+    build_simple_scene(scene, desc);
 
     std::vector<float> rgba;
     session->set_output_driver(make_unique<CombinedBufferDriver>(&rgba));
 
     BufferParams buffer_params;
-    buffer_params.width = width;
-    buffer_params.height = height;
-    buffer_params.full_width = width;
-    buffer_params.full_height = height;
+    buffer_params.width = desc->width;
+    buffer_params.height = desc->height;
+    buffer_params.full_width = desc->width;
+    buffer_params.full_height = desc->height;
 
     session->reset(session_params, buffer_params);
     session->start();
     session->wait();
 
-    const size_t expect = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+    const size_t expect = static_cast<size_t>(desc->width) * static_cast<size_t>(desc->height) * 4u;
     if (rgba.empty() || rgba.size() != expect) {
         fprintf(stderr,
                 "quanttrace: Combined empty or size mismatch %zu vs %dx%d\n",
                 rgba.size(),
-                width,
-                height);
+                desc->width,
+                desc->height);
         return -1;
     }
 
     float mn[3] = {1.0e30f, 1.0e30f, 1.0e30f};
     float mx[3] = {-1.0e30f, -1.0e30f, -1.0e30f};
-    const size_t npix = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t npix = static_cast<size_t>(desc->width) * static_cast<size_t>(desc->height);
     for (size_t i = 0; i < npix; i++) {
         for (int c = 0; c < 3; c++) {
             const float v = rgba[i * 4u + static_cast<size_t>(c)];
@@ -466,15 +513,16 @@ static int run_cube_session(const char *exr_path,
             mx[1],
             mx[2]);
 
+    const char *exr_path = desc->exr_path;
     if (exr_path && exr_path[0]) {
-        if (!write_combined_exr(exr_path, width, height, rgba.data())) {
+        if (!write_combined_exr(exr_path, desc->width, desc->height, rgba.data())) {
             return -1;
         }
         fprintf(stderr,
                 "quanttrace: wrote linear RGBA float OpenEXR (zip) %dx%d %d spp %s\n",
-                width,
-                height,
-                samples,
+                desc->width,
+                desc->height,
+                desc->samples,
                 exr_path);
     }
 
@@ -486,19 +534,31 @@ static int run_cube_session(const char *exr_path,
                     expect);
             return -1;
         }
-        /* Blender RenderPass.rect / Image.pixels are bottom-up (same as
-         * Cycles Combined). EXR file write above Y-flips for top-down files.
-         * Do NOT flip here or write_still EXR will be inverted vs Session. */
         std::memcpy(out_rgba, rgba.data(), expect * sizeof(float));
     }
     if (out_w) {
-        *out_w = width;
+        *out_w = desc->width;
     }
     if (out_h) {
-        *out_h = height;
+        *out_h = desc->height;
     }
 
     return 0;
+}
+
+static int run_cube_session(const char *exr_path,
+                            float *out_rgba,
+                            int out_capacity,
+                            int *out_w,
+                            int *out_h)
+{
+    QT_SimpleScene desc;
+    const int width = env_positive_int("QUANTTRACE_CUBE_WIDTH", 256);
+    const int height = env_positive_int("QUANTTRACE_CUBE_HEIGHT", 256);
+    const int samples = env_positive_int("QUANTTRACE_CUBE_SAMPLES", 128);
+    fill_locked_cube_desc(&desc, width, height, samples);
+    desc.exr_path = exr_path;
+    return run_simple_session(&desc, out_rgba, out_capacity, out_w, out_h);
 }
 
 }  /* namespace */
@@ -507,7 +567,7 @@ CCL_NAMESPACE_END
 
 extern "C" int quanttrace_is_tracer(void)
 {
-    /* Locked-cube Combined matches stock Cycles; F12 path is wired. */
+    /* Simple-scene Combined matches stock Cycles; F12 + depsgraph path wired. */
     return 1;
 }
 
@@ -527,6 +587,15 @@ extern "C" int quanttrace_render_cube_rgba(float *out_rgba,
                                           int *out_h)
 {
     return ccl::run_cube_session(nullptr, out_rgba, out_capacity, out_w, out_h);
+}
+
+extern "C" int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
+                                            float *out_rgba,
+                                            int out_capacity,
+                                            int *out_w,
+                                            int *out_h)
+{
+    return ccl::run_simple_session(scene, out_rgba, out_capacity, out_w, out_h);
 }
 
 #endif /* QT_WITH_CYCLES */

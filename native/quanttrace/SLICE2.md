@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **cube gate PASS + F12 wire** (2026-08-27 1pm PlugWalk ET). 256²/128 stock vs SQ_QUANTTRACE F12 Δmax=4.77e-7. `is_tracer=1` (QT_WITH_CYCLES). Locked cube only; depsgraph sync next.
+Status: **depsgraph sync PASS** (2026-08-27 2pm PlugWalk ET). Stock vs depsgraph-fed Session 256²/128 Δmax=5.96e-7. `is_tracer=1` (QT_WITH_CYCLES). Simple scenes only (1 mesh + Principled + 1 AREA + camera + black world). Multi-mesh / kitchens next.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -538,10 +538,51 @@ Proof plate: `docs/proof/quanttrace-f12-cube-pair.png` (preview only).
 
 ### Honesty
 
-- Depsgraph sync **not** done — F12 still hardcodes the locked cube Session path.
+- Depsgraph sync was next (done 2pm).
 - Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
 - Store Classroom **41%** / loft **52%** unchanged.
 
 ### Next
 
-Depsgraph → `ccl::Scene` exporter for camera / mesh / Principled / area / world (Slice 2 scene-agnostic). Not ReSTIR. Not Classroom time %.
+Done 2pm: depsgraph → `ccl::Scene` for simple scenes. See 2pm section.
+
+---
+
+## 2pm PlugWalk (2026-08-27) — depsgraph → ccl::Scene (Slice 2b)
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `QT_SimpleScene` + `quanttrace_render_scene_rgba` |
+| Python | `scenequant/quanttrace/sync.py` packs depsgraph (camera/mesh/Principled/AREA/world) |
+| Engine | `SQ_QUANTTRACE.render` uses depsgraph pack (no hardcoded Session matrices) |
+| Native | `build_simple_scene` from desc; locked cube fills via `fill_locked_cube_desc` |
+| Version | `0.0.3-depsgraph` |
+| Tools | `tools/_quanttrace_depsgraph_smoke.py` |
+
+### Measured (depsgraph-fed Session vs stock Cycles Combined)
+
+| Res / spp | Wall (Session) | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| 32×32 / 4 | 0.065 s | **2.98e-7** | 5.89e-9 | **PASS** |
+| 256×256 / 128 | 0.395 s | **5.96e-7** | 4.26e-9 | **PASS** |
+
+F12 through engine (depsgraph path) 32²/4 vs stock: Δmax **2.98e-7** PASS.
+
+Proof plate: `docs/proof/quanttrace-depsgraph-cube-pair.png` (preview only).
+
+### Honesty
+
+- Still **one** mesh + constant Principled + one AREA + one camera + black world.
+- Linked Principled sockets, multi-mesh, HDR worlds → loud refuse.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Expand exporter: multi-mesh, more light types, texture Principled sockets (still uni-PT). Not ReSTIR. Not Classroom time %.
+

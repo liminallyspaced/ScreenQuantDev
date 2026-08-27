@@ -1,7 +1,7 @@
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
-`SQ_QUANTTRACE.render` F12 lands Combined for the locked cube.
+`SQ_QUANTTRACE.render` F12 packs a simple depsgraph scene and lands Combined.
 `quanttrace_is_tracer()` is **1** when built with `-DQT_WITH_CYCLES=ON`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
@@ -13,9 +13,10 @@ this tree never feeds Auto clocks.
 | Slice | Status | What |
 |---|---|---|
 | **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` / `quanttrace_is_tracer()`. |
-| **2 — cube pixel-match + F12** | **PASS** | 256²/128 stock vs Session / F12 Δmax **4.77e-7**. `is_tracer=1` (QT_WITH_CYCLES). Locked cube only. |
+| **2 — cube pixel-match + F12** | **PASS** | 256²/128 stock vs Session / F12 Δmax **4.77e-7**. `is_tracer=1` (QT_WITH_CYCLES). |
+| **2b — depsgraph simple sync** | **PASS** | Stock vs depsgraph-fed Session 256²/128 Δmax **5.96e-7**. `QT_SimpleScene` + `sync.py`. Simple scenes only. |
 
-Depsgraph sync for arbitrary scenes is **not** done — non-cube F12 refuses with a named reason.
+Multi-mesh / linked Principled / HDR worlds still refuse with a named reason.
 
 ## Build (Linux) — hello stub (default)
 
@@ -35,7 +36,7 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=1, session_probe=1, version 0.0.2-cube-f12
+# ABI: is_tracer=1, session_probe=1, version 0.0.3-depsgraph
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 blender --background --python tools/_quanttrace_f12_smoke.py -- \
@@ -55,13 +56,14 @@ See `SLICE2.md`. Working CPU binary after `make update` + cmake:
 ```c
 const char *quanttrace_version(void);   /* "0.0.2-cube-f12" */
 int quanttrace_is_tracer(void);         /* 1 when QT_WITH_CYCLES */
+int quanttrace_render_scene_rgba(...);  /* depsgraph-fed QT_SimpleScene */
 int quanttrace_session_probe(void);     /* 0 stub / 1 if QT_WITH_CYCLES */
 int quanttrace_render_cube(const char *exr_path);
 int quanttrace_render_cube_rgba(float *out, int cap, int *w, int *h);
 /* env QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES default 256/256/128 */
 ```
 
-## Out of scope until depsgraph sync
+## Out of scope until multi-mesh / shader expand
 
-- Arbitrary .blend F12 (refuse with reason)
+- Kitchen / multi-mesh F12 (refuse with reason)
 - ReSTIR / OptiX / Make it Fast / zip / store % claims

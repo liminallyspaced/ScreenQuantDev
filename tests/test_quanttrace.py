@@ -208,7 +208,11 @@ def main():
     check("end_result" in src, "engine.py uses end_result")
     check("render_locked_cube" in src, "engine.py has render_locked_cube")
     check("is_locked_cube_scene" in src, "engine.py gates on locked cube")
-    check("quanttrace_render_cube_rgba" in src, "engine.py calls rgba ABI")
+    check("quanttrace_render_cube_rgba" in src or "quanttrace_render_scene_rgba" in src,
+          "engine.py calls rgba/scene ABI")
+    check("render_simple_scene" in src, "engine.py has render_simple_scene")
+    check("pack_simple_scene" in src or "qt_sync" in src,
+          "engine.py uses depsgraph sync packer")
     check("ctypes" in src and "libquanttrace" in src,
           "engine.py ctypes-loads libquanttrace")
     check("quanttrace_is_tracer" in src, "engine.py consults quanttrace_is_tracer")
@@ -228,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.2-cube-f12" in hello_c, "hello.c version string 0.0.2-cube-f12")
+    check("0.0.3-depsgraph" in hello_c, "hello.c version string 0.0.3-depsgraph")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -302,6 +306,20 @@ def main():
     apply_src = _read("scenequant/apply/speed_apply.py")
     check("SQ_QUANTTRACE" not in apply_src and "QUANTTRACE" not in apply_src,
           "speed_apply is not switched to QuantTrace")
+
+    section("depsgraph sync module")
+    sync = _load("scenequant/quanttrace/sync.py")
+    check(callable(sync.pack_simple_scene), "sync.pack_simple_scene exists")
+    check(callable(sync.can_sync_simple), "sync.can_sync_simple exists")
+    check(callable(sync.make_qt_simple_scene_type), "sync.make_qt_simple_scene_type exists")
+    check(issubclass(sync.QuantTraceSyncError, RuntimeError), "QuantTraceSyncError is RuntimeError")
+    hdr = _read("native/quanttrace/src/quanttrace.h")
+    check("QT_SimpleScene" in hdr, "header declares QT_SimpleScene")
+    check("quanttrace_render_scene_rgba" in hdr, "header declares render_scene_rgba")
+    bridge = _read("native/quanttrace/src/session_bridge.cpp")
+    check("quanttrace_render_scene_rgba" in bridge, "bridge exports render_scene_rgba")
+    check("build_simple_scene" in bridge, "bridge has build_simple_scene")
+    check("fill_locked_cube_desc" in bridge, "locked cube still fills via desc")
 
     section("research brief present")
     brief = os.path.join(PROJECT_ROOT, "docs", "research", "SIDECAR-INTEGRATOR.md")

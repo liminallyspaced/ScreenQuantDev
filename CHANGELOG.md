@@ -2,6 +2,7 @@
 
 ## 0.3.3 — Unreleased
 
+- 2pm PlugWalk QuantTrace Slice 2b: **depsgraph sync**. `QT_SimpleScene` + `quanttrace_render_scene_rgba`; Python `scenequant/quanttrace/sync.py` packs camera/mesh/Principled/AREA/world from depsgraph. `SQ_QUANTTRACE.render` uses the packer (no hardcoded Session matrices). Stock vs depsgraph Session 256²/128 Δmax=5.96e-7 (PASS). Native v0.0.3-depsgraph. Simple scenes only — kitchens refuse. No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 1pm PlugWalk QuantTrace Slice 2: **F12 wire**. `SQ_QUANTTRACE.render` lands locked-cube Combined via `begin_result`/`end_result` + `quanttrace_render_cube_rgba`. `is_tracer=1` when `QT_WITH_CYCLES` (native v0.0.2-cube-f12). Non-cube scenes refuse. Blender F12 vs stock Cycles 256²/128 Δmax=4.77e-7 (PASS, same as noon Session gate). No depsgraph sync yet. No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 12pm PlugWalk QuantTrace Slice 2: cube gate **PASS**. Stock Cycles vs Session Combined 256²/128 Δmax=4.77e-7 (MAE 3.57e-9). Camera is blender_camera_matrix (object * scale(1,1,-1)) + exact bpy matrix_world; both sides pin Tabulated Sobol. is_tracer still 0 (F12 not wired). No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 11am PlugWalk QuantTrace Slice 2: honest locked-cube Δmax vs stock Cycles (32/4 Δmax=0.665, 64/32=0.158, 256/128=0.059; gate FAIL). Camera screen-X + EXR Y convention; energy 1:1 official. is_tracer still 0. No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
