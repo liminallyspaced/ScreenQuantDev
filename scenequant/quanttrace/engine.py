@@ -1,10 +1,10 @@
 # QuantTrace RenderEngine — depsgraph-fed Session F12 when is_tracer==1.
 #
-# Slice 2b: native lib with QT_WITH_CYCLES returns is_tracer=1 and
-# SQ_QUANTTRACE.render packs a simple depsgraph scene (one mesh +
-# Principled + one AREA + camera + black world) into QT_SimpleScene and
-# lands Combined via begin_result / end_result. Kitchens / multi-mesh /
-# linked shaders refuse with a named reason.
+# Slice 2c: native lib with QT_WITH_CYCLES returns is_tracer=1 and
+# SQ_QUANTTRACE.render packs a depsgraph scene (1..32 meshes with
+# constant Principled, 1..16 AREA lights, camera, black world) into
+# QT_Scene and lands Combined via begin_result / end_result.
+# Kitchens / linked shaders / POINT lights refuse with a named reason.
 # Make it Fast stays on stock Cycles.
 # Design: docs/research/SIDECAR-INTEGRATOR.md
 
@@ -26,13 +26,14 @@ HELLO_LOADED_MESSAGE = (
     "Make it Fast stays on stock Cycles."
 )
 SIMPLE_ONLY_MESSAGE = (
-    "QuantTrace F12 currently syncs only simple scenes: one mesh with a "
-    "constant Principled BSDF, one AREA light (no nodes), one camera, "
-    "and a black/constant world. Multi-mesh / linked shaders / kitchens "
-    "are not wired yet. Make it Fast stays on stock Cycles."
+    "QuantTrace F12 currently syncs still-life scenes: 1..32 meshes with "
+    "constant Principled BSDF, 1..16 AREA lights, one camera, and a "
+    "black/constant world. Linked Principled sockets, POINT/SUN/SPOT, "
+    "HDR worlds, and kitchens are not wired yet. Make it Fast stays on "
+    "stock Cycles."
 )
 PANEL_NOTE = (
-    "experimental — simple-scene uni-PT when native is_tracer=1; "
+    "experimental — still-life uni-PT when native is_tracer=1; "
     "Make it Fast is the product"
 )
 
@@ -276,6 +277,20 @@ def _bind_render_scene_rgba(lib):
     return QT_SimpleScene
 
 
+def _bind_render_qt_scene_rgba(lib):
+    from . import sync as qt_sync
+    QT_Mesh, QT_Light, QT_Scene = qt_sync.make_qt_scene_types()
+    lib.quanttrace_render_qt_scene_rgba.argtypes = [
+        ctypes.POINTER(QT_Scene),
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    lib.quanttrace_render_qt_scene_rgba.restype = ctypes.c_int
+    return QT_Mesh, QT_Light, QT_Scene
+
+
 def _refuse_unsupported(engine, message):
     error_set = getattr(engine, "error_set", None)
     if callable(error_set):
@@ -300,12 +315,12 @@ def _refuse_unsupported(engine, message):
 
 
 def render_simple_scene(engine, depsgraph):
-    """Pack depsgraph → QT_SimpleScene and write Combined into the result."""
+    """Pack depsgraph → QT_Scene and write Combined into the result."""
     from . import sync as qt_sync
 
     scene = _scene_from_depsgraph(depsgraph)
     try:
-        packed = qt_sync.pack_simple_scene(scene, depsgraph=depsgraph)
+        packed = qt_sync.pack_scene(scene, depsgraph=depsgraph)
     except qt_sync.QuantTraceSyncError as exc:
         _refuse_unsupported(
             engine,
@@ -318,8 +333,8 @@ def render_simple_scene(engine, depsgraph):
         return
 
     lib = _native_lib
-    QT_SimpleScene = _bind_render_scene_rgba(lib)
-    desc = qt_sync.to_ctypes(packed, QT_SimpleScene)
+    QT_Mesh, QT_Light, QT_Scene = _bind_render_qt_scene_rgba(lib)
+    desc = qt_sync.to_ctypes_scene(packed, QT_Mesh, QT_Light, QT_Scene)
     width = int(packed["width"])
     height = int(packed["height"])
     samples = int(packed["samples"])
@@ -327,16 +342,18 @@ def render_simple_scene(engine, depsgraph):
     buf = (ctypes.c_float * nfloat)()
     out_w = ctypes.c_int(0)
     out_h = ctypes.c_int(0)
+    nverts = sum(len(m["verts"]) // 3 for m in packed["meshes"])
+    ntris = sum(len(m["tris"]) // 3 for m in packed["meshes"])
 
     stats = getattr(engine, "update_stats", None)
     if callable(stats):
         try:
             stats(
                 "QuantTrace",
-                f"depsgraph simple uni-PT {width}x{height} {samples} spp "
+                f"depsgraph still-life uni-PT {width}x{height} {samples} spp "
                 f"v{native_version() or '?'} "
-                f"({packed['nverts'] if 'nverts' in packed else len(packed['verts']) // 3}v/"
-                f"{len(packed['tris']) // 3}t)",
+                f"{len(packed['meshes'])}m/{len(packed['lights'])}L "
+                f"({nverts}v/{ntris}t)",
             )
         except TypeError:
             pass
@@ -347,7 +364,7 @@ def render_simple_scene(engine, depsgraph):
         except TypeError:
             pass
 
-    rc = lib.quanttrace_render_scene_rgba(
+    rc = lib.quanttrace_render_qt_scene_rgba(
         ctypes.byref(desc), buf, nfloat, ctypes.byref(out_w), ctypes.byref(out_h)
     )
     if rc != 0 or out_w.value != width or out_h.value != height:
@@ -402,7 +419,7 @@ def render_simple_scene(engine, depsgraph):
         except TypeError:
             pass
     print(
-        f"[QuantTrace] F12 depsgraph simple Combined "
+        f"[QuantTrace] F12 depsgraph still-life Combined "
         f"{width}x{height} {samples} spp v{native_version() or '?'}"
     )
 
@@ -416,7 +433,7 @@ class SQ_QUANTTRACE(_RenderEngine):
     bl_idname = ENGINE_ID
     bl_label = ENGINE_LABEL
     bl_description = (
-        "Experimental QuantTrace. Simple-scene uni-PT when native is_tracer=1. "
+        "Experimental QuantTrace. Still-life uni-PT when native is_tracer=1. "
         "Make it Fast stays on stock Cycles."
     )
     bl_use_preview = False
@@ -462,7 +479,7 @@ class SQ_PT_quanttrace_note(_Panel):
         self.layout.label(text=PANEL_NOTE)
         if kernel_ready():
             self.layout.label(
-                text=f"native v{native_version() or '?'} — simple-scene F12 ready"
+                text=f"native v{native_version() or '?'} — still-life F12 ready"
             )
         elif native_lib_loaded():
             self.layout.label(text=f"native v{native_version() or '?'} — tracer off")

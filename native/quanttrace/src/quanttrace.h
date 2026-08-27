@@ -3,6 +3,7 @@
  * Slice 1: version + is_tracer.
  * Slice 2: Session cube Combined (pixel-match PASS) + F12 wire.
  * Slice 2b: depsgraph-fed simple scene (camera/mesh/Principled/area/world).
+ * Slice 2c: multi-mesh + multi-AREA (constant Principled per mesh).
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -19,6 +20,10 @@ extern "C" {
 #else
 #  define QT_EXPORT __attribute__((visibility("default")))
 #endif
+
+/* Slice 2c caps — kitchens still refuse. */
+#define QT_MAX_MESHES 32
+#define QT_MAX_LIGHTS 16
 
 QT_EXPORT const char *quanttrace_version(void);
 
@@ -88,6 +93,54 @@ QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
                                            int out_capacity,
                                            int *out_w,
                                            int *out_h);
+
+/* Slice 2c: N meshes + N AREA lights (constant Principled per mesh).
+ * Caps: QT_MAX_MESHES / QT_MAX_LIGHTS. Textured Principled, POINT/SUN/SPOT,
+ * HDR worlds still refuse on the Python packer.
+ */
+typedef struct QT_Mesh {
+  int nverts;
+  int ntris;
+  const float *verts; /* nverts * 3 */
+  const int *tris;    /* ntris * 3 */
+  float tfm[12];      /* object matrix_world 3x4 */
+  float base_color[3];
+  float roughness;
+  float metallic;
+  float ior;
+  float alpha;
+} QT_Mesh;
+
+typedef struct QT_Light {
+  float tfm[12]; /* area light matrix_world 3x4 (emit -Z) */
+  float sizeu;
+  float sizev;
+  float strength[3]; /* color * energy * exp2(exposure) */
+} QT_Light;
+
+typedef struct QT_Scene {
+  int width;
+  int height;
+  int samples;
+  int nmeshes;
+  int nlights;
+  const QT_Mesh *meshes;
+  const QT_Light *lights;
+  float cam_tfm[12];
+  float cam_fov;
+  float cam_sensor_w;
+  float cam_sensor_h;
+  float cam_near;
+  float cam_far;
+  float world_strength;
+  const char *exr_path;
+} QT_Scene;
+
+QT_EXPORT int quanttrace_render_qt_scene_rgba(const QT_Scene *scene,
+                                              float *out_rgba,
+                                              int out_capacity,
+                                              int *out_w,
+                                              int *out_h);
 
 #ifdef __cplusplus
 }

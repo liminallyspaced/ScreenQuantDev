@@ -8,6 +8,7 @@
  * SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Slice 2b: quanttrace_render_scene_rgba builds from a QT_SimpleScene
  * packed by Python depsgraph walk (camera/mesh/Principled/area/world).
+ * Slice 2c: quanttrace_render_qt_scene_rgba — N meshes + N AREA lights.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -51,6 +52,15 @@ extern "C" int quanttrace_render_scene_rgba(const QT_SimpleScene * /*scene*/,
     return -1;
 }
 
+extern "C" int quanttrace_render_qt_scene_rgba(const QT_Scene * /*scene*/,
+                                               float * /*out_rgba*/,
+                                               int /*out_capacity*/,
+                                               int * /*out_w*/,
+                                               int * /*out_h*/)
+{
+    return -1;
+}
+
 #else /* QT_WITH_CYCLES — Session uni-PT + depsgraph-fed simple scene */
 
 #include <cmath>
@@ -80,6 +90,7 @@ extern "C" int quanttrace_render_scene_rgba(const QT_SimpleScene * /*scene*/,
 #include "util/log.h"
 #include "util/path.h"
 #include "util/transform.h"
+#include "util/string.h"
 #include "util/unique_ptr.h"
 
 CCL_NAMESPACE_BEGIN
@@ -212,7 +223,138 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->exr_path = nullptr;
 }
 
-static void build_simple_scene(Scene *scene, const QT_SimpleScene *desc)
+static void simple_to_qt(const QT_SimpleScene *s,
+                         QT_Mesh *mesh,
+                         QT_Light *light,
+                         QT_Scene *out)
+{
+    std::memset(mesh, 0, sizeof(*mesh));
+    mesh->nverts = s->nverts;
+    mesh->ntris = s->ntris;
+    mesh->verts = s->verts;
+    mesh->tris = s->tris;
+    std::memcpy(mesh->tfm, s->mesh_tfm, sizeof(mesh->tfm));
+    std::memcpy(mesh->base_color, s->base_color, sizeof(mesh->base_color));
+    mesh->roughness = s->roughness;
+    mesh->metallic = s->metallic;
+    mesh->ior = s->ior;
+    mesh->alpha = s->alpha;
+
+    std::memset(light, 0, sizeof(*light));
+    std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
+    light->sizeu = s->light_sizeu;
+    light->sizev = s->light_sizev;
+    std::memcpy(light->strength, s->light_strength, sizeof(light->strength));
+
+    std::memset(out, 0, sizeof(*out));
+    out->width = s->width;
+    out->height = s->height;
+    out->samples = s->samples;
+    out->nmeshes = 1;
+    out->nlights = 1;
+    out->meshes = mesh;
+    out->lights = light;
+    std::memcpy(out->cam_tfm, s->cam_tfm, sizeof(out->cam_tfm));
+    out->cam_fov = s->cam_fov;
+    out->cam_sensor_w = s->cam_sensor_w;
+    out->cam_sensor_h = s->cam_sensor_h;
+    out->cam_near = s->cam_near;
+    out->cam_far = s->cam_far;
+    out->world_strength = s->world_strength;
+    out->exr_path = s->exr_path;
+}
+
+static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
+{
+    Shader *surf = scene->create_node<Shader>();
+    surf->name = string_printf("qt_principled_%d", index);
+    unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
+    PrincipledBsdfNode *bsdf = graph->create_node<PrincipledBsdfNode>();
+    bsdf->set_base_color(make_float3(m->base_color[0], m->base_color[1], m->base_color[2]));
+    bsdf->set_roughness(m->roughness);
+    bsdf->set_metallic(m->metallic);
+    bsdf->set_ior(m->ior);
+    bsdf->set_alpha(m->alpha);
+    graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
+    surf->set_graph(std::move(graph));
+    surf->tag_update(scene);
+    return surf;
+}
+
+static Shader *make_area_emission(Scene *scene)
+{
+    Shader *lamp_shader = scene->create_node<Shader>();
+    lamp_shader->name = "area_emission";
+    unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
+    EmissionNode *emission = graph->create_node<EmissionNode>();
+    emission->set_color(make_float3(1.0f, 1.0f, 1.0f));
+    emission->set_strength(1.0f);
+    graph->connect(emission->output("Emission"), graph->output()->input("Surface"));
+    lamp_shader->set_graph(std::move(graph));
+    lamp_shader->tag_update(scene);
+    return lamp_shader;
+}
+
+static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
+{
+    Mesh *mesh = scene->create_node<Mesh>();
+    {
+        array<Node *> used;
+        used.push_back_slow(surf);
+        mesh->set_used_shaders(used);
+    }
+    mesh->resize_mesh(m->nverts, m->ntris);
+    packed_float3 *P = mesh->get_position_for_write();
+    for (int i = 0; i < m->nverts; i++) {
+        P[i] = make_float3(m->verts[i * 3 + 0],
+                           m->verts[i * 3 + 1],
+                           m->verts[i * 3 + 2]);
+    }
+    int *tris = mesh->get_triangles().data();
+    int *shader_idx = mesh->get_shader().data();
+    bool *smooth = mesh->get_smooth().data();
+    for (int t = 0; t < m->ntris; t++) {
+        tris[t * 3 + 0] = m->tris[t * 3 + 0];
+        tris[t * 3 + 1] = m->tris[t * 3 + 1];
+        tris[t * 3 + 2] = m->tris[t * 3 + 2];
+        shader_idx[t] = 0;
+        smooth[t] = false;
+    }
+    mesh->tag_triangles_modified();
+    mesh->tag_shader_modified();
+    mesh->tag_smooth_modified();
+    mesh->tag_position_modified();
+    mesh->add_vertex_normals();
+
+    Object *mesh_obj = scene->create_node<Object>();
+    mesh_obj->set_geometry(mesh);
+    mesh_obj->set_tfm(tfm_from_12(m->tfm));
+}
+
+static void add_area_light(Scene *scene, Shader *lamp_shader, const QT_Light *L)
+{
+    AreaLight *area = scene->create_node<AreaLight>();
+    area->set_sizeu(L->sizeu);
+    area->set_sizev(L->sizev);
+    area->set_ellipse(false);
+    area->set_spread(3.1415926535897932f);
+    area->set_normalize(true);
+    area->set_strength(make_float3(L->strength[0], L->strength[1], L->strength[2]));
+    area->set_use_mis(true);
+    area->set_cast_shadow(true);
+    {
+        array<Node *> used;
+        used.push_back_slow(lamp_shader);
+        area->set_used_shaders(used);
+    }
+
+    Object *light_obj = scene->create_node<Object>();
+    light_obj->set_geometry(area);
+    light_obj->set_visibility(PATH_RAY_VISIBILITY_ALL & ~PATH_RAY_VISIBILITY_CAMERA);
+    light_obj->set_tfm(tfm_from_12(L->tfm));
+}
+
+static void build_qt_scene(Scene *scene, const QT_Scene *desc)
 {
     /* Integrator: stock uni-PT. Pin sample pattern + bounce bill to match
      * Blender 5.2 Classic/Tabulated Sobol path used by the cube script.
@@ -271,91 +413,28 @@ static void build_simple_scene(Scene *scene, const QT_SimpleScene *desc)
         scene->default_background->tag_update(scene);
     }
 
-    Shader *surf = scene->create_node<Shader>();
-    surf->name = "qt_principled";
-    {
-        unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
-        PrincipledBsdfNode *bsdf = graph->create_node<PrincipledBsdfNode>();
-        bsdf->set_base_color(make_float3(
-            desc->base_color[0], desc->base_color[1], desc->base_color[2]));
-        bsdf->set_roughness(desc->roughness);
-        bsdf->set_metallic(desc->metallic);
-        bsdf->set_ior(desc->ior);
-        bsdf->set_alpha(desc->alpha);
-        graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
-        surf->set_graph(std::move(graph));
-        surf->tag_update(scene);
+    Shader *lamp_shader = make_area_emission(scene);
+    for (int i = 0; i < desc->nmeshes; i++) {
+        const QT_Mesh *m = &desc->meshes[i];
+        Shader *surf = make_principled(scene, m, i);
+        add_mesh_object(scene, surf, m);
     }
-
-    Mesh *mesh = scene->create_node<Mesh>();
-    {
-        array<Node *> used;
-        used.push_back_slow(surf);
-        mesh->set_used_shaders(used);
+    for (int i = 0; i < desc->nlights; i++) {
+        add_area_light(scene, lamp_shader, &desc->lights[i]);
     }
-    mesh->resize_mesh(desc->nverts, desc->ntris);
-    packed_float3 *P = mesh->get_position_for_write();
-    for (int i = 0; i < desc->nverts; i++) {
-        P[i] = make_float3(desc->verts[i * 3 + 0],
-                           desc->verts[i * 3 + 1],
-                           desc->verts[i * 3 + 2]);
-    }
-    int *tris = mesh->get_triangles().data();
-    int *shader_idx = mesh->get_shader().data();
-    bool *smooth = mesh->get_smooth().data();
-    for (int t = 0; t < desc->ntris; t++) {
-        tris[t * 3 + 0] = desc->tris[t * 3 + 0];
-        tris[t * 3 + 1] = desc->tris[t * 3 + 1];
-        tris[t * 3 + 2] = desc->tris[t * 3 + 2];
-        shader_idx[t] = 0;
-        smooth[t] = false;
-    }
-    mesh->tag_triangles_modified();
-    mesh->tag_shader_modified();
-    mesh->tag_smooth_modified();
-    mesh->tag_position_modified();
-    mesh->add_vertex_normals();
-
-    Object *mesh_obj = scene->create_node<Object>();
-    mesh_obj->set_geometry(mesh);
-    mesh_obj->set_tfm(tfm_from_12(desc->mesh_tfm));
-
-    Shader *lamp_shader = scene->create_node<Shader>();
-    lamp_shader->name = "area_emission";
-    {
-        unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
-        EmissionNode *emission = graph->create_node<EmissionNode>();
-        emission->set_color(make_float3(1.0f, 1.0f, 1.0f));
-        emission->set_strength(1.0f);
-        graph->connect(emission->output("Emission"), graph->output()->input("Surface"));
-        lamp_shader->set_graph(std::move(graph));
-        lamp_shader->tag_update(scene);
-    }
-
-    AreaLight *area = scene->create_node<AreaLight>();
-    area->set_sizeu(desc->light_sizeu);
-    area->set_sizev(desc->light_sizev);
-    area->set_ellipse(false);
-    area->set_spread(3.1415926535897932f);
-    area->set_normalize(true);
-    area->set_strength(make_float3(
-        desc->light_strength[0], desc->light_strength[1], desc->light_strength[2]));
-    area->set_use_mis(true);
-    area->set_cast_shadow(true);
-    {
-        array<Node *> used;
-        used.push_back_slow(lamp_shader);
-        area->set_used_shaders(used);
-    }
-
-    Object *light_obj = scene->create_node<Object>();
-    light_obj->set_geometry(area);
-    light_obj->set_visibility(PATH_RAY_VISIBILITY_ALL & ~PATH_RAY_VISIBILITY_CAMERA);
-    light_obj->set_tfm(tfm_from_12(desc->light_tfm));
 
     Pass *pass = scene->create_node<Pass>();
     pass->set_name(ustring("combined"));
     pass->set_type(PASS_COMBINED);
+}
+
+static void build_simple_scene(Scene *scene, const QT_SimpleScene *desc)
+{
+    QT_Mesh mesh;
+    QT_Light light;
+    QT_Scene qs;
+    simple_to_qt(desc, &mesh, &light, &qs);
+    build_qt_scene(scene, &qs);
 }
 
 /* QUANTTRACE-CUBE.md defaults stay 256 / 256 / 128. Smoke:
@@ -423,20 +502,32 @@ static bool write_combined_exr(const char *path,
     return ok;
 }
 
-static int run_simple_session(const QT_SimpleScene *desc,
-                              float *out_rgba,
-                              int out_capacity,
-                              int *out_w,
-                              int *out_h)
+static int run_qt_session(const QT_Scene *desc,
+                          float *out_rgba,
+                          int out_capacity,
+                          int *out_w,
+                          int *out_h)
 {
     if (!desc || desc->width <= 0 || desc->height <= 0 || desc->samples <= 0 ||
-        desc->nverts <= 0 || desc->ntris <= 0 || !desc->verts || !desc->tris) {
-        fprintf(stderr, "quanttrace: invalid QT_SimpleScene\n");
+        desc->nmeshes <= 0 || desc->nlights <= 0 || !desc->meshes || !desc->lights) {
+        fprintf(stderr, "quanttrace: invalid QT_Scene\n");
         return -1;
     }
-    if (desc->nverts > 1000000 || desc->ntris > 2000000) {
-        fprintf(stderr, "quanttrace: scene too large for Slice 2b\n");
+    if (desc->nmeshes > QT_MAX_MESHES || desc->nlights > QT_MAX_LIGHTS) {
+        fprintf(stderr, "quanttrace: nmeshes=%d nlights=%d exceeds Slice 2c cap\n",
+                desc->nmeshes, desc->nlights);
         return -1;
+    }
+    for (int i = 0; i < desc->nmeshes; i++) {
+        const QT_Mesh *m = &desc->meshes[i];
+        if (m->nverts <= 0 || m->ntris <= 0 || !m->verts || !m->tris) {
+            fprintf(stderr, "quanttrace: invalid QT_Mesh[%d]\n", i);
+            return -1;
+        }
+        if (m->nverts > 1000000 || m->ntris > 2000000) {
+            fprintf(stderr, "quanttrace: mesh %d too large for Slice 2c\n", i);
+            return -1;
+        }
     }
 
     log_init(nullptr);
@@ -465,7 +556,7 @@ static int run_simple_session(const QT_SimpleScene *desc,
     unique_ptr<Session> session = make_unique<Session>(session_params, scene_params);
     Scene *scene = session->scene.get();
 
-    build_simple_scene(scene, desc);
+    build_qt_scene(scene, desc);
 
     std::vector<float> rgba;
     session->set_output_driver(make_unique<CombinedBufferDriver>(&rgba));
@@ -546,6 +637,23 @@ static int run_simple_session(const QT_SimpleScene *desc,
     return 0;
 }
 
+static int run_simple_session(const QT_SimpleScene *desc,
+                              float *out_rgba,
+                              int out_capacity,
+                              int *out_w,
+                              int *out_h)
+{
+    if (!desc) {
+        fprintf(stderr, "quanttrace: invalid QT_SimpleScene\n");
+        return -1;
+    }
+    QT_Mesh mesh;
+    QT_Light light;
+    QT_Scene qs;
+    simple_to_qt(desc, &mesh, &light, &qs);
+    return run_qt_session(&qs, out_rgba, out_capacity, out_w, out_h);
+}
+
 static int run_cube_session(const char *exr_path,
                             float *out_rgba,
                             int out_capacity,
@@ -596,6 +704,15 @@ extern "C" int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
                                             int *out_h)
 {
     return ccl::run_simple_session(scene, out_rgba, out_capacity, out_w, out_h);
+}
+
+extern "C" int quanttrace_render_qt_scene_rgba(const QT_Scene *scene,
+                                               float *out_rgba,
+                                               int out_capacity,
+                                               int *out_w,
+                                               int *out_h)
+{
+    return ccl::run_qt_session(scene, out_rgba, out_capacity, out_w, out_h);
 }
 
 #endif /* QT_WITH_CYCLES */

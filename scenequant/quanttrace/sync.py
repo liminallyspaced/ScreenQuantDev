@@ -1,10 +1,10 @@
 # QuantTrace depsgraph → QT_SimpleScene packer (Slice 2b).
 #
-# Walks a Blender depsgraph and packs camera / one mesh / Principled /
-# one AREA light / world into a ctypes QT_SimpleScene for
-# quanttrace_render_scene_rgba. Supports the locked-cube class and any
-# scene with the same simple topology (one mesh + one area + one camera
-# + constant black/strength world + single Principled surface).
+# Walks a Blender depsgraph and packs camera / meshes / Principled /
+# AREA lights / world into ctypes QT_SimpleScene (1+1) or QT_Scene (N+N)
+# for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
+# Slice 2c: up to 32 meshes + 16 AREA lights, constant Principled each.
+# Linked Principled sockets / POINT/SUN/SPOT / HDR worlds still refuse.
 # Make it Fast stays on stock Cycles.
 
 from __future__ import annotations
@@ -29,6 +29,25 @@ def _matrix_3x4(m) -> List[float]:
 
 def _identity_3x4() -> List[float]:
     return [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+
+
+
+def _mul_tfm_point(tfm, x, y, z):
+    """Apply Blender 3x4 row-major matrix_world to a point (double math)."""
+    return (
+        tfm[0] * x + tfm[1] * y + tfm[2] * z + tfm[3],
+        tfm[4] * x + tfm[5] * y + tfm[6] * z + tfm[7],
+        tfm[8] * x + tfm[9] * y + tfm[10] * z + tfm[11],
+    )
+
+
+def _world_verts(verts, tfm):
+    """Bake object transform into vertex positions; caller uses identity tfm."""
+    out = []
+    for i in range(0, len(verts), 3):
+        wx, wy, wz = _mul_tfm_point(tfm, verts[i], verts[i + 1], verts[i + 2])
+        out.extend((float(wx), float(wy), float(wz)))
+    return out
 
 
 def _principled_from_material(mat) -> Tuple[Tuple[float, float, float], float, float, float, float]:
@@ -217,6 +236,9 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
             pass
 
     verts, tris = _mesh_arrays(mesh_obj)
+    mesh_tfm = _matrix_3x4(mesh_obj.matrix_world)
+    verts = _world_verts(verts, mesh_tfm)
+    mesh_tfm = _identity_3x4()
     base, rough, metal, ior, alpha = _principled_from_material(mat)
     width, height, samples = _render_size(scene)
 
@@ -242,7 +264,7 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
         "samples": samples,
         "verts": verts,
         "tris": tris,
-        "mesh_tfm": _matrix_3x4(mesh_obj.matrix_world),
+        "mesh_tfm": mesh_tfm,
         "cam_tfm": _matrix_3x4(cam_obj.matrix_world),
         "cam_fov": fov,
         "cam_sensor_w": sensor_w_mm / 1000.0,
@@ -258,6 +280,172 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
         "metallic": metal,
         "ior": ior,
         "alpha": alpha,
+        "world_strength": _world_strength(scene),
+    }
+
+
+QT_MAX_MESHES = 32
+QT_MAX_LIGHTS = 16
+
+
+def _visible_objects(scene, depsgraph=None):
+    """MESH/LIGHT/CAMERA lists in depsgraph instance order when available."""
+    meshes = []
+    lights = []
+    cams = []
+    if depsgraph is not None and hasattr(depsgraph, "object_instances"):
+        seen = set()
+        for inst in depsgraph.object_instances:
+            obj = getattr(inst, "object", None)
+            if obj is None:
+                continue
+            if getattr(obj, "hide_render", False):
+                continue
+            key = getattr(obj, "name_full", None) or id(obj)
+            if key in seen:
+                continue
+            seen.add(key)
+            otype = getattr(obj, "type", None)
+            if otype == "MESH":
+                meshes.append(obj)
+            elif otype == "LIGHT":
+                lights.append(obj)
+            elif otype == "CAMERA":
+                cams.append(obj)
+        if meshes or lights or cams:
+            return meshes, lights, cams
+    objs = [o for o in (getattr(scene, "objects", []) or [])
+            if not getattr(o, "hide_render", False)]
+    meshes = [o for o in objs if getattr(o, "type", None) == "MESH"]
+    lights = [o for o in objs if getattr(o, "type", None) == "LIGHT"]
+    cams = [o for o in objs if getattr(o, "type", None) == "CAMERA"]
+    return meshes, lights, cams
+
+
+def _area_light_sizes(lamp_data):
+    size = float(getattr(lamp_data, "size", 1.0) or 1.0)
+    size_y = getattr(lamp_data, "size_y", None)
+    sizeu = size
+    sizev = float(size_y) if size_y is not None and getattr(lamp_data, "shape", "SQUARE") == "RECTANGLE" else size
+    return sizeu, sizev
+
+
+def classify_scene(scene, depsgraph=None) -> dict:
+    """Validate + return handles for Slice 2c (N mesh + N AREA). Raises otherwise."""
+    if scene is None:
+        raise QuantTraceSyncError("no scene")
+    meshes, lights, cams = _visible_objects(scene, depsgraph=depsgraph)
+    if not (1 <= len(meshes) <= QT_MAX_MESHES):
+        raise QuantTraceSyncError(
+            f"need 1..{QT_MAX_MESHES} meshes, got {len(meshes)}"
+        )
+    if not (1 <= len(lights) <= QT_MAX_LIGHTS):
+        raise QuantTraceSyncError(
+            f"need 1..{QT_MAX_LIGHTS} lights, got {len(lights)}"
+        )
+    if len(cams) != 1:
+        raise QuantTraceSyncError(f"need exactly 1 camera, got {len(cams)}")
+    for lamp in lights:
+        data = getattr(lamp, "data", None)
+        if data is None or getattr(data, "type", None) != "AREA":
+            raise QuantTraceSyncError(
+                f"light {getattr(lamp, 'name', '?')} must be AREA "
+                f"(got {getattr(data, 'type', None)})"
+            )
+    mats = []
+    for mesh_obj in meshes:
+        mlist = list(getattr(mesh_obj.data, "materials", []) or [])
+        mat = mlist[0] if mlist else None
+        _principled_from_material(mat)
+        mats.append(mat)
+    _world_strength(scene)
+    return {
+        "meshes": meshes,
+        "lights": lights,
+        "camera": cams[0],
+        "materials": mats,
+    }
+
+
+def can_sync_scene(scene, depsgraph=None) -> bool:
+    try:
+        classify_scene(scene, depsgraph=depsgraph)
+        return True
+    except QuantTraceSyncError:
+        return False
+
+
+def pack_scene(scene, depsgraph=None) -> dict:
+    """Pack N meshes + N AREA lights into Python buffers for QT_Scene.
+
+    Returns dict with width/height/samples, camera fields, world_strength,
+    and lists `meshes` / `lights` (each a dict of arrays/floats).
+    """
+    if depsgraph is not None:
+        scene_eval = getattr(depsgraph, "scene_eval", None) or getattr(depsgraph, "scene", None)
+        if scene_eval is not None:
+            scene = scene_eval
+    handles = classify_scene(scene, depsgraph=depsgraph)
+    mesh_objs = list(handles["meshes"])
+    lamps = list(handles["lights"])
+    cam_obj = handles["camera"]
+    mats = list(handles["materials"])
+
+    packed_meshes = []
+    for mesh_obj, mat in zip(mesh_objs, mats):
+        eval_obj = mesh_obj
+        if depsgraph is not None:
+            try:
+                eval_obj = mesh_obj.evaluated_get(depsgraph)
+            except Exception:
+                eval_obj = mesh_obj
+        verts, tris = _mesh_arrays(eval_obj)
+        tfm = _matrix_3x4(eval_obj.matrix_world)
+        verts = _world_verts(verts, tfm)
+        base, rough, metal, ior, alpha = _principled_from_material(mat)
+        packed_meshes.append({
+            "verts": verts,
+            "tris": tris,
+            "tfm": _identity_3x4(),
+            "base_color": list(base),
+            "roughness": rough,
+            "metallic": metal,
+            "ior": ior,
+            "alpha": alpha,
+        })
+
+    packed_lights = []
+    for lamp in lamps:
+        lamp_data = lamp.data
+        sizeu, sizev = _area_light_sizes(lamp_data)
+        packed_lights.append({
+            "tfm": _matrix_3x4(lamp.matrix_world),
+            "sizeu": sizeu,
+            "sizev": sizev,
+            "strength": list(_light_strength(lamp, scene)),
+        })
+
+    width, height, samples = _render_size(scene)
+    cam_data = cam_obj.data
+    lens = float(getattr(cam_data, "lens", 50.0) or 50.0)
+    sensor_w_mm = float(getattr(cam_data, "sensor_width", 36.0) or 36.0)
+    sensor_h_mm = float(getattr(cam_data, "sensor_height", 24.0) or 24.0)
+    fov = 2.0 * math.atan((sensor_w_mm * 0.5) / lens)
+    near = float(getattr(cam_data, "clip_start", 0.1) or 0.1)
+    far = float(getattr(cam_data, "clip_end", 1000.0) or 1000.0)
+
+    return {
+        "width": width,
+        "height": height,
+        "samples": samples,
+        "meshes": packed_meshes,
+        "lights": packed_lights,
+        "cam_tfm": _matrix_3x4(cam_obj.matrix_world),
+        "cam_fov": fov,
+        "cam_sensor_w": sensor_w_mm / 1000.0,
+        "cam_sensor_h": sensor_h_mm / 1000.0,
+        "cam_near": near,
+        "cam_far": far,
         "world_strength": _world_strength(scene),
     }
 
@@ -338,3 +526,105 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     # Keep buffers alive with the struct.
     desc._keep = (verts, tris)
     return desc
+
+
+def make_qt_scene_types():
+    """ctypes Structures matching QT_Mesh / QT_Light / QT_Scene."""
+
+    class QT_Mesh(ctypes.Structure):
+        _fields_ = [
+            ("nverts", ctypes.c_int),
+            ("ntris", ctypes.c_int),
+            ("verts", ctypes.POINTER(ctypes.c_float)),
+            ("tris", ctypes.POINTER(ctypes.c_int)),
+            ("tfm", ctypes.c_float * 12),
+            ("base_color", ctypes.c_float * 3),
+            ("roughness", ctypes.c_float),
+            ("metallic", ctypes.c_float),
+            ("ior", ctypes.c_float),
+            ("alpha", ctypes.c_float),
+        ]
+
+    class QT_Light(ctypes.Structure):
+        _fields_ = [
+            ("tfm", ctypes.c_float * 12),
+            ("sizeu", ctypes.c_float),
+            ("sizev", ctypes.c_float),
+            ("strength", ctypes.c_float * 3),
+        ]
+
+    class QT_Scene(ctypes.Structure):
+        _fields_ = [
+            ("width", ctypes.c_int),
+            ("height", ctypes.c_int),
+            ("samples", ctypes.c_int),
+            ("nmeshes", ctypes.c_int),
+            ("nlights", ctypes.c_int),
+            ("meshes", ctypes.POINTER(QT_Mesh)),
+            ("lights", ctypes.POINTER(QT_Light)),
+            ("cam_tfm", ctypes.c_float * 12),
+            ("cam_fov", ctypes.c_float),
+            ("cam_sensor_w", ctypes.c_float),
+            ("cam_sensor_h", ctypes.c_float),
+            ("cam_near", ctypes.c_float),
+            ("cam_far", ctypes.c_float),
+            ("world_strength", ctypes.c_float),
+            ("exr_path", ctypes.c_char_p),
+        ]
+
+    return QT_Mesh, QT_Light, QT_Scene
+
+
+def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
+    """Build a QT_Scene + keep-alive buffers from pack_scene output."""
+    nmeshes = len(packed["meshes"])
+    nlights = len(packed["lights"])
+    meshes_arr = (QT_Mesh * nmeshes)()
+    lights_arr = (QT_Light * nlights)()
+    keep = []
+    for i, m in enumerate(packed["meshes"]):
+        verts = (ctypes.c_float * len(m["verts"]))(*m["verts"])
+        tris = (ctypes.c_int * len(m["tris"]))(*m["tris"])
+        keep.append((verts, tris))
+        meshes_arr[i].nverts = len(m["verts"]) // 3
+        meshes_arr[i].ntris = len(m["tris"]) // 3
+        meshes_arr[i].verts = ctypes.cast(verts, ctypes.POINTER(ctypes.c_float))
+        meshes_arr[i].tris = ctypes.cast(tris, ctypes.POINTER(ctypes.c_int))
+        for j, v in enumerate(m["tfm"]):
+            meshes_arr[i].tfm[j] = float(v)
+        for j, v in enumerate(m["base_color"]):
+            meshes_arr[i].base_color[j] = float(v)
+        meshes_arr[i].roughness = float(m["roughness"])
+        meshes_arr[i].metallic = float(m["metallic"])
+        meshes_arr[i].ior = float(m["ior"])
+        meshes_arr[i].alpha = float(m["alpha"])
+    for i, L in enumerate(packed["lights"]):
+        for j, v in enumerate(L["tfm"]):
+            lights_arr[i].tfm[j] = float(v)
+        lights_arr[i].sizeu = float(L["sizeu"])
+        lights_arr[i].sizev = float(L["sizev"])
+        for j, v in enumerate(L["strength"]):
+            lights_arr[i].strength[j] = float(v)
+    desc = QT_Scene()
+    desc.width = int(packed["width"])
+    desc.height = int(packed["height"])
+    desc.samples = int(packed["samples"])
+    desc.nmeshes = nmeshes
+    desc.nlights = nlights
+    desc.meshes = ctypes.cast(meshes_arr, ctypes.POINTER(QT_Mesh))
+    desc.lights = ctypes.cast(lights_arr, ctypes.POINTER(QT_Light))
+    for i, v in enumerate(packed["cam_tfm"]):
+        desc.cam_tfm[i] = float(v)
+    desc.cam_fov = float(packed["cam_fov"])
+    desc.cam_sensor_w = float(packed["cam_sensor_w"])
+    desc.cam_sensor_h = float(packed["cam_sensor_h"])
+    desc.cam_near = float(packed["cam_near"])
+    desc.cam_far = float(packed["cam_far"])
+    desc.world_strength = float(packed["world_strength"])
+    if exr_path:
+        desc.exr_path = exr_path.encode("utf-8")
+    else:
+        desc.exr_path = None
+    desc._keep = (meshes_arr, lights_arr, keep)
+    return desc
+

@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **depsgraph sync PASS** (2026-08-27 2pm PlugWalk ET). Stock vs depsgraph-fed Session 256²/128 Δmax=5.96e-7. `is_tracer=1` (QT_WITH_CYCLES). Simple scenes only (1 mesh + Principled + 1 AREA + camera + black world). Multi-mesh / kitchens next.
+Status: **Slice 2c landed** (2026-08-27 3pm PlugWalk ET). Multi-mesh + multi-AREA ABI. Still-life 32²/4 Δmax=2.68e-6 PASS; 256²/128 Δmax=0.00668 FAIL (1 silhouette pixel). Cube 1+1 still PASS. `is_tracer=1` (QT_WITH_CYCLES).
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -584,5 +584,52 @@ Proof plate: `docs/proof/quanttrace-depsgraph-cube-pair.png` (preview only).
 
 ### Next
 
-Expand exporter: multi-mesh, more light types, texture Principled sockets (still uni-PT). Not ReSTIR. Not Classroom time %.
+Done 3pm: multi-mesh + multi-AREA. See 3pm section.
 
+
+
+---
+
+## 3pm PlugWalk (2026-08-27) — multi-mesh + multi-AREA (Slice 2c)
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `QT_Mesh` / `QT_Light` / `QT_Scene` + `quanttrace_render_qt_scene_rgba` |
+| Caps | 32 meshes / 16 AREA (kitchens still refuse) |
+| Python | `sync.pack_scene` walks `depsgraph.object_instances`; world-space verts + identity tfm |
+| Engine | `SQ_QUANTTRACE.render` uses `pack_scene` (1+1 cube still works) |
+| Native | `build_qt_scene` loops meshes/lights; cube `QT_SimpleScene` wraps 1+1 |
+| Version | `0.0.4-multimesh` |
+| Tools | `tools/_quanttrace_multimesh_scene.py`, `tools/_quanttrace_multimesh_smoke.py` |
+
+Still-life: CubeGrey + CubeRed (constant Principled), AreaKey 1000 + AreaFill 400, locked camera, black world.
+
+### Measured
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Cube 1+1 Session (regression) | 32² / 4 | **2.98e-7** | 4.64e-9 | 0 / 1024 | **PASS** |
+| Cube 1+1 depsgraph pack | 32² / 4 | **2.98e-7** | 5.89e-9 | 0 / 1024 | **PASS** |
+| Still-life Session | 32² / 4 | **2.68e-6** | 8.68e-9 | 0 / 1024 | **PASS** |
+| Still-life F12 | 32² / 4 | **2.68e-6** | 8.68e-9 | 0 / 1024 | **PASS** |
+| Still-life Session | 256² / 128 | **0.00668** | 4.65e-8 | **1** / 65536 | **FAIL** |
+
+256² leftover is pixel (189,122) on the red-cube right silhouette (A/B: still fails with 1 light and two grey cubes — second-mesh coverage, not the fill light or red Principled). Same class as the 12pm cube 1-px leftover before exact camera matrix.
+
+Proof plate: `docs/proof/quanttrace-still-life-32-pair.png` (32² preview only).
+
+### Honesty
+
+- Do **not** call 256² still-life a pixel-match. 32² is the pass this hour.
+- Linked Principled / POINT/SUN/SPOT / HDR / kitchens still refuse.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Close the 1-pixel second-mesh silhouette at 256²/128, then textured Principled / more light types. Not ReSTIR. Not Classroom time %.

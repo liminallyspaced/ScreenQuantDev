@@ -1,7 +1,7 @@
 /* QuantTrace native — version string only.
  * quanttrace_is_tracer() lives in session_bridge.cpp:
  *   stub (no QT_WITH_CYCLES) → 0
- *   Session path compiled in → 1 (F12 wired to locked-cube uni-PT)
+ *   Session path compiled in → 1 (F12 wired to uni-PT)
  */
 #if defined(_WIN32)
 #  define QT_EXPORT __declspec(dllexport)
@@ -9,7 +9,7 @@
 #  define QT_EXPORT __attribute__((visibility("default")))
 #endif
 
-static const char QT_VERSION[] = "0.0.3-depsgraph";
+static const char QT_VERSION[] = "0.0.4-multimesh";
 
 QT_EXPORT const char *quanttrace_version(void)
 {
