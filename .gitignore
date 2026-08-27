@@ -12,3 +12,6 @@ native/quanttrace/build/
 *.so
 *.dylib
 *.dll
+
+# QuantTrace Cycles fork/clone (never vendor into addon zip / public tree)
+native/cycles-src/

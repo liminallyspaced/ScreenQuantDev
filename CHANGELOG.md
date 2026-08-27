@@ -2,6 +2,7 @@
 
 ## 0.3.3 — Unreleased
 
+- 7am PlugWalk QuantTrace cube pixel-match acceptance + Slice 2 build order (`docs/research/QUANTTRACE-CUBE.md`, `native/quanttrace/SLICE2.md`); gitignore `native/cycles-src/`. No tracer, no is_tracer=1, no zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - QuantTrace native hello lib (ctypes load plumbing; not a path tracer).
 - QuantTrace experimental RenderEngine stub (no native kernel, no Auto, no claim).
 - 7pm PlugWalk clean-demo bill (docs only, no new lever). Official Classroom + loft + BMW27 on the box. DNA inventory of all DEAD_CLOSURE / UNUSED_SLOTS / PORTAL classes plus leftover-zero four; Classroom also live-classified in Blender 5.2.0 CPU (`--background --python`, no F12, no GPU). New-class FIRED: PRUNE_NORMALMAP=0 (loft 83 live Normal Maps, Strength 1.0/0.14–0.5, none proven 0; Classroom 0; BMW27 1 at Strength 0.01). PRUNE_SSS/EMISSION/TRANSMISSION/BUMP/BEVEL/VOLUME/MIX/DISPLACE/AOV=0 on Classroom and loft. Identity Hook=0 (Classroom 48 Hooks force 1.0). Empty volume=0. Light linking live=0. Leftover-zero four still 0/0/0. Live kitchen hits remain already-shipped Auto-off: loft PRUNE_ALPHA=7, loft EXTRA_ATTR_APPLY=4865, Classroom MESH_EMIT_BACKFACE=2 (live SHADOW_SKIP_OK=1). No 5th leftover lever. Auto off. No zip. No time claim. Does not change Classroom 41% / loft 52%. See docs/research/NEXT-LEVER.md "clean demo bill".
