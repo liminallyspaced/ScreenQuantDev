@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Session Combined EXR write + 32x32/4spp smoke** (2026-08-27 9:15am PlugWalk ET). `is_tracer` still 0. Smoke Combined is opaque-film black (A=1). Cube dmax gate unmet.
+Status: **locked-cube Combined non-zero** (2026-08-27 10am PlugWalk ET). `is_tracer` still 0. 32x32/4spp Session smoke RGB max 1.75 (not black). Cube dmax pair / 256²/128 **not** claimed.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -326,6 +326,63 @@ Full 256^2 / 128 **not run** this hour.
 
 - Cube Combined pair / dmax < 1e-3 gate (black smoke Combined is a blocker
   before even running 256/128 vs stock Cycles)
+- `is_tracer=1`
+- Make it Fast / Auto / zip / Classroom 41% / loft 52% change
+- User 2080 / listing / gibby
+
+---
+
+## 10am PlugWalk (2026-08-27) — cube Combined non-zero
+
+Box: Linux, 8 cores, ~17G free. Did **not** `make update`, `git lfs pull`,
+or rebuild `native/cycles-src`. Rebuilt only `native/quanttrace/build`
+(`-DQT_WITH_CYCLES=ON`, session_bridge.cpp ~6 s). No user 2080.
+
+### Before (re-run of 9:15am .so)
+
+`env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py`
+
+| Item | Result |
+|---|---|
+| wall | 0.029 s |
+| EXR | 823 bytes, 32x32 RGBA float zip |
+| oiiotool stats | RGB min=max=**0**, A=1, Constant Yes |
+
+### Root cause
+
+`look_at` built a Blender-object frame (`+Z` away from target, look along `-Z`).
+That is **wrong for the Cycles kernel camera**:
+
+- `src/kernel/camera/camera.h` perspective uses `D = rastertocamera`; ortho uses `D = (0,0,1)` (**+Z**).
+- Working XML `examples/scene_cube_surface.xml` camera is `translate="0 2 -6"` + 20° X rotate. From `z=-6`, only a **+Z** look axis sees the origin. That XML smoke already produced a real PNG.
+- `util/transform.h` has **no** `transform_look_at`.
+
+Area lights were already correct: `AreaLight::copy_to_kernel` emits along object **`-Z`**, so the same `look_at` ( +Z away / -Z toward origin ) is the light convention.
+
+One function cannot serve both. Camera now looks along **+Z toward origin**; area keeps **-Z toward origin**. Also: `Camera::update` + `need_flags_update` (XML loader does this) and `Mesh::add_vertex_normals` after triangle write. No Emission-surface diagnostic needed; Principled + Area + black world is the locked scene.
+
+### After
+
+Same 32x32 / 4 spp smoke, empty `LD_LIBRARY_PATH`:
+
+| Item | Result |
+|---|---|
+| version | `0.0.1-hello` |
+| `is_tracer` | **0** |
+| `session_probe` | **1** |
+| `quanttrace_render_cube` | **0** |
+| wall | **0.026 s** |
+| EXR | **1428** bytes |
+| Combined RGB (C++ + oiiotool) | min `(0,0,0)` max `(1.74875, 1.74875, 1.74875)` avg `0.065` stddev `0.249` |
+| Constant | **No** (cube in frame, black world around it — not one firefly) |
+
+Success gate this hour: `max(R,G,B) > 1e-4`. Met. Not a 256²/128 pair. Not Δmax. Do **not** set `is_tracer=1`.
+
+Full 256^2 / 128 **not run** this hour (would be the next gate vs stock Cycles Combined, not this smoke).
+
+### Still not true
+
+- Cube Combined pair / dmax < 1e-3 vs stock Cycles (need 256²/128 + Blender/standalone reference EXR)
 - `is_tracer=1`
 - Make it Fast / Auto / zip / Classroom 41% / loft 52% change
 - User 2080 / listing / gibby

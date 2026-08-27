@@ -2,6 +2,7 @@
 
 ## 0.3.3 — Unreleased
 
+- 10am PlugWalk QuantTrace Slice 2: locked-cube Combined non-zero (camera look along Cycles +Z; area still -Z). 32x32/4spp RGB max 1.75, is_tracer still 0. No 256/128 dmax, no zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 9:15am PlugWalk QuantTrace Slice 2: Session Combined EXR write (OIIO linear RGBA float zip) + 32x32/4spp smoke via QUANTTRACE_CUBE_* env; is_tracer still 0. Cube dmax gate unmet. No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 9am PlugWalk QuantTrace Slice 2: `QT_WITH_CYCLES=ON` `libquanttrace.so` now ctypes.CDLL/dlopen (zstd+pugi+zlib + RPATH; `is_tracer` still 0, `session_probe=1`). No cube Combined pair, no zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 8am PlugWalk QuantTrace Slice 2: Cycles standalone CPU Embree Session built (`native/cycles-src/build/bin/cycles`, XML 32x32 smoke); Session C++ bridge sketch + cube dry-run script; addon `.so` still `is_tracer=0` (QT_WITH_CYCLES compile-ok, dlopen blocked on zstd). No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.

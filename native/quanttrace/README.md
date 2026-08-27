@@ -11,7 +11,7 @@ this tree never feeds Auto clocks.
 | Slice | Status | What |
 |---|---|---|
 | **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` and `quanttrace_is_tracer()` (`0`). |
-| **2 — cube pixel-match** | in progress | Cycles standalone CPU Session **works**. Addon `.so` loads (`is_tracer=0`, `session_probe=1`). Combined EXR write wired (OIIO zip). 32x32/4spp Session smoke only; cube dmax gate unmet. |
+| **2 — cube pixel-match** | in progress | Session Combined **non-zero** on locked cube (32x32/4spp RGB max 1.75). `is_tracer=0`. 256²/128 Δmax pair not run. |
 
 Do not pretend this traces. Python `SQ_QUANTTRACE` keeps `kernel_ready` False and refuses F12.
 

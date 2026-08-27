@@ -9,6 +9,7 @@
 #
 # Exit 0 only if load + is_tracer==0 + session_probe==1 + render_cube==0
 # and the EXR exists, size>0, and starts with OpenEXR magic.
+# Native stderr also prints Combined RGB min/max (look_at is Cycles +Z camera).
 
 from __future__ import annotations
 
@@ -87,7 +88,7 @@ def main() -> int:
     if magic != EXR_MAGIC:
         print("FAIL not OpenEXR magic", magic)
         return 1
-    print("OK")
+    print("OK (Combined RGB min/max is on native stderr above)")
     return 0
 
 

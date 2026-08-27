@@ -81,10 +81,23 @@ static const int kCubeQuads[6][4] = {
     {1, 5, 6, 2}, /* +X */
 };
 
-/* Blender startup-ish camera (factory cube view). Cycles looks along -Z. */
-static Transform look_at(const float3 from, const float3 target, const float3 up)
+/* Cycles kernel camera looks along +Z (src/kernel/camera/camera.h:
+ * perspective D = rastertocamera; ortho D = (0,0,1). XML cube camera at
+ * translate=(0,2,-6) only sees the origin if +Z is the look axis).
+ * Area lights emit along object -Z (AreaLight::copy_to_kernel).
+ * util/transform.h has no transform_look_at — this is the kernel convention.
+ * look_along_neg_z=false → camera (+Z toward target).
+ * look_along_neg_z=true  → lights  (-Z toward target).
+ */
+static Transform look_at(const float3 from,
+                         const float3 target,
+                         const float3 up,
+                         const bool look_along_neg_z)
 {
-    const float3 z = normalize(from - target);
+    float3 z = normalize(from - target); /* +Z away from target */
+    if (!look_along_neg_z) {
+        z = -z; /* camera: +Z toward target */
+    }
     const float3 x = normalize(cross(up, z));
     const float3 y = cross(z, x);
     return make_transform(
@@ -135,8 +148,11 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     cam->set_full_height(height);
     cam->set_matrix(look_at(make_float3(7.358891f, -6.925791f, 4.958309f),
                             make_float3(0.0f, 0.0f, 0.0f),
-                            make_float3(0.0f, 0.0f, 1.0f)));
+                            make_float3(0.0f, 0.0f, 1.0f),
+                            false)); /* +Z toward origin */
     cam->compute_auto_viewplane();
+    cam->need_flags_update = true;
+    cam->update(scene);
 
     /* Black world. */
     {
@@ -203,6 +219,7 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     mesh->tag_shader_modified();
     mesh->tag_smooth_modified();
     mesh->tag_position_modified();
+    mesh->add_vertex_normals();
 
     Object *cube_obj = scene->create_node<Object>();
     cube_obj->set_geometry(mesh);
@@ -242,7 +259,8 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     light_obj->set_visibility(PATH_RAY_VISIBILITY_ALL & ~PATH_RAY_VISIBILITY_CAMERA);
     light_obj->set_tfm(look_at(make_float3(4.07625f, 1.00545f, 5.90386f),
                                make_float3(0.0f, 0.0f, 0.0f),
-                               make_float3(0.0f, 0.0f, 1.0f)));
+                               make_float3(0.0f, 0.0f, 1.0f),
+                               true)); /* -Z toward origin (area emit) */
 
     Pass *pass = scene->create_node<Pass>();
     pass->set_name(ustring("combined"));
@@ -368,6 +386,29 @@ static int run_cube_session(const char *exr_path)
                 height);
         return -1;
     }
+
+    float mn[3] = {1.0e30f, 1.0e30f, 1.0e30f};
+    float mx[3] = {-1.0e30f, -1.0e30f, -1.0e30f};
+    const size_t npix = static_cast<size_t>(width) * static_cast<size_t>(height);
+    for (size_t i = 0; i < npix; i++) {
+        for (int c = 0; c < 3; c++) {
+            const float v = rgba[i * 4u + static_cast<size_t>(c)];
+            if (v < mn[c]) {
+                mn[c] = v;
+            }
+            if (v > mx[c]) {
+                mx[c] = v;
+            }
+        }
+    }
+    fprintf(stderr,
+            "quanttrace: Combined RGB min=(%.6g %.6g %.6g) max=(%.6g %.6g %.6g)\n",
+            mn[0],
+            mn[1],
+            mn[2],
+            mx[0],
+            mx[1],
+            mx[2]);
 
     if (exr_path && exr_path[0]) {
         if (!write_combined_exr(exr_path, width, height, rgba.data())) {
