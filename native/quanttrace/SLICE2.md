@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Cycles standalone CPU Session works; addon .so Session path not loaded** (2026-08-27 8am PlugWalk ET).
+Status: **Cycles standalone CPU Session works; addon `.so` with `QT_WITH_CYCLES=ON` now `dlopen`s** (2026-08-27 9am PlugWalk ET). `is_tracer` still 0. Cube Combined pair not written.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -194,9 +194,80 @@ world strength 0.0  view_transform Raw
 `--render` exists for a 64×64 / 8 spp CPU smoke; **not run** this hour
 (dry-run preferred). `.blend` gitignored.
 
-### Still not true
+### Still not true (8am)
 
 - Cube Combined EXR pair / Δmax gate
 - `is_tracer=1`
 - Make it Fast / Auto / zip / Classroom 41% / loft 52% change
 - User 2080
+
+---
+
+## 9am PlugWalk (2026-08-27) — addon `.so` load
+
+Box: Linux, 8 cores, ~17G free at start / after. Did **not** `make update`,
+`git lfs pull`, or rebuild `native/cycles-src/build` (165/165 already done).
+Rebuilt only `native/quanttrace/build` with `-DQT_WITH_CYCLES=ON`.
+
+### Diagnose
+
+| Object | Fact |
+|---|---|
+| 8am `libquanttrace.so` on disk at hour start | stub (`QT_WITH_CYCLES=OFF`), 15k, `ldd` says statically linked |
+| `ZSTD_getFrameContentSize` | `T` in `lib/linux_x64/zstd/lib/libzstd.a` (static only; no `.so`) |
+| Who needs it | `libcycles_util.a` (`U ZSTD_getFrameContentSize` / `ZSTD_decompress` / `ZSTD_isError`) |
+| Who needs pugi | `libcycles_graph.a` |
+| Working `build/bin/cycles` LINK_LIBRARIES | zstd.a + zlib `libz.a` + pugixml.a + OIIO/TBB/Embree/OCIO/OpenEXR/Imath + DT_RUNPATH |
+
+Did **not** include Cycles `macros.cmake` / `external_libs.cmake` (`bf::dependencies::*` needs full Cycles project context).
+
+### CMake that loaded
+
+`native/quanttrace/CMakeLists.txt` (default `QT_WITH_CYCLES=OFF` unchanged):
+
+- GNU ld `--start-group` around `libcycles_*.a` (integrator ↔ session/device circular; `--no-undefined` first failed on `ccl::GraphicsInteropBuffer::clear` and `ccl::device_kernel_as_string` until grouped)
+- Static: `libzstd.a` `libz.a` `libpugixml.a`
+- Shared, `--no-as-needed`, **before** OIIO/embree: OpenEXRCore / OpenEXR / IlmThread / Iex / Imath / openjph / tbb / sycl / OCIO
+- `-Wl,--disable-new-dtags` → `DT_RPATH` (`$ORIGIN` + the cycles `lib/linux_x64/{openimageio,openexr,imath,openjph,opencolorio,embree,tbb,dpcpp}/lib` dirs)
+
+`DT_RPATH` alone is **not** enough: OIIO/embree ship `DT_RUNPATH=$ORIGIN` (their own lib dir), so parent-RPATH is not used for *their* NEEDED. First empty-`LD_LIBRARY_PATH` load after zstd-link:
+
+```
+OSError: libOpenEXRCore.so.33: cannot open shared object file: No such file or directory
+```
+
+Forcing those transitive libs onto **this** `.so`'s NEEDED (listed first) is what made empty-`LD_LIBRARY_PATH` ctypes work.
+
+### Rebuild (addon only)
+
+```
+cmake -S native/quanttrace -B native/quanttrace/build \
+  -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
+cmake --build native/quanttrace/build -j 8
+```
+
+`libquanttrace.so` 8.2M. `nm -D` has `T ZSTD_getFrameContentSize`. Did not rebuild `cycles-src`.
+
+### ctypes proof (empty LD_LIBRARY_PATH)
+
+```
+env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
+```
+
+```
+LD_LIBRARY_PATH= None
+loading …/native/quanttrace/build/libquanttrace.so
+version= 0.0.1-hello
+is_tracer= 0
+session_probe= 1
+OK
+```
+
+Did **not** call `quanttrace_render_cube` (256² / 128 spp). hello.c still owns version + `is_tracer=0`.
+
+### Still not true
+
+- Cube Combined EXR pair / Δmax gate (next: OIIO write or reuse standalone driver, then 256²/128)
+- `is_tracer=1`
+- Make it Fast / Auto / zip / Classroom 41% / loft 52% change
+- User 2080 / listing / gibby

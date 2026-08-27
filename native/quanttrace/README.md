@@ -11,7 +11,7 @@ this tree never feeds Auto clocks.
 | Slice | Status | What |
 |---|---|---|
 | **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` and `quanttrace_is_tracer()` (`0`). |
-| **2 — cube pixel-match** | in progress | Cycles standalone CPU Session **works** (`build/bin/cycles`). Addon `.so` Session path **compiles** (`QT_WITH_CYCLES=ON`) but **does not load** (missing zstd / full external lib list). Pixel-match not run. |
+| **2 — cube pixel-match** | in progress | Cycles standalone CPU Session **works**. Addon `.so` with `QT_WITH_CYCLES=ON` now **loads** (`is_tracer=0`, `session_probe=1`, empty `LD_LIBRARY_PATH`). Pixel-match / Combined EXR pair not run. |
 
 Do not pretend this traces. Python `SQ_QUANTTRACE` keeps `kernel_ready` False and refuses F12.
 
@@ -24,6 +24,21 @@ cmake --build build
 # produces build/libquanttrace.so
 # ABI: is_tracer=0, session_probe=0, render_cube=-1
 ```
+
+## Build (Linux) — Session path (`QT_WITH_CYCLES=ON`)
+
+Needs a local `native/cycles-src` tree already built (gitignored; see `SLICE2.md`).
+Default stays OFF so a no-Cycles checkout still builds the stub.
+
+```bash
+cmake -S native/quanttrace -B native/quanttrace/build \
+  -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
+cmake --build native/quanttrace/build -j 8
+env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
+# ABI: is_tracer=0, session_probe=1. Do not call render_cube (256^2 / 128).
+```
+
+RPATH is baked; ctypes does not need `LD_LIBRARY_PATH`.
 
 ## Cycles standalone (gitignored tree)
 

@@ -67,6 +67,7 @@ if(QT_WITH_CYCLES)
     ${CYCLES_LIBDIR}/embree/include
     ${CYCLES_LIBDIR}/pugixml/include
     ${CYCLES_LIBDIR}/zlib/include
+    ${CYCLES_LIBDIR}/zstd/include
     ${CYCLES_LIBDIR}/opencolorio/include
     ${CYCLES_LIBDIR}/openexr/include
     ${CYCLES_LIBDIR}/openexr/include/OpenEXR
@@ -74,26 +75,80 @@ if(QT_WITH_CYCLES)
     ${CYCLES_LIBDIR}/imath/include/Imath
   )
   if(EXISTS "${CYCLES_BUILD}/lib/libcycles_session.a")
-    target_link_directories(quanttrace PRIVATE ${CYCLES_BUILD}/lib)
-    # CPU-only tree has libcycles_kernel_cpu.a (no libcycles_kernel.a).
+    # Do not include cycles cmake macros.cmake / external_libs.cmake:
+    # those expect full Cycles project context (bf::dependencies::*).
+    # Link line copied from the working cycles ninja LINK_LIBRARIES
+    # (native/cycles-src/build/build.ninja, target bin/cycles) plus the
+    # static archives that libcycles_*.a still leave undefined:
+    #   libcycles_util.a  -> ZSTD_getFrameContentSize / ZSTD_decompress / ZSTD_isError
+    #   libcycles_graph.a -> pugi::xml_*
+    # 8am fail: ctypes.CDLL undefined ZSTD_getFrameContentSize (zstd not on the line).
     target_link_directories(quanttrace PRIVATE
+      ${CYCLES_BUILD}/lib
       ${CYCLES_LIBDIR}/openimageio/lib
       ${CYCLES_LIBDIR}/tbb/lib
       ${CYCLES_LIBDIR}/embree/lib
       ${CYCLES_LIBDIR}/opencolorio/lib
       ${CYCLES_LIBDIR}/openexr/lib
       ${CYCLES_LIBDIR}/imath/lib
+      ${CYCLES_LIBDIR}/openjph/lib
+      ${CYCLES_LIBDIR}/dpcpp/lib
     )
+    # GNU ld single-pass: integrator <-> session/device circular refs.
+    # Working cycles ninja line repeats session+integrator+device; group is cleaner.
+    # --no-as-needed + order: OIIO/embree have DT_RUNPATH=$ORIGIN (their own
+    # lib dir). That disables parent-RPATH inheritance for *their* NEEDED
+    # (OpenEXRCore, Imath, openjph, sycl). Load those via THIS .so first.
     target_link_libraries(quanttrace PRIVATE
+      "-Wl,--start-group"
       cycles_session cycles_scene cycles_device cycles_kernel_cpu
       cycles_bvh cycles_subd cycles_graph cycles_util cycles_integrator
       extern_sky extern_libc_compat
-      OpenImageIO OpenImageIO_Util tbb embree4 OpenColorIO OpenEXR Imath
+      "-Wl,--end-group"
+      "-Wl,--no-as-needed"
+      OpenEXRCore OpenEXR IlmThread Iex Imath openjph
+      tbb sycl
+      OpenColorIO
+      OpenImageIO OpenImageIO_Util
+      embree4
+      "-Wl,--as-needed"
+      ${CYCLES_LIBDIR}/zstd/lib/libzstd.a
+      ${CYCLES_LIBDIR}/zlib/lib/libz.a
+      ${CYCLES_LIBDIR}/pugixml/lib/libpugixml.a
+      ${CMAKE_DL_LIBS} m pthread
     )
-    # Load still fails without the rest of Cycles' external_libs list.
-    # 2026-08-27: ctypes.CDLL -> undefined ZSTD_getFrameContentSize.
-    # Next: reuse cycles_external_libraries_append() (zstd, png, ...).
-    # The working Session binary is cycles-src/build/bin/cycles, not this .so.
+    # --no-undefined: fail at link, not ctypes, if another archive symbol is missing.
+    # --disable-new-dtags: emit DT_RPATH. Alone it is not enough: OIIO/embree
+    # have their own DT_RUNPATH=$ORIGIN, which blocks parent-RPATH inheritance
+    # (8am-adjacent fail: libOpenEXRCore.so.33). Transitive NEEDED are forced
+    # above. Same dirs as build/bin/cycles, plus $ORIGIN.
+    target_link_options(quanttrace PRIVATE
+      -Wl,--no-undefined
+      -Wl,--disable-new-dtags
+    )
+    set_property(TARGET quanttrace PROPERTY BUILD_RPATH
+      "$ORIGIN"
+      "${CYCLES_LIBDIR}/openimageio/lib"
+      "${CYCLES_LIBDIR}/openexr/lib"
+      "${CYCLES_LIBDIR}/imath/lib"
+      "${CYCLES_LIBDIR}/openjph/lib"
+      "${CYCLES_LIBDIR}/opencolorio/lib"
+      "${CYCLES_LIBDIR}/embree/lib"
+      "${CYCLES_LIBDIR}/tbb/lib"
+      "${CYCLES_LIBDIR}/dpcpp/lib"
+    )
+    set_property(TARGET quanttrace PROPERTY INSTALL_RPATH
+      "$ORIGIN"
+      "${CYCLES_LIBDIR}/openimageio/lib"
+      "${CYCLES_LIBDIR}/openexr/lib"
+      "${CYCLES_LIBDIR}/imath/lib"
+      "${CYCLES_LIBDIR}/openjph/lib"
+      "${CYCLES_LIBDIR}/opencolorio/lib"
+      "${CYCLES_LIBDIR}/embree/lib"
+      "${CYCLES_LIBDIR}/tbb/lib"
+      "${CYCLES_LIBDIR}/dpcpp/lib"
+    )
+    set_property(TARGET quanttrace PROPERTY BUILD_WITH_INSTALL_RPATH ON)
   else()
     message(WARNING
       "QT_WITH_CYCLES=ON: Cycles headers used, but libcycles_session.a not "
