@@ -101,6 +101,8 @@ def build_locked_scene():
     cycles.use_adaptive_sampling = False
     cycles.use_denoising = False
     cycles.seed = GATE_SEED
+    if hasattr(cycles, "use_animated_seed"):
+        cycles.use_animated_seed = False
     if hasattr(cycles, "sample_clamp_direct"):
         cycles.sample_clamp_direct = 0.0
     if hasattr(cycles, "sample_clamp_indirect"):
@@ -111,6 +113,41 @@ def build_locked_scene():
         scene.cycles.filter_width = GATE_FILTER_WIDTH
     elif hasattr(scene.render, "filter_size"):
         scene.render.filter_size = GATE_FILTER_WIDTH
+    # Pin Classic/Tabulated Sobol. Blender 5.2 factory is AUTOMATIC (blue-noise
+    # on F12) which cannot bit-match Session's TABULATED_SOBOL default.
+    if hasattr(cycles, "sampling_pattern"):
+        cycles.sampling_pattern = "TABULATED_SOBOL"
+    if hasattr(cycles, "scrambling_distance"):
+        cycles.scrambling_distance = 1.0
+    if hasattr(cycles, "auto_scrambling_distance"):
+        cycles.auto_scrambling_distance = False
+    if hasattr(cycles, "use_pixel_jitter"):
+        cycles.use_pixel_jitter = False
+    if hasattr(cycles, "use_light_tree"):
+        cycles.use_light_tree = True
+    if hasattr(cycles, "light_sampling_threshold"):
+        cycles.light_sampling_threshold = 0.0  # disable light RR; match Session
+    # Blender 5.2 factory bounce bill (standalone default is 7/7/7/7/7).
+    if hasattr(cycles, "max_bounces"):
+        cycles.max_bounces = 12
+    if hasattr(cycles, "diffuse_bounces"):
+        cycles.diffuse_bounces = 4
+    if hasattr(cycles, "glossy_bounces"):
+        cycles.glossy_bounces = 4
+    if hasattr(cycles, "transmission_bounces"):
+        cycles.transmission_bounces = 12
+    if hasattr(cycles, "volume_bounces"):
+        cycles.volume_bounces = 0
+    if hasattr(cycles, "transparent_max_bounces"):
+        cycles.transparent_max_bounces = 8
+    if hasattr(cycles, "min_light_bounces"):
+        cycles.min_light_bounces = 0
+    if hasattr(cycles, "caustics_reflective"):
+        cycles.caustics_reflective = True
+    if hasattr(cycles, "caustics_refractive"):
+        cycles.caustics_refractive = True
+    if hasattr(cycles, "blur_glossy"):
+        cycles.blur_glossy = 0.0
 
     # Cube
     bpy.ops.mesh.primitive_cube_add(location=(0.0, 0.0, 0.0), scale=(CUBE_SCALE, CUBE_SCALE, CUBE_SCALE))
@@ -192,6 +229,17 @@ def describe(scene, cube, lamp, cam):
     print("  res", scene.render.resolution_x, "x", scene.render.resolution_y)
     print("  samples", scene.cycles.samples, "adaptive", scene.cycles.use_adaptive_sampling,
           "seed", scene.cycles.seed, "denoise", scene.cycles.use_denoising)
+    print("  sampling_pattern", getattr(scene.cycles, "sampling_pattern", None),
+          "scramble", getattr(scene.cycles, "scrambling_distance", None),
+          "lst", getattr(scene.cycles, "light_sampling_threshold", None))
+    print("  bounces", getattr(scene.cycles, "max_bounces", None),
+          "d", getattr(scene.cycles, "diffuse_bounces", None),
+          "g", getattr(scene.cycles, "glossy_bounces", None),
+          "t", getattr(scene.cycles, "transmission_bounces", None),
+          "v", getattr(scene.cycles, "volume_bounces", None),
+          "tr", getattr(scene.cycles, "transparent_max_bounces", None))
+    print("  filter", getattr(scene.cycles, "pixel_filter_type", None),
+          getattr(scene.cycles, "filter_width", None))
     print("  cube", cube.name, "loc", tuple(round(v, 5) for v in cube.location), "mats", mats)
     print("  light", lamp.type, lamp.data.type, "energy", lamp.data.energy,
           "size", getattr(lamp.data, "size", None), "loc", tuple(round(v, 5) for v in lamp.location))

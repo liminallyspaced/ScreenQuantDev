@@ -1,6 +1,6 @@
 # QuantTrace native (`libquanttrace`)
 
-**This is NOT a path tracer yet.** `quanttrace_is_tracer()` is still `0`.
+**Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7). This is **not a path tracer** F12 yet: `quanttrace_is_tracer()` is still `0` — `SQ_QUANTTRACE.render` is not wired.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -11,7 +11,7 @@ this tree never feeds Auto clocks.
 | Slice | Status | What |
 |---|---|---|
 | **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` and `quanttrace_is_tracer()` (`0`). |
-| **2 — cube pixel-match** | in progress | Session Combined **non-zero** on locked cube (32x32/4spp RGB max 1.75). `is_tracer=0`. 256²/128 Δmax pair not run. |
+| **2 — cube pixel-match** | **PASS** | 256²/128 stock vs Session Δmax **4.77e-7**. `is_tracer=0` (F12 not wired). |
 
 Do not pretend this traces. Python `SQ_QUANTTRACE` keeps `kernel_ready` False and refuses F12.
 

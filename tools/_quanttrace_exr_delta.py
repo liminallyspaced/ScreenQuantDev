@@ -86,6 +86,10 @@ def main() -> int:
     diff = np.abs(da - db)
     dmax = float(diff.max())
     mae = float(diff.mean())
+    loc = np.unravel_index(int(diff.argmax()), diff.shape)
+    y, x, ch = int(loc[0]), int(loc[1]), int(loc[2])
+    n_gt_1e3 = int((diff.max(axis=2) >= 1e-3).sum())
+    n_gt_1e2 = int((diff.max(axis=2) >= 1e-2).sum())
     print(
         f"stock   RGB min={da.min(axis=(0, 1))} max={da.max(axis=(0, 1))} "
         f"mean={da.mean(axis=(0, 1))}"
@@ -95,6 +99,8 @@ def main() -> int:
         f"mean={db.mean(axis=(0, 1))}"
     )
     print(f"dmax={dmax:.6g}")
+    print(f"dmax_xy=({x},{y}) ch={ch} stock={da[y, x]} session={db[y, x]}")
+    print(f"pixels_dmax_ge_1e-3={n_gt_1e3}  ge_1e-2={n_gt_1e2}  of {wa*ha}")
     print(f"mae={mae:.6g}")
     gate = 1e-3
     print(f"gate={gate} pass={dmax < gate}")

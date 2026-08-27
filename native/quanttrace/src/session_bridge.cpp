@@ -67,18 +67,19 @@ namespace {
 /* Locked cube: default Blender cube is 2 m, verts at +/-1 on each axis.
  * 12 triangles (6 quads split). Matches QUANTTRACE-CUBE.md mesh.
  */
+/* Exact bpy.ops.mesh.primitive_cube_add() DNA (Blender 5.2 dump, 12pm). */
 static const float kCubeVerts[8][3] = {
-    {-1.0f, -1.0f, -1.0f}, {1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, -1.0f}, {-1.0f, 1.0f, -1.0f},
-    {-1.0f, -1.0f, 1.0f},  {1.0f, -1.0f, 1.0f},  {1.0f, 1.0f, 1.0f},  {-1.0f, 1.0f, 1.0f},
+    {-1.0f, -1.0f, -1.0f}, {-1.0f, -1.0f, 1.0f}, {-1.0f, 1.0f, -1.0f}, {-1.0f, 1.0f, 1.0f},
+    {1.0f, -1.0f, -1.0f},  {1.0f, -1.0f, 1.0f},  {1.0f, 1.0f, -1.0f},  {1.0f, 1.0f, 1.0f},
 };
-/* Each quad: v0,v1,v2,v3 -> tris (v0,v1,v2) (v0,v2,v3). */
-static const int kCubeQuads[6][4] = {
-    {0, 1, 2, 3}, /* -Z */
-    {4, 7, 6, 5}, /* +Z */
-    {0, 4, 5, 1}, /* -Y */
-    {3, 2, 6, 7}, /* +Y */
-    {0, 3, 7, 4}, /* -X */
-    {1, 5, 6, 2}, /* +X */
+/* loop_triangles from the same dump (CCW outward). */
+static const int kCubeTris[12][3] = {
+    {0, 1, 3}, {0, 3, 2}, /* -X */
+    {2, 3, 7}, {2, 7, 6}, /* +Y */
+    {6, 7, 5}, {6, 5, 4}, /* +X */
+    {4, 5, 1}, {4, 1, 0}, /* -Y */
+    {2, 6, 4}, {2, 4, 0}, /* -Z */
+    {7, 3, 1}, {7, 1, 5}, /* +Z */
 };
 
 /* Cycles kernel camera looks along +Z (src/kernel/camera/camera.h:
@@ -139,13 +140,36 @@ class CombinedBufferDriver : public OutputDriver {
 
 static void build_cube_scene(Scene *scene, const int width, const int height)
 {
-    /* Integrator: stock uni-PT, 128 spp, adaptive off, clamp 0/10. */
+    /* Integrator: stock uni-PT, 128 spp, adaptive off, clamp 0/10.
+     * 12pm PlugWalk: pin sample pattern + bounce bill to match the locked
+     * cube script. Blender 5.2 factory sampling_pattern is AUTOMATIC
+     * (blue-noise on F12). That cannot bit-match Session's default
+     * TABULATED_SOBOL. Both sides now force Classic/Tabulated Sobol,
+     * scrambling 1.0, light-threshold 0, Blender factory bounce counts
+     * (12/4/4/12/0/8). Do not fudge strength.
+     */
     Integrator *integrator = scene->integrator;
     integrator->set_use_adaptive_sampling(false);
     integrator->set_use_denoise(false);
     integrator->set_seed(0); /* QUANTTRACE-CUBE.md locked seed */
     integrator->set_sample_clamp_direct(0.0f);
     integrator->set_sample_clamp_indirect(10.0f);
+    integrator->set_sampling_pattern(SAMPLING_PATTERN_TABULATED_SOBOL);
+    integrator->set_scrambling_distance(1.0f);
+    integrator->set_use_pixel_jitter(false);
+    integrator->set_use_light_tree(true);
+    integrator->set_light_sampling_threshold(0.0f);
+    integrator->set_min_bounce(0);
+    integrator->set_max_bounce(12);
+    integrator->set_max_diffuse_bounce(4);
+    integrator->set_max_glossy_bounce(4);
+    integrator->set_max_transmission_bounce(12);
+    integrator->set_max_volume_bounce(0);
+    integrator->set_transparent_min_bounce(0);
+    integrator->set_transparent_max_bounce(8);
+    integrator->set_caustics_reflective(true);
+    integrator->set_caustics_refractive(true);
+    integrator->set_filter_glossy(0.0f);
 
     Film *film = scene->film;
     film->set_exposure(1.0f);
@@ -159,10 +183,18 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     cam->set_sensorwidth(0.036f);
     cam->set_full_width(width);
     cam->set_full_height(height);
-    cam->set_matrix(look_at(make_float3(7.358891f, -6.925791f, 4.958309f),
-                            make_float3(0.0f, 0.0f, 0.0f),
-                            make_float3(0.0f, 0.0f, 1.0f),
-                            false)); /* +Z toward origin */
+    cam->set_sensorheight(0.024f);
+    cam->set_nearclip(0.1f);
+    cam->set_farclip(1000.0f);
+    {
+        /* Exact bpy matrix_world after depsgraph update (Blender 5.2 cube
+         * script), then blender_camera_matrix: object * scale(1,1,-1). */
+        const Transform blender_cam = make_transform(
+            0.6853529810905457f, -0.3207705318927765f, 0.6537564992904663f, 7.358891010284424f,
+            0.7282110452651978f, 0.301891952753067f, -0.6152803897857666f, -6.925790786743164f,
+            -2.988588576613438e-08f, 0.8977569341659546f, 0.4404911696910858f, 4.958309173583984f);
+        cam->set_matrix(blender_cam * transform_scale(1.0f, 1.0f, -1.0f));
+    }
     cam->compute_auto_viewplane();
     cam->need_flags_update = true;
     cam->update(scene);
@@ -209,24 +241,12 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     int *tris = mesh->get_triangles().data();
     int *shader_idx = mesh->get_shader().data();
     bool *smooth = mesh->get_smooth().data();
-    int t = 0;
-    for (int q = 0; q < 6; q++) {
-        const int v0 = kCubeQuads[q][0];
-        const int v1 = kCubeQuads[q][1];
-        const int v2 = kCubeQuads[q][2];
-        const int v3 = kCubeQuads[q][3];
-        tris[t * 3 + 0] = v0;
-        tris[t * 3 + 1] = v1;
-        tris[t * 3 + 2] = v2;
+    for (int t = 0; t < 12; t++) {
+        tris[t * 3 + 0] = kCubeTris[t][0];
+        tris[t * 3 + 1] = kCubeTris[t][1];
+        tris[t * 3 + 2] = kCubeTris[t][2];
         shader_idx[t] = 0;
         smooth[t] = false;
-        t++;
-        tris[t * 3 + 0] = v0;
-        tris[t * 3 + 1] = v2;
-        tris[t * 3 + 2] = v3;
-        shader_idx[t] = 0;
-        smooth[t] = false;
-        t++;
     }
     mesh->tag_triangles_modified();
     mesh->tag_shader_modified();
@@ -259,6 +279,9 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     AreaLight *area = scene->create_node<AreaLight>();
     area->set_sizeu(1.0f);
     area->set_sizev(1.0f);
+    area->set_ellipse(false);
+    area->set_spread(3.1415926535897932f); /* Blender area spread 180 deg */
+    area->set_normalize(true);
     area->set_strength(make_float3(1000.0f, 1000.0f, 1000.0f));
     area->set_use_mis(true);
     area->set_cast_shadow(true);
@@ -271,10 +294,11 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     Object *light_obj = scene->create_node<Object>();
     light_obj->set_geometry(area);
     light_obj->set_visibility(PATH_RAY_VISIBILITY_ALL & ~PATH_RAY_VISIBILITY_CAMERA);
-    light_obj->set_tfm(look_at(make_float3(4.07625f, 1.00545f, 5.90386f),
-                               make_float3(0.0f, 0.0f, 0.0f),
-                               make_float3(0.0f, 0.0f, 1.0f),
-                               true)); /* -Z toward origin (area emit) */
+    /* Exact bpy matrix_world for the area light (look -Z, emit -Z). */
+    light_obj->set_tfm(make_transform(
+        -0.23948293924331665f, -0.7912328839302063f, 0.5626708269119263f, 4.076250076293945f,
+        0.9709005951881409f, -0.1951659470796585f, 0.13878880441188812f, 1.0054500102996826f,
+        -8.60238387190293e-08f, 0.5795349478721619f, 0.8149473667144775f, 5.903860092163086f));
 
     Pass *pass = scene->create_node<Pass>();
     pass->set_name(ustring("combined"));
@@ -304,8 +328,8 @@ static int env_positive_int(const char *name, int fallback)
 }
 
 /* Linear RGBA float OpenEXR. Codec: zip. Combined buffer is bottom-up;
- * camera look_at uses Cycles +Z with Blender screen-X (y = -Blender_Y),
- * so writing without an extra Y-flip matches Blender top-down Combined.
+ * Y-flip to top-down like Blender Combined / oiio_output_driver.cpp.
+ * Camera uses blender_camera_matrix (object * scale(1,1,-1)).
  * No gamma: EXR stays scene-linear.
  */
 static bool write_combined_exr(const char *path,
@@ -332,10 +356,14 @@ static bool write_combined_exr(const char *path,
         return false;
     }
 
-    /* No Y-flip here: look_at camera uses x=cross(z,up) so camera Y is
-     * -Blender_Y; writing the bottom-up Combined buffer as-is cancels that
-     * and matches Blender top-down EXR (measured 11am PlugWalk). */
-    const bool ok = out->write_image(OIIO::TypeDesc::FLOAT, rgba);
+    /* Y-flip: Combined is bottom-up; file is top-down like Blender / oiio_output_driver. */
+    std::vector<float> flipped(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+    for (int y = 0; y < height; y++) {
+        const float *src = rgba + (static_cast<size_t>(height - 1 - y) * static_cast<size_t>(width) * 4u);
+        float *dst = flipped.data() + (static_cast<size_t>(y) * static_cast<size_t>(width) * 4u);
+        std::memcpy(dst, src, static_cast<size_t>(width) * 4u * sizeof(float));
+    }
+    const bool ok = out->write_image(OIIO::TypeDesc::FLOAT, flipped.data());
     if (!ok) {
         fprintf(stderr, "quanttrace: write_image failed: %s\n", out->geterror().c_str());
     }

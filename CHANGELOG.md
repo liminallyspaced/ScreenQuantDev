@@ -2,6 +2,7 @@
 
 ## 0.3.3 — Unreleased
 
+- 12pm PlugWalk QuantTrace Slice 2: cube gate **PASS**. Stock Cycles vs Session Combined 256²/128 Δmax=4.77e-7 (MAE 3.57e-9). Camera is blender_camera_matrix (object * scale(1,1,-1)) + exact bpy matrix_world; both sides pin Tabulated Sobol. is_tracer still 0 (F12 not wired). No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 11am PlugWalk QuantTrace Slice 2: honest locked-cube Δmax vs stock Cycles (32/4 Δmax=0.665, 64/32=0.158, 256/128=0.059; gate FAIL). Camera screen-X + EXR Y convention; energy 1:1 official. is_tracer still 0. No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 10am PlugWalk QuantTrace Slice 2: locked-cube Combined non-zero (camera look along Cycles +Z; area still -Z). 32x32/4spp RGB max 1.75, is_tracer still 0. No 256/128 dmax, no zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 9:15am PlugWalk QuantTrace Slice 2: Session Combined EXR write (OIIO linear RGBA float zip) + 32x32/4spp smoke via QUANTTRACE_CUBE_* env; is_tracer still 0. Cube dmax gate unmet. No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.

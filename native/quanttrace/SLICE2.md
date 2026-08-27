@@ -1,11 +1,11 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **honest cube Δmax pair exists** (2026-08-27 11am PlugWalk ET). `is_tracer` still **0**. Gate **FAIL**: 256²/128 Δmax=0.0592 ≥ 1e-3. Energy/framing aligned; residual is sample-pattern / filter parity.
+Status: **cube gate PASS** (2026-08-27 12pm PlugWalk ET). 256²/128 Δmax=4.77e-7 < 1e-3. `is_tracer` still **0** (F12 not wired). 11am FAIL was camera Y vs `blender_camera_matrix`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 
-**Do not** set `is_tracer=1` until stock uni-PT produces Combined pixels.
+**Do not** set `is_tracer=1` until `SQ_QUANTTRACE.render` is wired to the Session kernel (cube Combined exists; F12 still refuses).
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
 
@@ -459,4 +459,54 @@ Residual Δmax ≈ 0.059 at 256²/128 with matched energy and framing. Likely RN
 scramble stream, filter edge, or light-shader path parity (Session Emission×Area
 vs Blender sync). Next: bit-closer sample pattern / filter / shader sync — not a
 strength fudge (official factor already 1:1).
+
+---
+
+## 12pm PlugWalk (2026-08-27) — cube gate PASS
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What was wrong (11am residual Δmax 0.059)
+
+Not energy. Not filter. Not RNG table as the *first* lever.
+
+1. **Blender 5.2 factory `sampling_pattern` is AUTOMATIC** (blue-noise on F12). Session default is TABULATED_SOBOL. Pinning Classic on **both** sides did not move 32²/4 (still Δmax 0.666) — pixel hashes were still on a mirrored camera Y.
+2. **Camera matrix.** `intern/cycles/blender/camera.cpp` `blender_camera_matrix` is `object_tfm * scale(1,1,-1)` (Z flip only; Blender X/Y kept). The 11am +Z look-at used `x = cross(z_fwd, up)`, which negated camera Y vs that sync. Skipping the EXR Y-flip lined up the *image* but left kernel pixel Y = H-1-Blender_Y, so tabulated Sobol hashed different pixels.
+3. One leftover silhouette pixel (256²/128 Δmax 0.006 at (126,135)) after the Z-flip + Y-flip restore: look_at vs Blender `to_track_quat` ULPs. **Exact `matrix_world`** from the cube script (depsgraph-evaluated) closed it.
+
+### Pins (both stock cube script and Session)
+
+| Knob | Value |
+|---|---|
+| sampling_pattern | TABULATED_SOBOL (Classic) |
+| scramble | 1.0, auto off |
+| light_sampling_threshold | 0 |
+| bounces | 12 / d4 / g4 / t12 / v0 / tr8 (Blender factory) |
+| filter | Gaussian 1.5 |
+| camera | exact bpy matrix_world * scale(1,1,-1) |
+| light | exact bpy matrix_world (emit -Z) |
+| mesh | Blender 5.2 `primitive_cube_add` verts + loop_triangles |
+| EXR | linear RGBA zip, Y-flip on write (oiio_output_driver) |
+
+### Measured pairs (linear RGB, A ignored)
+
+| Res / spp | Stock wall | Session wall | Δmax | MAE | pixels ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|---|
+| 32×32 / 4 | ~1.0 s (Blender start) | 0.024 s | **2.98e-7** | 4.64e-9 | 0 / 1024 | **PASS** |
+| 256×256 / 128 | ~1.2 s | 0.307 s | **4.77e-7** | 3.57e-9 | 0 / 65536 | **PASS** |
+
+Stock max/mean at 256/128: max 1.81675553 mean 0.0662047. Session: identical to printed digits.
+
+EXR artifacts under `/tmp/quanttrace_cube_pair/` — **not** committed.
+
+### Honesty
+
+- `is_tracer` **0** — cube Combined matches via `quanttrace_render_cube`. `SQ_QUANTTRACE.render` still raises QuantTraceNotBuilt. Do **not** flip until F12 is wired.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Wire `SQ_QUANTTRACE.render` to Session for the locked cube (then is_tracer=1). Not ReSTIR. Not Classroom time %.
 

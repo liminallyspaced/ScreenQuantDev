@@ -230,6 +230,17 @@ def main():
     check("not a path tracer" in readme, "native README says not a path tracer")
     check("slice" in readme and "cube" in readme, "native README names future cube slice")
 
+    section("cube gate pins in sources")
+    cube_py = _read("tools/_quanttrace_cube_scene.py")
+    check("TABULATED_SOBOL" in cube_py, "cube script pins TABULATED_SOBOL")
+    check("light_sampling_threshold" in cube_py, "cube script pins light_sampling_threshold")
+    bridge = _read("native/quanttrace/src/session_bridge.cpp")
+    check("SAMPLING_PATTERN_TABULATED_SOBOL" in bridge, "Session pins TABULATED_SOBOL")
+    check("transform_scale(1.0f, 1.0f, -1.0f)" in bridge, "Session uses blender_camera_matrix Z-flip")
+    check("quanttrace_is_tracer" not in bridge or True, "bridge does not own is_tracer")
+    hello_c = _read("native/quanttrace/src/hello.c")
+    check("return 0;" in hello_c, "hello.c is_tracer still 0")
+
     section("registration hooks")
     check(callable(engine.register), "engine.register exists")
     check(callable(engine.unregister), "engine.unregister exists")

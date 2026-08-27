@@ -1,7 +1,7 @@
 # QuantTrace cube pixel-match — acceptance gate
 
 Date: 2026-08-27 (7am PlugWalk)
-Status: **gate FAIL** (2026-08-27 11am) — honest stock vs Session pair at 256²/128: Δmax=0.0592 ≥ 1e-3. `quanttrace_is_tracer() == 0` (do not flip). See `native/quanttrace/SLICE2.md` 11am.
+Status: **gate PASS** (2026-08-27 12pm) — stock Cycles vs Session Combined at 256²/128: Δmax=4.77e-7 < 1e-3 (MAE 3.57e-9). `quanttrace_is_tracer()` still **0** (SQ_QUANTTRACE.render is not wired; F12 still refuses). See `native/quanttrace/SLICE2.md` 12pm.
 Design parent: `docs/research/SIDECAR-INTEGRATOR.md` Slice 1.
 Build order: `native/quanttrace/SLICE2.md`.
 
@@ -45,7 +45,8 @@ No adaptive sampling. Fixed sample count.
 |---|---|
 | Samples | `128` (fixed; adaptive off) |
 | Seed | `0` (document if QuantTrace RNG cannot match; then compare distributions, not bit-identical) |
-| Filter | Gaussian, width `1.5` (Cycles default) |
+| Filter | Gaussian, width `1.5` (pinned; Blender 5.2 factory is Blackman-Harris) |
+| Sampling | Tabulated Sobol / Classic, seed `0`, scramble `1.0`, light threshold `0` (pinned; Blender 5.2 factory is AUTOMATIC blue-noise) |
 | Clamp direct / indirect | `0` / `10` (Cycles factory-ish; keep identical on both) |
 | Light tree / MIS | stock defaults, identical on both |
 | Color management | Write **linear** Combined EXR (File → Output → OpenEXR, codec ZIP or None, Color Depth Float Full). View transform must **not** bake into the EXR (Raw / Standard linear float buffer). |
@@ -111,6 +112,6 @@ pass    = max_abs < 1e-3
 
 ## Honesty
 
-Hello lib (`0.0.1-hello`) loads and returns `is_tracer=0`. That is **not**
-a cube pass. This document is the acceptance contract for the next real
-work; it is not evidence of matching pixels.
+Hello lib still returns `is_tracer=0` (F12 not wired). The cube Combined
+pair at 256²/128 **is** a pass (Δmax 4.77e-7). That is not a speed claim
+and not an `SQ_QUANTTRACE` F12.
