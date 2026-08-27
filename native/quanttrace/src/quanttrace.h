@@ -4,6 +4,7 @@
  * Slice 2: Session cube Combined (pixel-match PASS) + F12 wire.
  * Slice 2b: depsgraph-fed simple scene (camera/mesh/Principled/area/world).
  * Slice 2c: multi-mesh + multi-AREA (constant Principled per mesh).
+ * Slice 2f: optional TEX_IMAGE on Principled Base Color + corner UVs.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -86,6 +87,9 @@ typedef struct QT_SimpleScene {
   float alpha;
   float world_strength; /* Background Strength; Color black */
   const char *exr_path; /* optional; NULL/empty skips file write */
+  const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
+  const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
+  const char *image_colorspace; /* OCIO name; NULL = node default */
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -96,7 +100,7 @@ QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
 
 /* Slice 2c: N meshes + N AREA lights (constant Principled per mesh).
  * Caps: QT_MAX_MESHES / QT_MAX_LIGHTS. AREA + POINT + SUN.
- * Textured Principled / SPOT / HDR worlds still refuse on the Python packer.
+ * SPOT / HDR worlds still refuse on the Python packer.
  */
 typedef struct QT_Mesh {
   int nverts;
@@ -110,6 +114,9 @@ typedef struct QT_Mesh {
   float ior;
   float alpha;
   const char *name; /* Blender object name for random_id; may be NULL */
+  const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
+  const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
+  const char *image_colorspace; /* OCIO name from Image.colorspace_settings */
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

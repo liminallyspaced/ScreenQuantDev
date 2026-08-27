@@ -4,13 +4,15 @@
 # AREA lights / world into ctypes QT_SimpleScene (1+1) or QT_Scene (N+N)
 # for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
 # Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN lights, constant Principled.
-# Linked Principled sockets / SPOT / HDR worlds still refuse.
+# Slice 2f: TEX_IMAGE → Principled Base Color (default UV, disk filepath).
+# Other linked sockets / SPOT / HDR worlds still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Make it Fast stays on stock Cycles.
 
 from __future__ import annotations
 
 import ctypes
+import os
 import math
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -51,14 +53,93 @@ def _world_verts(verts, tfm):
     return out
 
 
-def _principled_from_material(mat) -> Tuple[Tuple[float, float, float], float, float, float, float]:
-    """Return (base_rgb, roughness, metallic, ior, alpha) or raise."""
+def _abspath_image(img) -> str:
+    """Disk filepath for a Blender Image, or empty if packed/missing."""
+    if img is None:
+        return ""
+    getter = getattr(img, "filepath_from_user", None)
+    if callable(getter):
+        try:
+            raw = getter() or ""
+        except Exception:
+            raw = ""
+    else:
+        raw = getattr(img, "filepath", "") or ""
+    raw = str(raw).strip()
+    if not raw:
+        return ""
+    # bpy.path.abspath when available (// relative).
+    try:
+        import bpy  # type: ignore
+        abspath = getattr(getattr(bpy, "path", None), "abspath", None)
+        if callable(abspath):
+            raw = abspath(raw)
+    except Exception:
+        pass
+    raw = os.path.abspath(os.path.expanduser(raw))
+    return raw if os.path.isfile(raw) else ""
+
+
+def _tex_image_from_base_color(sock) -> Tuple[str, str]:
+    """If Base Color is TEX_IMAGE Color (unlinked Vector), return (path, cs)."""
+    links = list(getattr(sock, "links", None) or [])
+    if not links:
+        return "", ""
+    if len(links) != 1:
+        raise QuantTraceSyncError("Principled.Base Color has multiple links")
+    src = links[0]
+    from_node = getattr(src, "from_node", None)
+    from_sock = getattr(src, "from_socket", None)
+    if from_node is None or getattr(from_node, "type", None) != "TEX_IMAGE":
+        raise QuantTraceSyncError(
+            "Principled.Base Color link is not TEX_IMAGE (Slice 2f)"
+        )
+    sock_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
+    if sock_name not in ("Color", "color"):
+        raise QuantTraceSyncError(
+            "Base Color must come from Image Texture Color (Slice 2f)"
+        )
+    vec = None
+    inputs = getattr(from_node, "inputs", None)
+    if inputs is not None:
+        getter = getattr(inputs, "get", None)
+        vec = getter("Vector") if callable(getter) else None
+    if vec is not None and getattr(vec, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Image Texture Vector is linked (Slice 2f needs default UV)"
+        )
+    img = getattr(from_node, "image", None)
+    if img is None:
+        raise QuantTraceSyncError("Image Texture has no image")
+    path = _abspath_image(img)
+    if not path:
+        raise QuantTraceSyncError(
+            "Image Texture filepath missing on disk (Slice 2f; packed-only refused)"
+        )
+    cs = ""
+    settings = getattr(img, "colorspace_settings", None)
+    if settings is not None:
+        cs = str(getattr(settings, "name", "") or "")
+    return path, cs
+
+
+def _principled_from_material(mat) -> dict:
+    """Return principled dict (constants + optional TEX_IMAGE) or raise."""
+    empty = {
+        "base_color": (0.8, 0.8, 0.8),
+        "roughness": 0.5,
+        "metallic": 0.0,
+        "ior": 1.45,
+        "alpha": 1.0,
+        "image_path": "",
+        "image_colorspace": "",
+    }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
     if not getattr(mat, "use_nodes", False) or mat.node_tree is None:
-        # Nodeless: approximate Blender default Principled.
         diff = getattr(mat, "diffuse_color", (0.8, 0.8, 0.8, 1.0))
-        return (float(diff[0]), float(diff[1]), float(diff[2])), 0.5, 0.0, 1.45, 1.0
+        empty["base_color"] = (float(diff[0]), float(diff[1]), float(diff[2]))
+        return empty
     bsdf = None
     for node in mat.node_tree.nodes:
         if getattr(node, "type", None) == "BSDF_PRINCIPLED":
@@ -66,23 +147,56 @@ def _principled_from_material(mat) -> Tuple[Tuple[float, float, float], float, f
             break
     if bsdf is None:
         raise QuantTraceSyncError("material has no Principled BSDF (Slice 2b)")
-    # Linked sockets are unsupported this slice — require defaults.
+    image_path = ""
+    image_cs = ""
     for sock_name in ("Base Color", "Roughness", "Metallic", "IOR", "Alpha"):
         sock = bsdf.inputs.get(sock_name)
         if sock is None:
             continue
-        if getattr(sock, "is_linked", False):
-            raise QuantTraceSyncError(
-                f"Principled.{sock_name} is linked (Slice 2b needs constants)"
-            )
+        if not getattr(sock, "is_linked", False):
+            continue
+        if sock_name == "Base Color":
+            image_path, image_cs = _tex_image_from_base_color(sock)
+            continue
+        raise QuantTraceSyncError(
+            f"Principled.{sock_name} is linked (Slice 2f still needs constants)"
+        )
     base = bsdf.inputs["Base Color"].default_value
-    return (
-        (float(base[0]), float(base[1]), float(base[2])),
-        float(bsdf.inputs["Roughness"].default_value),
-        float(bsdf.inputs["Metallic"].default_value),
-        float(bsdf.inputs["IOR"].default_value),
-        float(bsdf.inputs["Alpha"].default_value),
-    )
+    return {
+        "base_color": (float(base[0]), float(base[1]), float(base[2])),
+        "roughness": float(bsdf.inputs["Roughness"].default_value),
+        "metallic": float(bsdf.inputs["Metallic"].default_value),
+        "ior": float(bsdf.inputs["IOR"].default_value),
+        "alpha": float(bsdf.inputs["Alpha"].default_value),
+        "image_path": image_path,
+        "image_colorspace": image_cs,
+    }
+
+
+def _mesh_corner_uvs(obj, ntris: int) -> List[float]:
+    """loop_triangle corner UVs (ntris * 3 * 2) from the active UV map."""
+    mesh = obj.data
+    layers = getattr(mesh, "uv_layers", None)
+    uv_layer = None
+    if layers:
+        uv_layer = getattr(layers, "active", None)
+        if uv_layer is None and len(layers) > 0:
+            uv_layer = layers[0]
+    if uv_layer is None:
+        raise QuantTraceSyncError("textured Principled needs a UV map")
+    loops = getattr(mesh, "loop_triangles", None)
+    if loops is None or len(loops) == 0:
+        raise QuantTraceSyncError("mesh has no loop_triangles for UVs")
+    uvs: List[float] = []
+    for tri in loops:
+        for loop_i in tri.loops:
+            uv = uv_layer.data[loop_i].uv
+            uvs.extend((float(uv[0]), float(uv[1])))
+    if len(uvs) != ntris * 6:
+        raise QuantTraceSyncError(
+            f"UV count {len(uvs)} != ntris*6 ({ntris * 6})"
+        )
+    return uvs
 
 
 def _mesh_arrays(obj) -> Tuple[List[float], List[int]]:
@@ -240,7 +354,16 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
     mesh_tfm = _matrix_3x4(mesh_obj.matrix_world)
     verts = _world_verts(verts, mesh_tfm)
     mesh_tfm = _identity_3x4()
-    base, rough, metal, ior, alpha = _principled_from_material(mat)
+    pr = _principled_from_material(mat)
+    base, rough, metal, ior, alpha = (
+        pr["base_color"], pr["roughness"], pr["metallic"], pr["ior"], pr["alpha"]
+    )
+    ntris = len(tris) // 3
+    image_path = pr.get("image_path") or ""
+    image_cs = pr.get("image_colorspace") or ""
+    uvs: List[float] = []
+    if image_path:
+        uvs = _mesh_corner_uvs(mesh_obj, ntris)
     width, height, samples = _render_size(scene)
 
     cam_data = cam_obj.data
@@ -281,6 +404,9 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
         "ior": ior,
         "alpha": alpha,
         "world_strength": _world_strength(scene),
+        "uvs": uvs,
+        "image_path": image_path,
+        "image_colorspace": image_cs,
     }
 
 
@@ -402,7 +528,15 @@ def pack_scene(scene, depsgraph=None) -> dict:
                 eval_obj = mesh_obj
         verts, tris = _mesh_arrays(eval_obj)
         tfm = _matrix_3x4(eval_obj.matrix_world)
-        base, rough, metal, ior, alpha = _principled_from_material(mat)
+        pr = _principled_from_material(mat)
+        base, rough, metal, ior, alpha = (
+            pr["base_color"], pr["roughness"], pr["metallic"], pr["ior"], pr["alpha"]
+        )
+        image_path = pr.get("image_path") or ""
+        image_cs = pr.get("image_colorspace") or ""
+        uvs: List[float] = []
+        if image_path:
+            uvs = _mesh_corner_uvs(eval_obj, len(tris) // 3)
         packed_meshes.append({
             "verts": verts,
             "tris": tris,
@@ -413,6 +547,9 @@ def pack_scene(scene, depsgraph=None) -> dict:
             "ior": ior,
             "alpha": alpha,
             "name": getattr(mesh_obj, "name", "") or "",
+            "uvs": uvs,
+            "image_path": image_path,
+            "image_colorspace": image_cs,
         })
 
     packed_lights = []
@@ -507,6 +644,9 @@ def make_qt_simple_scene_type():
             ("alpha", ctypes.c_float),
             ("world_strength", ctypes.c_float),
             ("exr_path", ctypes.c_char_p),
+            ("uvs", ctypes.POINTER(ctypes.c_float)),
+            ("image_path", ctypes.c_char_p),
+            ("image_colorspace", ctypes.c_char_p),
         ]
 
     return QT_SimpleScene
@@ -550,8 +690,18 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
         desc.exr_path = exr_path.encode("utf-8")
     else:
         desc.exr_path = None
+    uvs_list = packed.get("uvs") or []
+    uvs_buf = (ctypes.c_float * len(uvs_list))(*uvs_list) if uvs_list else None
+    if uvs_buf is not None:
+        desc.uvs = ctypes.cast(uvs_buf, ctypes.POINTER(ctypes.c_float))
+    else:
+        desc.uvs = None
+    ip = (packed.get("image_path") or "").encode("utf-8")
+    ics = (packed.get("image_colorspace") or "").encode("utf-8")
+    desc.image_path = ip if ip else None
+    desc.image_colorspace = ics if ics else None
     # Keep buffers alive with the struct.
-    desc._keep = (verts, tris)
+    desc._keep = (verts, tris, uvs_buf, ip, ics)
     return desc
 
 
@@ -571,6 +721,9 @@ def make_qt_scene_types():
             ("ior", ctypes.c_float),
             ("alpha", ctypes.c_float),
             ("name", ctypes.c_char_p),
+            ("uvs", ctypes.POINTER(ctypes.c_float)),
+            ("image_path", ctypes.c_char_p),
+            ("image_colorspace", ctypes.c_char_p),
         ]
 
     class QT_Light(ctypes.Structure):
@@ -635,6 +788,19 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
         nb = name.encode("utf-8")
         keep.append(nb)
         meshes_arr[i].name = nb
+        uvs_list = m.get("uvs") or []
+        if uvs_list:
+            uvs_buf = (ctypes.c_float * len(uvs_list))(*uvs_list)
+            keep.append(uvs_buf)
+            meshes_arr[i].uvs = ctypes.cast(uvs_buf, ctypes.POINTER(ctypes.c_float))
+        else:
+            meshes_arr[i].uvs = None
+        ip = (m.get("image_path") or "").encode("utf-8")
+        ics = (m.get("image_colorspace") or "").encode("utf-8")
+        keep.append(ip)
+        keep.append(ics)
+        meshes_arr[i].image_path = ip if ip else None
+        meshes_arr[i].image_colorspace = ics if ics else None
     for i, L in enumerate(packed["lights"]):
         for j, v in enumerate(L["tfm"]):
             lights_arr[i].tfm[j] = float(v)

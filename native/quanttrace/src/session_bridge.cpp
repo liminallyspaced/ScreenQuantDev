@@ -84,6 +84,7 @@ extern "C" int quanttrace_render_qt_scene_rgba(const QT_Scene * /*scene*/,
 #include "scene/shader.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
+#include "scene/attribute.h"
 #include "session/buffers.h"
 #include "session/output_driver.h"
 #include "session/session.h"
@@ -241,6 +242,9 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->ior = s->ior;
     mesh->alpha = s->alpha;
     mesh->name = "Cube"; /* locked-cube Blender object name */
+    mesh->uvs = s->uvs;
+    mesh->image_path = s->image_path;
+    mesh->image_colorspace = s->image_colorspace;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -281,6 +285,20 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
+    /* Slice 2f: TEX_IMAGE → Base Color. Vector stays unlinked so SVM
+     * LINK_TEXTURE_UV requests ATTR_STD_UV (Blender default UV). */
+    if (m->image_path && m->image_path[0]) {
+        ImageTextureNode *img = graph->create_node<ImageTextureNode>();
+        img->set_filename(ustring(m->image_path));
+        if (m->image_colorspace && m->image_colorspace[0]) {
+            img->set_colorspace(ustring(m->image_colorspace));
+        }
+        img->set_interpolation(INTERPOLATION_LINEAR);
+        img->set_extension(EXTENSION_REPEAT);
+        img->set_projection(NODE_IMAGE_PROJ_FLAT);
+        img->set_alpha_type(IMAGE_ALPHA_AUTO);
+        graph->connect(img->output("Color"), bsdf->input("Base Color"));
+    }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
     surf->set_graph(std::move(graph));
     surf->tag_update(scene);
@@ -331,6 +349,13 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
     mesh->tag_smooth_modified();
     mesh->tag_position_modified();
     mesh->add_vertex_normals();
+    if (m->image_path && m->image_path[0] && m->uvs) {
+        Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
+        float2 *fdata = attr->data_for_write<float2>();
+        for (int c = 0; c < m->ntris * 3; c++) {
+            fdata[c] = make_float2(m->uvs[c * 2 + 0], m->uvs[c * 2 + 1]);
+        }
+    }
 
     Object *mesh_obj = scene->create_node<Object>();
     mesh_obj->set_geometry(mesh);
@@ -559,6 +584,10 @@ static int run_qt_session(const QT_Scene *desc,
         }
         if (m->nverts > 1000000 || m->ntris > 2000000) {
             fprintf(stderr, "quanttrace: mesh %d too large for Slice 2c\n", i);
+            return -1;
+        }
+        if (m->image_path && m->image_path[0] && !m->uvs) {
+            fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;
         }
     }

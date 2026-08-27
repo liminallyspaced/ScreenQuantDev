@@ -1,7 +1,7 @@
 # QuantTrace cube pixel-match — acceptance gate
 
 Date: 2026-08-27 (7am PlugWalk)
-Status: **gate PASS** + **F12 wire** (2026-08-27 1pm) — stock Cycles vs `SQ_QUANTTRACE` F12 Combined at 256²/128: Δmax=4.77e-7 < 1e-3 (MAE 3.57e-9). `quanttrace_is_tracer()` **1** when `QT_WITH_CYCLES`. Locked cube only; depsgraph sync not yet. See `native/quanttrace/SLICE2.md` 1pm.
+Status: **gate PASS** + **F12 wire** (2026-08-27 1pm) — stock Cycles vs `SQ_QUANTTRACE` F12 Combined at 256²/128: Δmax=4.77e-7 < 1e-3 (MAE 3.57e-9). `quanttrace_is_tracer()` **1** when `QT_WITH_CYCLES`. Depsgraph still-life + TEX_IMAGE Principled now pass (see `native/quanttrace/SLICE2.md` 6pm). Locked cube remains the original fidelity gate.
 Design parent: `docs/research/SIDECAR-INTEGRATOR.md` Slice 1.
 Build order: `native/quanttrace/SLICE2.md`.
 

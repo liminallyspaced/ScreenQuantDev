@@ -738,3 +738,45 @@ Proof plate: `docs/proof/quanttrace-softpoint-32-pair.png` (32² preview only).
 
 Textured Principled, SPOT, close still-life 1px residue. Not ReSTIR. Not Classroom time %.
 
+
+---
+
+## 6pm PlugWalk (2026-08-27) — Slice 2f: textured Principled (TEX_IMAGE)
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `QT_Mesh.uvs` (ntris×3×2 corner), `image_path`, `image_colorspace` |
+| Packer | Base Color may be `TEX_IMAGE` Color with unlinked Vector (default UV). Disk filepath required; packed-only refuses. Other linked Principled sockets still refuse. |
+| Native | `ImageTextureNode` → Principled Base Color; `ATTR_STD_UV` from packed corners. Colorspace string from `Image.colorspace_settings.name`. |
+| Version | `0.0.7-slice2f` |
+| Tools | `_quanttrace_tex_scene/smoke.py` (stdlib PNG checker — generated EXR pixels were all-zero) |
+
+### Measured — 8×8 sRGB checker PNG, default cube UVs, AREA 1000
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| TEX_IMAGE Session | 32² / 4 | **1.01e-6** | 7.01e-9 | 0 / 1024 | **PASS** |
+| TEX_IMAGE Session | 256² / 128 | **1.43e-6** | 3.27e-9 | 0 / 65536 | **PASS** |
+| TEX_IMAGE F12 | 32² / 4 | **1.01e-6** | 7.01e-9 | 0 / 1024 | **PASS** |
+| Locked-cube Session regression | 32² / 4 | Combined max 1.65 (untextured grey) | — | — | OK |
+
+Honesty: first 32² pair on a generated EXR was a false match (all-zero RGB, Δmax 4.7e-9). PNG rewrite is the claimed gate.
+
+Proof plate: `docs/proof/quanttrace-tex-32-pair.png` (32 preview only).
+
+### Honesty
+
+- SPOT / HDR / kitchens / linked Vector (mapping nodes) still refuse.
+- Still-life off-center 256² 1px noise-class residue from 4pm remains documented.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+SPOT, mapping/TEX_COORD, more Principled sockets, close still-life 1px. Not ReSTIR. Not Classroom time %.
+

@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.5-slice2d" in hello_c, "hello.c version string 0.0.5-slice2d")
+    check("0.0.7-slice2f" in hello_c, "hello.c version string 0.0.7-slice2f")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -339,6 +339,104 @@ def main():
     smoke = _read("tools/_quanttrace_multimesh_smoke.py")
     check("pack_scene" in smoke and "render_qt_scene_rgba" in smoke,
           "still-life smoke packs QT_Scene")
+
+    section("Slice 2f textured Principled ABI")
+    hdr = _read("native/quanttrace/src/quanttrace.h")
+    check("image_path" in hdr, "QT_Mesh has image_path")
+    check("image_colorspace" in hdr, "QT_Mesh has image_colorspace")
+    bridge = _read("native/quanttrace/src/session_bridge.cpp")
+    check("ImageTextureNode" in bridge, "bridge builds ImageTextureNode")
+    check("ATTR_STD_UV" in bridge, "bridge writes ATTR_STD_UV")
+    sync_src = _read("scenequant/quanttrace/sync.py")
+    check("_tex_image_from_base_color" in sync_src, "sync allows TEX_IMAGE Base Color")
+    check("_mesh_corner_uvs" in sync_src, "sync packs corner UVs")
+    check(callable(sync._tex_image_from_base_color), "sync._tex_image_from_base_color")
+    check(callable(sync._mesh_corner_uvs), "sync._mesh_corner_uvs")
+    check(callable(sync._principled_from_material), "sync._principled_from_material")
+
+    class _Sock:
+        def __init__(self, value, linked=False, links=None):
+            self.default_value = value
+            self.is_linked = linked
+            self.links = links or []
+    class _Inputs(dict):
+        def get(self, k, default=None):
+            return dict.get(self, k, default)
+    class _FromSock:
+        name = "Color"
+    class _Link:
+        def __init__(self, node):
+            self.from_node = node
+            self.from_socket = _FromSock()
+    class _ImgCS:
+        name = "Linear Rec.709"
+    class _Img:
+        def __init__(self, path):
+            self.filepath = path
+            self.colorspace_settings = _ImgCS()
+            self.filepath_from_user = lambda: path
+    class _Tex:
+        def __init__(self, path):
+            self.type = "TEX_IMAGE"
+            self.image = _Img(path)
+            self.inputs = _Inputs(Vector=_Sock((0, 0, 0), linked=False))
+    tmp_img = "/tmp/qt_test_checker_missing.exr"
+    # missing file must refuse
+    tex_missing = _Tex(tmp_img)
+    class _Bsdf:
+        def __init__(self, tex):
+            self.type = "BSDF_PRINCIPLED"
+            self.inputs = _Inputs({
+                "Base Color": _Sock((0.8, 0.8, 0.8, 1), linked=True,
+                                   links=[_Link(tex)]),
+                "Roughness": _Sock(0.5),
+                "Metallic": _Sock(0.0),
+                "IOR": _Sock(1.45),
+                "Alpha": _Sock(1.0),
+            })
+    class _Tree:
+        def __init__(self, tex):
+            self.nodes = [_Bsdf(tex)]
+    class _Mat:
+        def __init__(self, tex):
+            self.use_nodes = True
+            self.node_tree = _Tree(tex)
+    raised = None
+    try:
+        sync._principled_from_material(_Mat(tex_missing))
+    except sync.QuantTraceSyncError as exc:
+        raised = exc
+    check(raised is not None, "missing image filepath refuses")
+    check("filepath" in str(raised).lower() or "disk" in str(raised).lower(),
+          "refuse names missing disk filepath")
+
+    # other linked socket still refuses
+    class _BsdfRough:
+        type = "BSDF_PRINCIPLED"
+        inputs = _Inputs({
+            "Base Color": _Sock((0.8, 0.8, 0.8, 1)),
+            "Roughness": _Sock(0.5, linked=True, links=["x"]),
+            "Metallic": _Sock(0.0),
+            "IOR": _Sock(1.45),
+            "Alpha": _Sock(1.0),
+        })
+    class _TreeR:
+        nodes = [_BsdfRough()]
+    class _MatR:
+        use_nodes = True
+        node_tree = _TreeR()
+    raised_r = None
+    try:
+        sync._principled_from_material(_MatR())
+    except sync.QuantTraceSyncError as exc:
+        raised_r = exc
+    check(raised_r is not None, "linked Roughness still refuses")
+
+    tex_tools = _read("tools/_quanttrace_tex_scene.py")
+    check("ShaderNodeTexImage" in tex_tools, "tex scene wires Image Texture")
+    smoke = _read("tools/_quanttrace_tex_smoke.py")
+    check("pack_scene" in smoke and "render_qt_scene_rgba" in smoke,
+          "tex smoke packs QT_Scene")
 
     section("research brief present")
     brief = os.path.join(PROJECT_ROOT, "docs", "research", "SIDECAR-INTEGRATOR.md")
