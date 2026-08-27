@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **locked-cube Combined non-zero** (2026-08-27 10am PlugWalk ET). `is_tracer` still 0. 32x32/4spp Session smoke RGB max 1.75 (not black). Cube dmax pair / 256²/128 **not** claimed.
+Status: **honest cube Δmax pair exists** (2026-08-27 11am PlugWalk ET). `is_tracer` still **0**. Gate **FAIL**: 256²/128 Δmax=0.0592 ≥ 1e-3. Energy/framing aligned; residual is sample-pattern / filter parity.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -386,3 +386,77 @@ Full 256^2 / 128 **not run** this hour (would be the next gate vs stock Cycles C
 - `is_tracer=1`
 - Make it Fast / Auto / zip / Classroom 41% / loft 52% change
 - User 2080 / listing / gibby
+
+---
+
+## 11am PlugWalk (2026-08-27) — stock Cycles vs Session Δmax
+
+Box: Linux, 8 cores, ~17G free. Did **not** `make update`, `git lfs pull`, or rebuild
+`native/cycles-src`. Rebuilt only `native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`).
+No user 2080. No zip. No Make it Fast / Auto. `is_tracer` **still 0**.
+
+### Tools
+
+| Tool | Role |
+|---|---|
+| `tools/_quanttrace_cube_scene.py --render --res N --samples S --out PATH` | Stock Cycles CPU Combined OpenEXR (Raw view, float ZIP). Default tiny 64/8; this hour used 32/4, 64/32, 256/128. |
+| `tools/_quanttrace_session_smoke.py` + `QUANTTRACE_CUBE_{WIDTH,HEIGHT,SAMPLES,EXR}` | Session Combined via `quanttrace_render_cube`. |
+| `tools/_quanttrace_exr_delta.py` | Blender OIIO: prints Δmax / MAE over RGB; fails on dim mismatch. |
+
+### Energy scale (documented, not guessed)
+
+Blender `intern/cycles/blender/light.cpp` `sync_light`:
+
+```
+strength = light_color * energy * exp2f(exposure);
+light->set_normalize(!(mode & LA_UNNORMALIZED));
+```
+
+Locked cube: white × energy 1000 × exposure 0 → **strength (1000,1000,1000)**, normalize on.
+Session already sets `AreaLight::set_strength(1000,1000,1000)`. **No extra scale factor.**
+Mean RGB at 256²/128: stock 0.06620564 vs Session 0.06620382.
+
+### Framing fixes this hour
+
+1. **Camera screen-X**: Cycles +Z look cannot RH-match both Blender X and Y.
+   `look_at` camera path now uses `x = cross(z, up)` (Blender screen-X). That makes
+   camera Y = −Blender_Y.
+2. **EXR Y write**: skip the standalone-style buffer Y-flip so bottom-up Combined
+   cancels −Blender_Y and matches Blender top-down Combined.
+3. Area light still `look_along_neg_z` with `cross(up, z)` (unchanged).
+4. Integrator `seed=0` (QUANTTRACE-CUBE.md).
+
+Before framing fix: 64²/32 Δmax ≈ 1.27 (bright peak X 24 vs 39). After: peaks share
+(39,25), nonzero counts both 342.
+
+### Measured pairs (linear RGB, A ignored)
+
+| Res / spp | Stock EXR | Session EXR | Stock wall | Session wall | Δmax | MAE | Gate |
+|---|---|---|---|---|---|---|---|
+| 32×32 / 4 | `/tmp/quanttrace_cube_pair/stock_32x32_spp4.exr` (1456 B) | `…/session_32x32_spp4.exr` (1459 B) | ~0.88 s (incl. Blender start; render ~0.58 s) | 0.021 s | **0.664846** | 0.00845151 | FAIL |
+| 64×64 / 32 | `…/stock_64x64_spp32.exr` (2878 B) | `…/session_64x64_spp32.exr` (3292 B) | ~0.77 s | 0.031 s | **0.158144** | 0.0011999 | FAIL |
+| 256×256 / 128 | `…/stock_256x256_spp128.exr` (23450 B) | `…/session_256x256_spp128.exr` (27156 B) | 1.1 s | 0.312 s | **0.0592421** | 0.000112379 | FAIL (< 1e-3 needed) |
+
+Stock max/mean at 256/128: max 1.82221 mean 0.066206. Session: max 1.82086 mean 0.066204.
+Images are the same lit cube (not unrelated). Gate still fails.
+
+### Honesty
+
+- `is_tracer` **0** — do **not** flip: full-gate Δmax < 1e-3 **not** met at 256/128.
+- Numbers above are measured, not invented.
+- Store Classroom **41%** / loft **52%** unchanged.
+- EXR artifacts stay under `/tmp` — **not** committed.
+
+### Still not true
+
+- Cube gate PASS (Δmax < 1e-3)
+- `is_tracer=1`
+- Make it Fast / Auto / zip / listing / gibby / user 2080
+
+### Remaining blocker
+
+Residual Δmax ≈ 0.059 at 256²/128 with matched energy and framing. Likely RNG/
+scramble stream, filter edge, or light-shader path parity (Session Emission×Area
+vs Blender sync). Next: bit-closer sample pattern / filter / shader sync — not a
+strength fudge (official factor already 1:1).
+

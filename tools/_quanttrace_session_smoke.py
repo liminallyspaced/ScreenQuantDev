@@ -62,9 +62,16 @@ def main() -> int:
     os.environ["QUANTTRACE_CUBE_SAMPLES"] = samples
     print("smoke env", width, "x", height, samples, "spp")
 
-    fd, exr_path = tempfile.mkstemp(prefix="qt_session_smoke_", suffix=".exr")
-    os.close(fd)
-    os.unlink(exr_path)
+    forced = os.environ.get("QUANTTRACE_CUBE_EXR", "").strip()
+    if forced:
+        exr_path = forced
+        parent = os.path.dirname(os.path.abspath(exr_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+    else:
+        fd, exr_path = tempfile.mkstemp(prefix="qt_session_smoke_", suffix=".exr")
+        os.close(fd)
+        os.unlink(exr_path)
     print("exr_path", exr_path)
     t0 = time.perf_counter()
     rc = lib.quanttrace_render_cube(exr_path.encode())

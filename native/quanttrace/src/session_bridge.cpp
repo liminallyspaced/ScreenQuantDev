@@ -98,7 +98,19 @@ static Transform look_at(const float3 from,
     if (!look_along_neg_z) {
         z = -z; /* camera: +Z toward target */
     }
-    const float3 x = normalize(cross(up, z));
+    /* Screen-X must match Blender. Blender/OpenGL cameras look along -Z with
+     * x = cross(up, z_away). Cycles kernel camera looks along +Z, so
+     * z_fwd = -z_away and x = cross(z_fwd, up) keeps the same screen X.
+     * Area lights still look_along_neg_z (emit -Z): keep cross(up, z_away).
+     * 11am PlugWalk: without this, Session Combined was an X-mirror of stock
+     * (64²/32 Δmax ~1.27 → ~0.125 after --flop alone). */
+    float3 x;
+    if (look_along_neg_z) {
+        x = normalize(cross(up, z));
+    }
+    else {
+        x = normalize(cross(z, up));
+    }
     const float3 y = cross(z, x);
     return make_transform(
         x.x, y.x, z.x, from.x, x.y, y.y, z.y, from.y, x.z, y.z, z.z, from.z);
@@ -131,6 +143,7 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     Integrator *integrator = scene->integrator;
     integrator->set_use_adaptive_sampling(false);
     integrator->set_use_denoise(false);
+    integrator->set_seed(0); /* QUANTTRACE-CUBE.md locked seed */
     integrator->set_sample_clamp_direct(0.0f);
     integrator->set_sample_clamp_indirect(10.0f);
 
@@ -226,9 +239,10 @@ static void build_cube_scene(Scene *scene, const int width, const int height)
     cube_obj->set_tfm(transform_identity());
 
     /* Area light: size 1 m, energy 1000, white, Blender startup lamp pose,
-     * aimed at origin. Cycles area emits along object -Z. Strength is RGB
-     * radiance; Blender energy→radiance conversion is NOT bit-copied here
-     * — document when pixel-matching. Sketch uses strength = (1000,1000,1000).
+     * aimed at origin. Cycles area emits along object -Z. Official Blender
+     * sync (intern/cycles/blender/light.cpp): strength = color * energy *
+     * exp2(exposure). White × 1000 × exp2(0) → (1000,1000,1000). Normalize
+     * socket default true matches Blender (!LA_UNNORMALIZED). No extra scale.
      */
     Shader *lamp_shader = scene->create_node<Shader>();
     lamp_shader->name = "area_emission";
@@ -289,10 +303,10 @@ static int env_positive_int(const char *name, int fallback)
     return static_cast<int>(n);
 }
 
-/* Linear RGBA float OpenEXR. Codec: zip (OIIO ImageSpec compression=zip;
- * same ZIP class QUANTTRACE-CUBE.md allows). Combined from Cycles Session
- * is bottom-up; flip Y so the file is top-down — same convention as
- * cycles_standalone OIIOOutputDriver. No gamma: EXR stays scene-linear.
+/* Linear RGBA float OpenEXR. Codec: zip. Combined buffer is bottom-up;
+ * camera look_at uses Cycles +Z with Blender screen-X (y = -Blender_Y),
+ * so writing without an extra Y-flip matches Blender top-down Combined.
+ * No gamma: EXR stays scene-linear.
  */
 static bool write_combined_exr(const char *path,
                                const int width,
@@ -318,11 +332,10 @@ static bool write_combined_exr(const char *path,
         return false;
     }
 
-    const OIIO::stride_t xstride = static_cast<OIIO::stride_t>(4 * sizeof(float));
-    const OIIO::stride_t ystride = -static_cast<OIIO::stride_t>(width) * xstride;
-    const float *origin = rgba +
-                          static_cast<size_t>(height - 1) * static_cast<size_t>(width) * 4u;
-    const bool ok = out->write_image(OIIO::TypeDesc::FLOAT, origin, xstride, ystride);
+    /* No Y-flip here: look_at camera uses x=cross(z,up) so camera Y is
+     * -Blender_Y; writing the bottom-up Combined buffer as-is cancels that
+     * and matches Blender top-down EXR (measured 11am PlugWalk). */
+    const bool ok = out->write_image(OIIO::TypeDesc::FLOAT, rgba);
     if (!ok) {
         fprintf(stderr, "quanttrace: write_image failed: %s\n", out->geterror().c_str());
     }
