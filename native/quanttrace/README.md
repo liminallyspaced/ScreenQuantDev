@@ -1,6 +1,6 @@
 # QuantTrace native (`libquanttrace`)
 
-**This is NOT a path tracer yet.**
+**This is NOT a path tracer yet.** `quanttrace_is_tracer()` is still `0`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -10,34 +10,37 @@ this tree never feeds Auto clocks.
 
 | Slice | Status | What |
 |---|---|---|
-| **1 — hello lib** | **this directory** | Shared `libquanttrace` / `quanttrace.dll` exporting `quanttrace_version()` and `quanttrace_is_tracer()` (returns `0`). Proves ctypes load from the Python stub. No rays, no pixels, no `begin_result`. |
-| **2 — cube pixel-match** | future | Real integrator path vs stock Cycles Combined on a locked cube + area light. Gate before any ReSTIR claim. |
+| **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` and `quanttrace_is_tracer()` (`0`). |
+| **2 — cube pixel-match** | in progress | Cycles standalone CPU Session **works** (`build/bin/cycles`). Addon `.so` Session path **compiles** (`QT_WITH_CYCLES=ON`) but **does not load** (missing zstd / full external lib list). Pixel-match not run. |
 
-Do not pretend slice 1 traces. `quanttrace_is_tracer() == 0` until a kernel exists; the Python engine keeps `kernel_ready` False and refuses F12.
+Do not pretend this traces. Python `SQ_QUANTTRACE` keeps `kernel_ready` False and refuses F12.
 
-## Build (Linux)
+## Build (Linux) — hello stub (default)
 
 ```bash
 cd native/quanttrace
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 # produces build/libquanttrace.so
+# ABI: is_tracer=0, session_probe=0, render_cube=-1
 ```
 
-Requires `cmake`, a C compiler (`gcc` / `clang`), and `make` (or Ninja).
+## Cycles standalone (gitignored tree)
 
-Override load path from the addon with env `QUANTTRACE_LIB=/abs/path/to/libquanttrace.so`.
+See `SLICE2.md`. Working CPU binary after `make update` + cmake:
 
-## ABI (slice 1)
+`native/cycles-src/build/bin/cycles --device CPU`
+
+## ABI
 
 ```c
-const char *quanttrace_version(void);  /* e.g. "0.0.1-hello" */
-int quanttrace_is_tracer(void);        /* 0 until a real tracer ships */
+const char *quanttrace_version(void);   /* "0.0.1-hello" */
+int quanttrace_is_tracer(void);         /* 0 until Combined exists */
+int quanttrace_session_probe(void);     /* 0 stub / 1 if QT_WITH_CYCLES compiled in */
+int quanttrace_render_cube(const char *exr_path); /* -1 until Session .so loads */
 ```
 
-## Out of scope this hour
+## Out of scope until pixel-match
 
-- Path tracing / pixel writes
-- Cycles fork / OptiX / Embree
-- Wheels / CI matrix
-- Make it Fast / Auto
+- `is_tracer=1`
+- ReSTIR / OptiX / Make it Fast / zip / store % claims

@@ -1,7 +1,7 @@
 # QuantTrace cube pixel-match — acceptance gate
 
 Date: 2026-08-27 (7am PlugWalk)
-Status: **plan only** — no tracer yet (`quanttrace_is_tracer() == 0`, F12 refused).
+Status: **gate unchanged** — `quanttrace_is_tracer() == 0`, F12 refused. 8am: stock Cycles standalone CLI Session works (XML smoke, not this cube). Locked cube Blender dry-run exists (`tools/_quanttrace_cube_scene.py`); no Combined EXR pair yet.
 Design parent: `docs/research/SIDECAR-INTEGRATOR.md` Slice 1.
 Build order: `native/quanttrace/SLICE2.md`.
 

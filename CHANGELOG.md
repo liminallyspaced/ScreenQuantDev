@@ -2,6 +2,7 @@
 
 ## 0.3.3 — Unreleased
 
+- 8am PlugWalk QuantTrace Slice 2: Cycles standalone CPU Embree Session built (`native/cycles-src/build/bin/cycles`, XML 32x32 smoke); Session C++ bridge sketch + cube dry-run script; addon `.so` still `is_tracer=0` (QT_WITH_CYCLES compile-ok, dlopen blocked on zstd). No zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - 7am PlugWalk QuantTrace cube pixel-match acceptance + Slice 2 build order (`docs/research/QUANTTRACE-CUBE.md`, `native/quanttrace/SLICE2.md`); gitignore `native/cycles-src/`. No tracer, no is_tracer=1, no zip, no Auto, no speed claim. Store Classroom 41% / loft 52% unchanged.
 - QuantTrace native hello lib (ctypes load plumbing; not a path tracer).
 - QuantTrace experimental RenderEngine stub (no native kernel, no Auto, no claim).

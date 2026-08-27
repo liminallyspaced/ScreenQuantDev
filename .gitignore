@@ -9,6 +9,7 @@ Thumbs.db
 
 # QuantTrace native build (ship sources; build locally)
 native/quanttrace/build/
+native/quanttrace/out/
 *.so
 *.dylib
 *.dll
