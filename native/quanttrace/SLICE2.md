@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2s landed** (2026-08-28 7am PlugWalk ET). Principled Coat Roughness / Coat IOR / Coat Tint / Sheen Roughness / Sheen Tint TEX_IMAGE PASS. CoatRough 32²/4 Δmax=2.38e-7; 256²/128 Δmax=4.77e-7. CoatTint 256²/128 Δmax=2.20e-4. Coat Weight 32²/4 regression Δmax=2.38e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.20-slice2s`.
+Status: **Slice 2t landed** (2026-08-28 8am PlugWalk ET). Principled Coat Normal Map (Tangent) + TEX_IMAGE PASS. Coat Normal 32²/4 Δmax=2.98e-7; 256²/128 Δmax=3.58e-7. Coat Weight 32²/4 regression Δmax=2.38e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.21-slice2t`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -8,6 +8,42 @@ Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 `is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
+
+
+---
+
+## 8am PlugWalk (2026-08-28) — Coat Normal Map TEX_IMAGE (Slice 2t)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `coat_normal_` path/cs/vector/mapping + `coat_normal_strength` on `QT_Mesh` + `QT_SimpleScene` |
+| Python | `sync._normal_map_from_sock` now takes prefix/label; Coat Normal accepted (Tangent, unlinked Strength) |
+| Native | TEX_IMAGE Color → NormalMapNode (TANGENT) → Principled Coat Normal. Pins `set_coat_weight(1.0)` when Coat Normal maps and Weight is unmapped |
+| Version | `0.0.21-slice2t` |
+| Tools | `tools/_quanttrace_coatnormal_scene.py`, `tools/_quanttrace_coatnormal_smoke.py` |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Socket | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| Coat Normal | 32² / 4 | **2.98e-7** | 4.87e-9 | **PASS** |
+| Coat Normal | 256² / 128 | **3.58e-7** | 3.36e-9 | **PASS** |
+| Coat Weight (2q regression) | 32² / 4 | **2.38e-7** | 4.71e-9 | **PASS** |
+
+### Honesty
+
+- Object/World space, linked Strength, Bump, custom uv_map, HDR / kitchens, Object-with-pointer, packed-only, linked Mapping L/R/S still refuse.
+- Still-life 256² 1px noise-class residue still documented (not claimed fixed).
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Specular Tint / Thin Film / Subsurface sockets, Bump, or close the still-life 1px residue. Not ReSTIR. Not Classroom time %.
 
 
 ---

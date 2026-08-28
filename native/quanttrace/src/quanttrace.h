@@ -17,6 +17,8 @@
  * Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level.
  * Slice 2q: TEX_IMAGE → Principled Coat Weight / Sheen Weight / Emission Strength.
  * Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission).
+ * Slice 2s: TEX_IMAGE → Principled Coat Roughness/IOR/Tint + Sheen Roughness/Tint.
+ * Slice 2t: Normal Map (Tangent) + TEX_IMAGE → Principled Coat Normal.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -236,6 +238,15 @@ typedef struct QT_SimpleScene {
   float sheen_tint_map_rotation[3];
   float sheen_tint_map_scale[3];
   int sheen_tint_map_type;
+  /* Slice 2t: Coat Normal Map Color ← TEX_IMAGE (NULL/empty = geometric Coat Normal) */
+  const char *coat_normal_image_path;
+  const char *coat_normal_image_colorspace;
+  int coat_normal_tex_vector_mode;
+  float coat_normal_map_location[3];
+  float coat_normal_map_rotation[3];
+  float coat_normal_map_scale[3];
+  int coat_normal_map_type;
+  float coat_normal_strength; /* Coat Normal Map Strength, default 1.0 */
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -398,6 +409,15 @@ typedef struct QT_Mesh {
   float sheen_tint_map_rotation[3];
   float sheen_tint_map_scale[3];
   int sheen_tint_map_type;
+  /* Slice 2t: Coat Normal Map Color ← TEX_IMAGE (NULL/empty = geometric Coat Normal) */
+  const char *coat_normal_image_path;
+  const char *coat_normal_image_colorspace;
+  int coat_normal_tex_vector_mode;
+  float coat_normal_map_location[3];
+  float coat_normal_map_rotation[3];
+  float coat_normal_map_scale[3];
+  int coat_normal_map_type;
+  float coat_normal_strength; /* Coat Normal Map Strength, default 1.0 */
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

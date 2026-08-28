@@ -21,6 +21,8 @@
  * Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level.
  * Slice 2q: TEX_IMAGE → Principled Coat Weight / Sheen Weight / Emission Strength.
  * Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission).
+ * Slice 2s: Coat/Sheen extras TEX_IMAGE.
+ * Slice 2t: Normal Map (Tangent) + TEX_IMAGE → Principled Coat Normal.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -375,6 +377,14 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->sheen_tint_map_rotation, s->sheen_tint_map_rotation, sizeof(mesh->sheen_tint_map_rotation));
     std::memcpy(mesh->sheen_tint_map_scale, s->sheen_tint_map_scale, sizeof(mesh->sheen_tint_map_scale));
     mesh->sheen_tint_map_type = s->sheen_tint_map_type;
+    mesh->coat_normal_image_path = s->coat_normal_image_path;
+    mesh->coat_normal_image_colorspace = s->coat_normal_image_colorspace;
+    mesh->coat_normal_tex_vector_mode = s->coat_normal_tex_vector_mode;
+    std::memcpy(mesh->coat_normal_map_location, s->coat_normal_map_location, sizeof(mesh->coat_normal_map_location));
+    std::memcpy(mesh->coat_normal_map_rotation, s->coat_normal_map_rotation, sizeof(mesh->coat_normal_map_rotation));
+    std::memcpy(mesh->coat_normal_map_scale, s->coat_normal_map_scale, sizeof(mesh->coat_normal_map_scale));
+    mesh->coat_normal_map_type = s->coat_normal_map_type;
+    mesh->coat_normal_strength = s->coat_normal_strength;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -473,7 +483,8 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->coat_ior_tex_vector_mode) ||
            tex_mode_is_generated(m->coat_tint_tex_vector_mode) ||
            tex_mode_is_generated(m->sheen_rough_tex_vector_mode) ||
-           tex_mode_is_generated(m->sheen_tint_tex_vector_mode);
+           tex_mode_is_generated(m->sheen_tint_tex_vector_mode) ||
+           tex_mode_is_generated(m->coat_normal_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -771,9 +782,23 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->sheen_tint_map_rotation, m->sheen_tint_map_scale, m->sheen_tint_map_type);
         graph->connect(img->output("Color"), bsdf->input("Sheen Tint"));
     }
+    /* Slice 2t: TEX_IMAGE Color → NormalMap Color → Principled Coat Normal.
+     * Same Tangent / unlinked Strength rules as Slice 2j. */
+    if (m->coat_normal_image_path && m->coat_normal_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->coat_normal_image_path, m->coat_normal_image_colorspace,
+            m->coat_normal_tex_vector_mode, m->coat_normal_map_location,
+            m->coat_normal_map_rotation, m->coat_normal_map_scale, m->coat_normal_map_type);
+        NormalMapNode *nmap = graph->create_node<NormalMapNode>();
+        nmap->set_space(NODE_NORMAL_MAP_TANGENT);
+        nmap->set_strength(m->coat_normal_strength);
+        graph->connect(img->output("Color"), nmap->input("Color"));
+        graph->connect(nmap->output("Normal"), bsdf->input("Coat Normal"));
+    }
     if (((m->coat_rough_image_path && m->coat_rough_image_path[0]) ||
          (m->coat_ior_image_path && m->coat_ior_image_path[0]) ||
-         (m->coat_tint_image_path && m->coat_tint_image_path[0])) &&
+         (m->coat_tint_image_path && m->coat_tint_image_path[0]) ||
+         (m->coat_normal_image_path && m->coat_normal_image_path[0])) &&
         !(m->coat_image_path && m->coat_image_path[0])) {
         bsdf->set_coat_weight(1.0f);
     }
@@ -849,7 +874,8 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->coat_ior_image_path && m->coat_ior_image_path[0]) ||
         (m->coat_tint_image_path && m->coat_tint_image_path[0]) ||
         (m->sheen_rough_image_path && m->sheen_rough_image_path[0]) ||
-        (m->sheen_tint_image_path && m->sheen_tint_image_path[0]);
+        (m->sheen_tint_image_path && m->sheen_tint_image_path[0]) ||
+        (m->coat_normal_image_path && m->coat_normal_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
@@ -1119,7 +1145,8 @@ static int run_qt_session(const QT_Scene *desc,
             (m->coat_ior_image_path && m->coat_ior_image_path[0]) ||
             (m->coat_tint_image_path && m->coat_tint_image_path[0]) ||
             (m->sheen_rough_image_path && m->sheen_rough_image_path[0]) ||
-            (m->sheen_tint_image_path && m->sheen_tint_image_path[0]);
+            (m->sheen_tint_image_path && m->sheen_tint_image_path[0]) ||
+            (m->coat_normal_image_path && m->coat_normal_image_path[0]);
         if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;

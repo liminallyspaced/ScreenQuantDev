@@ -19,7 +19,9 @@
 # Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission). Color socket,
 #   not float.
 # Slice 2s: TEX_IMAGE → Principled Coat Roughness / Coat IOR / Coat Tint /
-#   Sheen Roughness / Sheen Tint. Coat Normal still refuses.
+#   Sheen Roughness / Sheen Tint.
+# Slice 2t: Principled.Coat Normal ← Normal Map (Tangent) ← TEX_IMAGE Color
+#   (same Vector rules as Normal). Object/World/Bump/linked Strength still refuse.
 #   Other linked sockets / HDR worlds refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
@@ -352,7 +354,7 @@ def _tex_image_from_base_color(sock) -> dict:
 
 
 def _prefix_tex(info: dict, prefix: str) -> dict:
-    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_ (or keep for base)."""
+    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_ (or keep for base)."""
     if not prefix:
         return dict(info)
     return {
@@ -367,49 +369,49 @@ def _prefix_tex(info: dict, prefix: str) -> dict:
 
 
 
-def _empty_normal_info() -> dict:
-    out = _prefix_tex(_empty_tex_info(), "normal_")
-    out["normal_strength"] = 1.0
+def _empty_normal_info(prefix: str = "normal_") -> dict:
+    out = _prefix_tex(_empty_tex_info(), prefix)
+    out[f"{prefix}strength"] = 1.0
     return out
 
 
-def _normal_map_from_sock(sock) -> dict:
-    """Principled.Normal ← Normal Map.Normal; Color ← TEX_IMAGE; Strength unlinked.
+def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal") -> dict:
+    """Principled.{label} ← Normal Map.Normal; Color ← TEX_IMAGE; Strength unlinked.
 
     Space must be Tangent (default). Object/World, Bump, linked Strength,
     packed-only images, and custom uv_map names refuse.
     """
-    empty = _empty_normal_info()
+    empty = _empty_normal_info(prefix)
     if sock is None:
         return empty
     links = list(getattr(sock, "links", None) or [])
     if not links:
         return empty
     if len(links) != 1:
-        raise QuantTraceSyncError("Principled.Normal has multiple links")
+        raise QuantTraceSyncError(f"Principled.{label} has multiple links")
     src = links[0]
     from_node = getattr(src, "from_node", None)
     from_sock = getattr(src, "from_socket", None)
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype != "NORMAL_MAP":
         raise QuantTraceSyncError(
-            f"Principled.Normal from {ntype!r} refused "
-            "(Slice 2j: Normal Map only; Bump/etc refuse)"
+            f"Principled.{label} from {ntype!r} refused "
+            "(Slice 2t: Normal Map only; Bump/etc refuse)"
         )
     sock_name = getattr(from_sock, "name", "") if from_sock is not None else ""
     if sock_name not in ("Normal", "normal"):
         raise QuantTraceSyncError(
-            "Principled.Normal must come from Normal Map Normal (Slice 2j)"
+            f"Principled.{label} must come from Normal Map Normal (Slice 2t)"
         )
     space = str(getattr(from_node, "space", "TANGENT") or "TANGENT").upper()
     if space not in ("TANGENT",):
         raise QuantTraceSyncError(
-            f"Normal Map space={space!r} refused (Slice 2j: Tangent only)"
+            f"Normal Map space={space!r} refused (Slice 2t: Tangent only)"
         )
     uv_map = str(getattr(from_node, "uv_map", "") or "").strip()
     if uv_map:
         raise QuantTraceSyncError(
-            f"Normal Map uv_map={uv_map!r} refused (Slice 2j: default UV only)"
+            f"Normal Map uv_map={uv_map!r} refused (Slice 2t: default UV only)"
         )
     inputs = getattr(from_node, "inputs", None)
     getter = getattr(inputs, "get", None) if inputs is not None else None
@@ -417,18 +419,18 @@ def _normal_map_from_sock(sock) -> dict:
     color_sock = getter("Color") if callable(getter) else None
     if strength_sock is not None and getattr(strength_sock, "is_linked", False):
         raise QuantTraceSyncError(
-            "Normal Map Strength is linked (Slice 2j: unlinked float only)"
+            "Normal Map Strength is linked (Slice 2t: unlinked float only)"
         )
     strength = 1.0
     if strength_sock is not None:
         strength = float(getattr(strength_sock, "default_value", 1.0))
     if color_sock is None or not getattr(color_sock, "is_linked", False):
         raise QuantTraceSyncError(
-            "Normal Map Color must be TEX_IMAGE (Slice 2j)"
+            "Normal Map Color must be TEX_IMAGE (Slice 2t)"
         )
-    tex = _tex_image_from_sock(color_sock, "Normal Map Color")
-    out = _prefix_tex(tex, "normal_")
-    out["normal_strength"] = strength
+    tex = _tex_image_from_sock(color_sock, f"{label} Map Color")
+    out = _prefix_tex(tex, prefix)
+    out[f"{prefix}strength"] = strength
     return out
 
 
@@ -470,6 +472,7 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(_empty_tex_info(), "coat_tint_"),
         **_prefix_tex(_empty_tex_info(), "sheen_rough_"),
         **_prefix_tex(_empty_tex_info(), "sheen_tint_"),
+        **_empty_normal_info("coat_normal_"),
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -556,16 +559,10 @@ def _principled_from_material(mat) -> dict:
             sheen_rough_tex = tex
         elif kind == "sheen_tint":
             sheen_tint_tex = tex
-    for rname in (
-        "Coat Normal",
-    ):
-        _n, sock = _input_by_names(bsdf, rname)
-        if sock is not None and getattr(sock, "is_linked", False):
-            raise QuantTraceSyncError(
-                f"Principled.{rname} is linked "
-                "(Slice 2s: Coat Normal refuses; Coat Roughness/IOR/Tint and "
-                "Sheen Roughness/Tint may be TEX_IMAGE)"
-            )
+    _cn_name, coat_n_sock = _input_by_names(bsdf, "Coat Normal")
+    coat_normal_info = _normal_map_from_sock(
+        coat_n_sock, prefix="coat_normal_", label="Coat Normal"
+    )
     normal_info = _normal_map_from_sock(bsdf.inputs.get("Normal"))
     base = bsdf.inputs["Base Color"].default_value
     return {
@@ -591,6 +588,7 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(coat_tint_tex, "coat_tint_"),
         **_prefix_tex(sheen_rough_tex, "sheen_rough_"),
         **_prefix_tex(sheen_tint_tex, "sheen_tint_"),
+        **coat_normal_info,
     }
 
 
@@ -750,7 +748,7 @@ def classify_simple(scene) -> dict:
 
 
 def _pack_tex_fields(pr: dict) -> dict:
-    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint TEX_IMAGE fields."""
+    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal TEX_IMAGE fields."""
     def loc(key, default):
         return list(pr.get(key) or default)
     out = {
@@ -874,6 +872,14 @@ def _pack_tex_fields(pr: dict) -> dict:
         "sheen_tint_map_rotation": loc("sheen_tint_map_rotation", (0.0, 0.0, 0.0)),
         "sheen_tint_map_scale": loc("sheen_tint_map_scale", (1.0, 1.0, 1.0)),
         "sheen_tint_map_type": int(pr.get("sheen_tint_map_type", 2) if pr.get("sheen_tint_map_type") is not None else 2),
+        "coat_normal_image_path": pr.get("coat_normal_image_path") or "",
+        "coat_normal_image_colorspace": pr.get("coat_normal_image_colorspace") or "",
+        "coat_normal_tex_vector_mode": int(pr.get("coat_normal_tex_vector_mode", 0) or 0),
+        "coat_normal_map_location": loc("coat_normal_map_location", (0.0, 0.0, 0.0)),
+        "coat_normal_map_rotation": loc("coat_normal_map_rotation", (0.0, 0.0, 0.0)),
+        "coat_normal_map_scale": loc("coat_normal_map_scale", (1.0, 1.0, 1.0)),
+        "coat_normal_map_type": int(pr.get("coat_normal_map_type", 2) if pr.get("coat_normal_map_type") is not None else 2),
+        "coat_normal_strength": float(pr.get("coat_normal_strength", 1.0) if pr.get("coat_normal_strength") is not None else 1.0),
     }
     return out
 
@@ -897,6 +903,7 @@ def _any_tex_path(pr: dict) -> bool:
         or (pr.get("coat_tint_image_path") or "")
         or (pr.get("sheen_rough_image_path") or "")
         or (pr.get("sheen_tint_image_path") or "")
+        or (pr.get("coat_normal_image_path") or "")
     )
 
 
@@ -1380,6 +1387,19 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("sheen_tint_map_type", 2) if packed.get("sheen_tint_map_type") is not None else 2
     )
 
+    desc.coat_normal_image_path = enc("coat_normal_image_path")
+    desc.coat_normal_image_colorspace = enc("coat_normal_image_colorspace")
+    desc.coat_normal_tex_vector_mode = int(packed.get("coat_normal_tex_vector_mode", 0) or 0)
+    vec3("coat_normal_map_location", "coat_normal_map_location")
+    vec3("coat_normal_map_rotation", "coat_normal_map_rotation")
+    vec3("coat_normal_map_scale", "coat_normal_map_scale", (1.0, 1.0, 1.0))
+    desc.coat_normal_map_type = int(
+        packed.get("coat_normal_map_type", 2) if packed.get("coat_normal_map_type") is not None else 2
+    )
+    desc.coat_normal_strength = float(
+        packed.get("coat_normal_strength", 1.0) if packed.get("coat_normal_strength") is not None else 1.0
+    )
+
 
 def make_qt_simple_scene_type():
     """ctypes Structure matching QT_SimpleScene in quanttrace.h."""
@@ -1532,6 +1552,14 @@ def make_qt_simple_scene_type():
             ("sheen_tint_map_rotation", ctypes.c_float * 3),
             ("sheen_tint_map_scale", ctypes.c_float * 3),
             ("sheen_tint_map_type", ctypes.c_int),
+            ("coat_normal_image_path", ctypes.c_char_p),
+            ("coat_normal_image_colorspace", ctypes.c_char_p),
+            ("coat_normal_tex_vector_mode", ctypes.c_int),
+            ("coat_normal_map_location", ctypes.c_float * 3),
+            ("coat_normal_map_rotation", ctypes.c_float * 3),
+            ("coat_normal_map_scale", ctypes.c_float * 3),
+            ("coat_normal_map_type", ctypes.c_int),
+            ("coat_normal_strength", ctypes.c_float),
         ]
 
     return QT_SimpleScene
@@ -1725,6 +1753,14 @@ def make_qt_scene_types():
             ("sheen_tint_map_rotation", ctypes.c_float * 3),
             ("sheen_tint_map_scale", ctypes.c_float * 3),
             ("sheen_tint_map_type", ctypes.c_int),
+            ("coat_normal_image_path", ctypes.c_char_p),
+            ("coat_normal_image_colorspace", ctypes.c_char_p),
+            ("coat_normal_tex_vector_mode", ctypes.c_int),
+            ("coat_normal_map_location", ctypes.c_float * 3),
+            ("coat_normal_map_rotation", ctypes.c_float * 3),
+            ("coat_normal_map_scale", ctypes.c_float * 3),
+            ("coat_normal_map_type", ctypes.c_int),
+            ("coat_normal_strength", ctypes.c_float),
         ]
 
     class QT_Light(ctypes.Structure):
