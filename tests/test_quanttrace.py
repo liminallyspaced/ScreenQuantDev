@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.16-slice2o" in hello_c, "hello.c version string 0.0.16-slice2o")
+    check("0.0.17-slice2p" in hello_c, "hello.c version string 0.0.17-slice2p")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -446,7 +446,7 @@ def main():
     check("NormalMapNode" in bridge, "bridge builds NormalMapNode")
     check("NODE_NORMAL_MAP_TANGENT" in bridge, "bridge pins Tangent space")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.16-slice2o" in hello, "hello version is 0.0.16-slice2o")
+    check("0.0.17-slice2p" in hello, "hello version is 0.0.17-slice2p")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("_normal_map_from_sock" in sync_src, "sync parses Normal Map")
     check(callable(sync._normal_map_from_sock), "sync._normal_map_from_sock")
@@ -496,7 +496,7 @@ def main():
     check('output("Generated")' in bridge or "output(coord_sock)" in bridge,
           "bridge connects Generated socket")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.16-slice2o" in hello, "hello version is 0.0.16-slice2o")
+    check("0.0.17-slice2p" in hello, "hello version is 0.0.17-slice2p")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("_tex_coord_space_from_vector_link" in sync_src, "sync parses Generated")
     check("Generated" in sync_src, "sync names Generated")
@@ -514,7 +514,7 @@ def main():
     check("tex_mode_is_camera" in bridge, "bridge has camera mode helper")
     check('"Camera"' in bridge, "bridge names Camera socket")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.16-slice2o" in hello, "hello version is 0.0.16-slice2o")
+    check("0.0.17-slice2p" in hello, "hello version is 0.0.17-slice2p")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Camera" in sync_src, "sync names Camera")
     ctools = _read("tools/_quanttrace_camera_scene.py")
@@ -535,7 +535,7 @@ def main():
     check('"Window"' in bridge, "bridge names Window socket")
     check('"Reflection"' in bridge, "bridge names Reflection socket")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.16-slice2o" in hello, "hello version is 0.0.16-slice2o")
+    check("0.0.17-slice2p" in hello, "hello version is 0.0.17-slice2p")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Window" in sync_src and "Reflection" in sync_src, "sync names Window/Reflection")
     check("tex_vector_mode = 9" in sync_src, "sync assigns Window texcoord mode 9")
@@ -561,10 +561,10 @@ def main():
     check('bsdf->input("IOR")' in bridge, "bridge connects IOR TEX_IMAGE")
     check('bsdf->input("Alpha")' in bridge, "bridge connects Alpha TEX_IMAGE")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.16-slice2o" in hello, "hello version is 0.0.16-slice2o")
+    check("0.0.17-slice2p" in hello, "hello version is 0.0.17-slice2p")
     sync_src = _read("scenequant/quanttrace/sync.py")
-    check('sock_name == "IOR"' in sync_src, "sync accepts IOR TEX_IMAGE")
-    check('sock_name == "Alpha"' in sync_src, "sync accepts Alpha TEX_IMAGE")
+    check('("IOR", ("IOR",), "ior")' in sync_src, "sync accepts IOR TEX_IMAGE")
+    check('("Alpha", ("Alpha",), "alpha")' in sync_src, "sync accepts Alpha TEX_IMAGE")
     check("ior_image_path" in sync_src and "alpha_image_path" in sync_src,
           "sync packs ior_/alpha_ TEX_IMAGE fields")
     itools = _read("tools/_quanttrace_ioralpha_scene.py")
@@ -572,6 +572,53 @@ def main():
     ismoke = _read("tools/_quanttrace_ioralpha_smoke.py")
     check("pack_scene" in ismoke and "render_qt_scene_rgba" in ismoke,
           "ioralpha smoke packs QT_Scene")
+
+
+    section("Slice 2p Transmission/Specular TEX_IMAGE ABI")
+    hdr = _read("native/quanttrace/src/quanttrace.h")
+    check("trans_image_path" in hdr, "QT_Mesh has trans_image_path")
+    check("spec_image_path" in hdr, "QT_Mesh has spec_image_path")
+    bridge = _read("native/quanttrace/src/session_bridge.cpp")
+    check('bsdf->input("Transmission Weight")' in bridge,
+          "bridge connects Transmission Weight TEX_IMAGE")
+    check('bsdf->input("Specular IOR Level")' in bridge,
+          "bridge connects Specular IOR Level TEX_IMAGE")
+    hello = _read("native/quanttrace/src/hello.c")
+    check("0.0.17-slice2p" in hello, "hello version is 0.0.17-slice2p")
+    sync_src = _read("scenequant/quanttrace/sync.py")
+    check("Transmission Weight" in sync_src, "sync accepts Transmission Weight")
+    check("Specular IOR Level" in sync_src, "sync accepts Specular IOR Level")
+    check("trans_image_path" in sync_src and "spec_image_path" in sync_src,
+          "sync packs trans_/spec_ TEX_IMAGE fields")
+    ttools = _read("tools/_quanttrace_transspec_scene.py")
+    check("Transmission" in ttools and "Specular" in ttools,
+          "transspec scene wires Transmission/Specular")
+    tsmoke = _read("tools/_quanttrace_transspec_smoke.py")
+    check("pack_scene" in tsmoke and "render_qt_scene_rgba" in tsmoke,
+          "transspec smoke packs QT_Scene")
+
+    class _BsdfCoat:
+        type = "BSDF_PRINCIPLED"
+        inputs = _Inputs({
+            "Base Color": _Sock((0.8, 0.8, 0.8, 1)),
+            "Roughness": _Sock(0.5),
+            "Metallic": _Sock(0.0),
+            "IOR": _Sock(1.45),
+            "Alpha": _Sock(1.0),
+            "Coat Weight": _Sock(0.0, linked=True, links=["x"]),
+        })
+    class _TreeC:
+        nodes = [_BsdfCoat()]
+    class _MatC:
+        use_nodes = True
+        node_tree = _TreeC()
+    raised_c = None
+    try:
+        sync._principled_from_material(_MatC())
+    except sync.QuantTraceSyncError as exc:
+        raised_c = exc
+    check(raised_c is not None, "linked Coat Weight refuses")
+    check("coat" in str(raised_c).lower(), "refuse names Coat")
 
     section("research brief present")
     brief = os.path.join(PROJECT_ROOT, "docs", "research", "SIDECAR-INTEGRATOR.md")

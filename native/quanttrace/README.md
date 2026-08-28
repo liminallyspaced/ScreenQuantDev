@@ -1,10 +1,10 @@
-<!-- Slice 2o: Principled IOR/Alpha TEX_IMAGE; version 0.0.16-slice2o -->
+<!-- Slice 2p: Principled Transmission/Specular TEX_IMAGE; version 0.0.17-slice2p -->
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.16-slice2o`.
+`-DQT_WITH_CYCLES=ON`. Native `0.0.17-slice2p`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -30,8 +30,9 @@ this tree never feeds Auto clocks.
 | **2m — TEX_COORD Camera** | **PASS** | Camera 32²/4 Δmax **1.79e-6**; 256²/128 Δmax **3.46e-6**. Camera+Mapping 256²/128 Δmax **5.96e-6**. Native `0.0.14-slice2m`. |
 | **2n — TEX_COORD Window + Reflection** | **PASS** | Window 256²/128 Δmax **4.77e-7**; Reflection 256²/128 Δmax **5.96e-7**. Native `0.0.15-slice2n`. |
 | **2o — IOR/Alpha TEX_IMAGE** | **PASS** | IOR 256²/128 Δmax **5.96e-7**; Alpha 256²/128 Δmax **6.80e-4**; Both 256²/128 Δmax **6.33e-4**. Native `0.0.16-slice2o`. |
+| **2p — Transmission/Specular TEX_IMAGE** | **PASS** | Transmission 256²/128 Δmax **4.44e-6**; Specular 256²/128 Δmax **4.17e-7**; Both 256²/128 Δmax **7.23e-5**. Native `0.0.17-slice2p`. |
 
-Kitchens / HDR worlds / Transmission·Specular·Coat / Object·World Normal space / Bump / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
+Kitchens / HDR worlds / Coat·Sheen·Emission TEX_IMAGE / Object·World Normal space / Bump / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
 
 ## Build (Linux) — hello stub (default)
 
@@ -51,7 +52,7 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=1, session_probe=1, version 0.0.16-slice2o
+# ABI: is_tracer=1, session_probe=1, version 0.0.17-slice2p
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 blender --background --python tools/_quanttrace_f12_smoke.py -- \

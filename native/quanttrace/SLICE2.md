@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2o landed** (2026-08-28 3am PlugWalk ET). Principled IOR/Alpha TEX_IMAGE PASS. IOR 32²/4 Δmax=8.34e-7; 256²/128 Δmax=5.96e-7. Alpha 32²/4 Δmax=1.04e-6; 256²/128 Δmax=6.80e-4. Both 32²/4 Δmax=2.38e-6; 256²/128 Δmax=6.33e-4. Roughness 32²/4 regression Δmax=3.58e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.16-slice2o`.
+Status: **Slice 2p landed** (2026-08-28 4am PlugWalk ET). Principled Transmission Weight / Specular IOR Level TEX_IMAGE PASS. Transmission 32²/4 Δmax=1.60e-5; 256²/128 Δmax=4.44e-6. Specular 32²/4 Δmax=3.58e-7; 256²/128 Δmax=4.17e-7. Both 32²/4 Δmax=1.59e-5; 256²/128 Δmax=7.23e-5. Roughness 32²/4 regression Δmax=3.58e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.17-slice2p`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -1241,4 +1241,60 @@ Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Re
 
 ### Next
 
-Transmission / Specular TEX_IMAGE, or close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 4am: Transmission/Specular TEX_IMAGE. See 4am section.
+
+---
+
+## 4am PlugWalk (2026-08-28) — Slice 2p: Principled Transmission / Specular TEX_IMAGE
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `trans_image_path` / `spec_image_path` (+ colorspace, tex_vector_mode, Mapping) on `QT_SimpleScene` and `QT_Mesh` (NULL/empty = Cycles constant Transmission Weight 0 / Specular IOR Level 0.5) |
+| Packer | Principled Transmission Weight (legacy Transmission) and Specular IOR Level (legacy Specular) may be TEX_IMAGE Color (same Vector graph as IOR/Alpha). Coat/Sheen/Emission still refuse. |
+| Native | Color → Transmission Weight / Specular IOR Level via `ShaderGraph::connect` (`NODE_CONVERT_CF`). `needs_uv` and `mesh_uses_generated` include both sockets. |
+| Version | `0.0.17-slice2p` |
+| Tools | `_quanttrace_transspec_scene/smoke.py` (8×8 Non-Color gray checker) |
+
+### Measured — TEX_IMAGE → Principled Transmission Weight
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Transmission Session | 32² / 4 | **1.60e-5** | 2.35e-8 | 0 / 1024 | **PASS** |
+| Transmission Session | 256² / 128 | **4.44e-6** | 7.31e-9 | 0 / 65536 | **PASS** |
+
+### Measured — TEX_IMAGE → Principled Specular IOR Level
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Specular Session | 32² / 4 | **3.58e-7** | 4.80e-9 | 0 / 1024 | **PASS** |
+| Specular Session | 256² / 128 | **4.17e-7** | 3.61e-9 | 0 / 65536 | **PASS** |
+
+### Measured — both sockets, same filepath
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Both Session | 32² / 4 | **1.59e-5** | 2.39e-8 | 0 / 1024 | **PASS** |
+| Both Session | 256² / 128 | **7.23e-5** | 8.65e-9 | 0 / 65536 | **PASS** |
+
+### Measured — regressions (32² / 4)
+
+| Path | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| 2i Roughness TEX_IMAGE | 32² / 4 | **3.58e-7** | 6.71e-9 | **PASS** |
+
+### Honesty / still refuses
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented (not claimed fixed).
+- HDR worlds, kitchens, TEX_COORD Object **with** Object reference (use_transform / object_itfm), linked Mapping L/R/S, packed-only images, Coat/Sheen/Emission still raise `QuantTraceSyncError`.
+- Film stays opaque (`film_transparent=False`); Combined RGB is over black world. Session Combined A mean stays 1.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Coat / Sheen / Emission TEX_IMAGE, or close still-life 1px. Not ReSTIR. Not Classroom time %.

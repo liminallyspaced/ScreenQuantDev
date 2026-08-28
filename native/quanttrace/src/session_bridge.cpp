@@ -16,6 +16,9 @@
  * Slice 2k: TEX_COORD Generated (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2l: TEX_COORD Object (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2m: TEX_COORD Camera (+ optional Mapping) → TEX_IMAGE Vector.
+ * Slice 2n: TEX_COORD Window + Reflection (+ optional Mapping) → TEX_IMAGE Vector.
+ * Slice 2o: TEX_IMAGE → Principled IOR / Alpha.
+ * Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -293,6 +296,20 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->alpha_map_rotation, s->alpha_map_rotation, sizeof(mesh->alpha_map_rotation));
     std::memcpy(mesh->alpha_map_scale, s->alpha_map_scale, sizeof(mesh->alpha_map_scale));
     mesh->alpha_map_type = s->alpha_map_type;
+    mesh->trans_image_path = s->trans_image_path;
+    mesh->trans_image_colorspace = s->trans_image_colorspace;
+    mesh->trans_tex_vector_mode = s->trans_tex_vector_mode;
+    std::memcpy(mesh->trans_map_location, s->trans_map_location, sizeof(mesh->trans_map_location));
+    std::memcpy(mesh->trans_map_rotation, s->trans_map_rotation, sizeof(mesh->trans_map_rotation));
+    std::memcpy(mesh->trans_map_scale, s->trans_map_scale, sizeof(mesh->trans_map_scale));
+    mesh->trans_map_type = s->trans_map_type;
+    mesh->spec_image_path = s->spec_image_path;
+    mesh->spec_image_colorspace = s->spec_image_colorspace;
+    mesh->spec_tex_vector_mode = s->spec_tex_vector_mode;
+    std::memcpy(mesh->spec_map_location, s->spec_map_location, sizeof(mesh->spec_map_location));
+    std::memcpy(mesh->spec_map_rotation, s->spec_map_rotation, sizeof(mesh->spec_map_rotation));
+    std::memcpy(mesh->spec_map_scale, s->spec_map_scale, sizeof(mesh->spec_map_scale));
+    mesh->spec_map_type = s->spec_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -380,7 +397,9 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->metal_tex_vector_mode) ||
            tex_mode_is_generated(m->normal_tex_vector_mode) ||
            tex_mode_is_generated(m->ior_tex_vector_mode) ||
-           tex_mode_is_generated(m->alpha_tex_vector_mode);
+           tex_mode_is_generated(m->alpha_tex_vector_mode) ||
+           tex_mode_is_generated(m->trans_tex_vector_mode) ||
+           tex_mode_is_generated(m->spec_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -420,7 +439,7 @@ static void fill_generated_orco(Mesh *mesh, const QT_Mesh *m)
 }
 
 /* Wire ImageTexture (+ optional TEX_COORD UV/Generated/Object/Camera/Window/Reflection + Mapping).
- * Color→float (Roughness/Metallic/IOR/Alpha) gets ConvertNode via ShaderGraph::connect. */
+ * Color→float (Roughness/Metallic/IOR/Alpha/Transmission/Specular) gets ConvertNode via ShaderGraph::connect. */
 static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
                                         const char *path,
                                         const char *colorspace,
@@ -497,7 +516,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha.
+    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o/2p: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha / Transmission / Specular.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
      * mode 2: TextureCoordinate UV → Mapping → Image Vector.
@@ -560,6 +579,30 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->alpha_map_scale, m->alpha_map_type);
         graph->connect(img->output("Color"), bsdf->input("Alpha"));
     }
+    /* Slice 2p: Color → Transmission Weight (legacy "Transmission") via NODE_CONVERT_CF. */
+    if (m->trans_image_path && m->trans_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->trans_image_path, m->trans_image_colorspace,
+            m->trans_tex_vector_mode, m->trans_map_location, m->trans_map_rotation,
+            m->trans_map_scale, m->trans_map_type);
+        ShaderInput *in = bsdf->input("Transmission Weight");
+        if (in == nullptr) {
+            in = bsdf->input("Transmission");
+        }
+        graph->connect(img->output("Color"), in);
+    }
+    /* Slice 2p: Color → Specular IOR Level (legacy "Specular") via NODE_CONVERT_CF. */
+    if (m->spec_image_path && m->spec_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->spec_image_path, m->spec_image_colorspace,
+            m->spec_tex_vector_mode, m->spec_map_location, m->spec_map_rotation,
+            m->spec_map_scale, m->spec_map_type);
+        ShaderInput *in = bsdf->input("Specular IOR Level");
+        if (in == nullptr) {
+            in = bsdf->input("Specular");
+        }
+        graph->connect(img->output("Color"), in);
+    }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
     surf->set_graph(std::move(graph));
     surf->tag_update(scene);
@@ -616,7 +659,9 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->metal_image_path && m->metal_image_path[0]) ||
         (m->normal_image_path && m->normal_image_path[0]) ||
         (m->ior_image_path && m->ior_image_path[0]) ||
-        (m->alpha_image_path && m->alpha_image_path[0]);
+        (m->alpha_image_path && m->alpha_image_path[0]) ||
+        (m->trans_image_path && m->trans_image_path[0]) ||
+        (m->spec_image_path && m->spec_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();

@@ -13,6 +13,8 @@
  * Slice 2l: TEX_COORD Object (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2m: TEX_COORD Camera (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2n: TEX_COORD Window + Reflection (+ optional Mapping) → TEX_IMAGE Vector.
+ * Slice 2o: TEX_IMAGE → Principled IOR / Alpha (same Vector rules).
+ * Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -144,6 +146,22 @@ typedef struct QT_SimpleScene {
   float alpha_map_rotation[3];
   float alpha_map_scale[3];
   int alpha_map_type;
+  /* Slice 2p: Transmission Weight TEX_IMAGE (NULL/empty = constant 0) */
+  const char *trans_image_path;
+  const char *trans_image_colorspace;
+  int trans_tex_vector_mode;
+  float trans_map_location[3];
+  float trans_map_rotation[3];
+  float trans_map_scale[3];
+  int trans_map_type;
+  /* Slice 2p: Specular IOR Level TEX_IMAGE (NULL/empty = constant 0.5) */
+  const char *spec_image_path;
+  const char *spec_image_colorspace;
+  int spec_tex_vector_mode;
+  float spec_map_location[3];
+  float spec_map_rotation[3];
+  float spec_map_scale[3];
+  int spec_map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -218,6 +236,22 @@ typedef struct QT_Mesh {
   float alpha_map_rotation[3];
   float alpha_map_scale[3];
   int alpha_map_type;
+  /* Slice 2p: Transmission Weight TEX_IMAGE */
+  const char *trans_image_path;
+  const char *trans_image_colorspace;
+  int trans_tex_vector_mode;
+  float trans_map_location[3];
+  float trans_map_rotation[3];
+  float trans_map_scale[3];
+  int trans_map_type;
+  /* Slice 2p: Specular IOR Level TEX_IMAGE */
+  const char *spec_image_path;
+  const char *spec_image_colorspace;
+  int spec_tex_vector_mode;
+  float spec_map_location[3];
+  float spec_map_rotation[3];
+  float spec_map_scale[3];
+  int spec_map_type;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
