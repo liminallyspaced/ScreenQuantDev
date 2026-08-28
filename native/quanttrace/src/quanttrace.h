@@ -31,7 +31,8 @@
  *   If both bump_* and normal_* paths are set, Bump wins; packer fills one.
  * Slice 2z: Principled Normal Map space OBJECT + WORLD (plus Coat Normal space).
  *   0=TANGENT (default, 2j/2t bit-identical), 1=OBJECT, 2=WORLD.
- *   BLENDER_OBJECT / BLENDER_WORLD still refuse.
+ * Slice 2ad: BLENDER_OBJECT=3 / BLENDER_WORLD=4 (Cycles NODE_NORMAL_MAP_BLENDER_*).
+ *   SVM flips color.y/z vs Object/World ("strange blender convention").
  * Slice 2aa: Environment Texture world (empty path = Slice 2b black).
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  *   Empty Object ref (2l) stays use_transform=false / NODE_TEXCO_OBJECT.
@@ -162,7 +163,7 @@ typedef struct QT_SimpleScene {
   float normal_map_scale[3];
   int normal_map_type;
   float normal_strength; /* Normal Map Strength, default 1.0 */
-  int normal_space; /* QT_NORMAL_MAP_*: 0=TANGENT, 1=OBJECT, 2=WORLD */
+  int normal_space; /* QT_NORMAL_MAP_*: 0=TANGENT..4=BLENDER_WORLD */
   /* Slice 2o: IOR TEX_IMAGE (NULL/empty = constant ior) */
   const char *ior_image_path;
   const char *ior_image_colorspace;
@@ -462,7 +463,7 @@ typedef struct QT_Mesh {
   float normal_map_scale[3];
   int normal_map_type;
   float normal_strength; /* Normal Map Strength, default 1.0 */
-  int normal_space; /* QT_NORMAL_MAP_*: 0=TANGENT, 1=OBJECT, 2=WORLD */
+  int normal_space; /* QT_NORMAL_MAP_*: 0=TANGENT..4=BLENDER_WORLD */
   /* Slice 2o: IOR TEX_IMAGE */
   const char *ior_image_path;
   const char *ior_image_colorspace;
@@ -723,10 +724,12 @@ typedef struct QT_Mesh {
 #define QT_TEX_VECTOR_TEXCOORD_REFLECTION  11 /* TEX_COORD Reflection → TEX_IMAGE Vector */
 #define QT_TEX_VECTOR_MAPPING_REFLECTION   12 /* TEX_COORD Reflection → Mapping → TEX_IMAGE */
 
-/* Slice 2z: Normal Map space (ShaderNodeNormalMap.space) */
-#define QT_NORMAL_MAP_TANGENT 0
-#define QT_NORMAL_MAP_OBJECT  1
-#define QT_NORMAL_MAP_WORLD   2
+/* Slice 2z/2ad: Normal Map space (ShaderNodeNormalMap.space / Cycles NodeNormalMapSpace) */
+#define QT_NORMAL_MAP_TANGENT         0
+#define QT_NORMAL_MAP_OBJECT          1
+#define QT_NORMAL_MAP_WORLD           2
+#define QT_NORMAL_MAP_BLENDER_OBJECT  3
+#define QT_NORMAL_MAP_BLENDER_WORLD   4
 
 
 typedef struct QT_Light {

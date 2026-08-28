@@ -828,13 +828,16 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->normal_tex_vector_mode, m->normal_map_location, m->normal_map_rotation,
             m->normal_map_scale, m->normal_map_type);
         NormalMapNode *nmap = graph->create_node<NormalMapNode>();
-        /* Slice 2z: TANGENT/OBJECT/WORLD. Unknown → TANGENT.
-         * Cite intern/cycles/blender/shader.cpp ShaderNodeNormalMap
-         * and src/scene/shader_nodes.cpp SOCKET_ENUM space. */
+        /* Slice 2z/2ad: TANGENT/OBJECT/WORLD/BLENDER_OBJECT/BLENDER_WORLD.
+         * Unknown → TANGENT. Cite src/scene/shader_nodes.cpp SOCKET_ENUM space
+         * + kernel/svm/types.h NodeNormalMapSpace + tex_coord.h Y/Z flip for
+         * BLENDER_*. Blender RNA identifiers match QT ints 0..4. */
         int sp = m->normal_space;
         ccl::NodeNormalMapSpace space = NODE_NORMAL_MAP_TANGENT;
         if (sp == QT_NORMAL_MAP_OBJECT) space = NODE_NORMAL_MAP_OBJECT;
         else if (sp == QT_NORMAL_MAP_WORLD) space = NODE_NORMAL_MAP_WORLD;
+        else if (sp == QT_NORMAL_MAP_BLENDER_OBJECT) space = NODE_NORMAL_MAP_BLENDER_OBJECT;
+        else if (sp == QT_NORMAL_MAP_BLENDER_WORLD) space = NODE_NORMAL_MAP_BLENDER_WORLD;
         nmap->set_space(space);
         nmap->set_strength(m->normal_strength);
         graph->connect(img->output("Color"), nmap->input("Color"));
@@ -988,6 +991,8 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         ccl::NodeNormalMapSpace cspace = NODE_NORMAL_MAP_TANGENT;
         if (csp == QT_NORMAL_MAP_OBJECT) cspace = NODE_NORMAL_MAP_OBJECT;
         else if (csp == QT_NORMAL_MAP_WORLD) cspace = NODE_NORMAL_MAP_WORLD;
+        else if (csp == QT_NORMAL_MAP_BLENDER_OBJECT) cspace = NODE_NORMAL_MAP_BLENDER_OBJECT;
+        else if (csp == QT_NORMAL_MAP_BLENDER_WORLD) cspace = NODE_NORMAL_MAP_BLENDER_WORLD;
         nmap->set_space(cspace);
         nmap->set_strength(m->coat_normal_strength);
         graph->connect(img->output("Color"), nmap->input("Color"));

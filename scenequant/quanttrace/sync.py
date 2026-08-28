@@ -578,8 +578,9 @@ def _principled_normal_dispatch(sock) -> dict:
 def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal") -> dict:
     """Principled.{label} ← Normal Map.Normal; Color ← TEX_IMAGE; Strength unlinked.
 
-    Space TANGENT/OBJECT/WORLD (Slice 2z). BLENDER_OBJECT / BLENDER_WORLD,
-    Bump-on-this-helper, linked Strength, packed-only, custom uv_map refuse.
+    Space TANGENT/OBJECT/WORLD (Slice 2z) + BLENDER_OBJECT/BLENDER_WORLD
+    (Slice 2ad). Bump-on-this-helper, linked Strength, packed-only,
+    custom uv_map refuse.
     """
     empty = _empty_normal_info(prefix)
     if sock is None:
@@ -604,12 +605,20 @@ def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal
             f"Principled.{label} must come from Normal Map Normal (Slice 2t)"
         )
     space = str(getattr(from_node, "space", "TANGENT") or "TANGENT").upper()
-    _SPACE = {"TANGENT": 0, "OBJECT": 1, "WORLD": 2}
+    # Blender 5.2 RNA + Cycles NodeNormalMapSpace (kernel/svm/types.h):
+    # TANGENT=0 OBJECT=1 WORLD=2 BLENDER_OBJECT=3 BLENDER_WORLD=4.
+    # BLENDER_* flips color.y/z in svm (tex_coord.h "strange blender convention").
+    _SPACE = {
+        "TANGENT": 0,
+        "OBJECT": 1,
+        "WORLD": 2,
+        "BLENDER_OBJECT": 3,
+        "BLENDER_WORLD": 4,
+    }
     if space not in _SPACE:
         raise QuantTraceSyncError(
             f"Normal Map space={space!r} refused "
-            "(Slice 2z: TANGENT/OBJECT/WORLD only; "
-            "BLENDER_OBJECT/BLENDER_WORLD refuse)"
+            "(Slice 2ad: TANGENT/OBJECT/WORLD/BLENDER_OBJECT/BLENDER_WORLD only)"
         )
     space_i = _SPACE[space]
     uv_map = str(getattr(from_node, "uv_map", "") or "").strip()
