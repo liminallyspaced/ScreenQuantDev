@@ -18,12 +18,12 @@ def build_mapping_scene(
     rotation_z=0.15,
     coord="UV",
 ):
-    """Build tex scene; optionally wire TEX_COORD UV/Generated [→ Mapping] → TEX_IMAGE.
+    """Build tex scene; optionally wire TEX_COORD UV/Generated/Object [→ Mapping] → TEX_IMAGE.
 
     use_texcoord=False + use_mapping=False → Slice 2f unlinked Vector regression.
     use_texcoord=True + use_mapping=False → TEX_COORD only.
     use_texcoord=True + use_mapping=True → TEX_COORD → Mapping (VECTOR) → TEX_IMAGE.
-    coord: "UV" (Slice 2h) or "Generated" (Slice 2k).
+    coord: "UV" (2h), "Generated" (2k), or "Object" (2l).
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -44,8 +44,17 @@ def build_mapping_scene(
     if use_texcoord:
         tc = nt.nodes.new("ShaderNodeTexCoord")
         tc.location = (-600, 200)
-        coord_name = "Generated" if str(coord).strip().lower() == "generated" else "UV"
+        key = str(coord).strip().lower()
+        if key == "generated":
+            coord_name = "Generated"
+        elif key == "object":
+            coord_name = "Object"
+        else:
+            coord_name = "UV"
         coord_out = tc.outputs[coord_name]
+        # Slice 2l: empty Object reference only (no object_itfm).
+        if coord_name == "Object" and getattr(tc, "object", None) is not None:
+            tc.object = None
         if use_mapping:
             mapping = nt.nodes.new("ShaderNodeMapping")
             mapping.location = (-400, 200)
@@ -87,7 +96,7 @@ def main():
     p.add_argument("--res", type=int, default=64)
     p.add_argument("--samples", type=int, default=32)
     p.add_argument("--mode", choices=("mapping", "texcoord", "unlinked"), default="mapping")
-    p.add_argument("--coord", choices=("UV", "Generated"), default="UV")
+    p.add_argument("--coord", choices=("UV", "Generated", "Object"), default="UV")
     p.add_argument("--scale", type=float, nargs=3, default=(2.0, 2.0, 2.0))
     p.add_argument("--location", type=float, nargs=3, default=(0.1, 0.2, 0.0))
     p.add_argument("--rotation-z", type=float, default=0.15)
