@@ -877,35 +877,107 @@ def _mesh_arrays(obj) -> Tuple[List[float], List[int]]:
     return verts, tris
 
 
-def _world_strength(scene) -> float:
+def _world_info(scene) -> dict:
+    """Pack world Background + optional Environment Texture (Slice 2aa).
+
+    Returns dict:
+      world_strength: float
+      world_image_path: str (empty = black Background Color, Slice 2b)
+      world_image_colorspace: str
+      world_projection: int (0=EQUIRECTANGULAR, 1=MIRROR_BALL)
+
+    Empty path keeps locked-cube black worlds bit-identical.
+    """
+    empty = {
+        "world_strength": 0.0,
+        "world_image_path": "",
+        "world_image_colorspace": "",
+        "world_projection": 0,
+    }
     world = getattr(scene, "world", None)
     if world is None:
-        return 0.0
+        return empty
     if not getattr(world, "use_nodes", False) or world.node_tree is None:
-        # Nodeless world color — treat as strength 1 with that color; Slice 2b
-        # only supports black+strength, so refuse non-black.
+        # Nodeless world color — Slice 2b only supports black+strength.
         col = getattr(world, "color", (0.0, 0.0, 0.0))
         if abs(float(col[0])) + abs(float(col[1])) + abs(float(col[2])) > 1e-6:
             raise QuantTraceSyncError("nodeless world color not black (Slice 2b)")
-        return 0.0
+        return empty
     bg = None
     for node in world.node_tree.nodes:
         if getattr(node, "type", None) == "BACKGROUND":
             bg = node
             break
     if bg is None:
-        return 0.0
-    color_sock = bg.inputs.get("Color")
-    if color_sock is not None and getattr(color_sock, "is_linked", False):
-        raise QuantTraceSyncError("world Background Color linked (Slice 2b)")
-    if color_sock is not None:
-        col = color_sock.default_value
-        if abs(float(col[0])) + abs(float(col[1])) + abs(float(col[2])) > 1e-6:
-            raise QuantTraceSyncError("world Background Color not black (Slice 2b)")
+        return empty
     strength_sock = bg.inputs.get("Strength")
     if strength_sock is not None and getattr(strength_sock, "is_linked", False):
-        raise QuantTraceSyncError("world Background Strength linked (Slice 2b)")
-    return float(strength_sock.default_value) if strength_sock is not None else 0.0
+        raise QuantTraceSyncError("world Background Strength linked (Slice 2aa)")
+    strength = float(strength_sock.default_value) if strength_sock is not None else 0.0
+    color_sock = bg.inputs.get("Color")
+    if color_sock is None or not getattr(color_sock, "is_linked", False):
+        if color_sock is not None:
+            col = color_sock.default_value
+            if abs(float(col[0])) + abs(float(col[1])) + abs(float(col[2])) > 1e-6:
+                raise QuantTraceSyncError(
+                    "world Background Color not black (Slice 2b/2aa)"
+                )
+        return {
+            "world_strength": strength,
+            "world_image_path": "",
+            "world_image_colorspace": "",
+            "world_projection": 0,
+        }
+    # Color linked — only TEX_ENVIRONMENT with disk filepath this hour.
+    links = list(getattr(color_sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            "world Background Color multi-link refused (Slice 2aa)"
+        )
+    from_node = getattr(links[0], "from_node", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype != "TEX_ENVIRONMENT":
+        raise QuantTraceSyncError(
+            f"world Background Color linked from {ntype!r} "
+            "(Slice 2aa: TEX_ENVIRONMENT only)"
+        )
+    vec_sock = from_node.inputs.get("Vector") if from_node is not None else None
+    if vec_sock is not None and getattr(vec_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Environment Texture Vector linked (Slice 2aa: unlinked LINK_POSITION only)"
+        )
+    img = getattr(from_node, "image", None)
+    path = _abspath_image(img)
+    if not path:
+        raise QuantTraceSyncError(
+            "Environment Texture filepath missing on disk "
+            "(Slice 2aa; packed-only refused)"
+        )
+    proj_rna = str(getattr(from_node, "projection", "EQUIRECTANGULAR") or "").upper()
+    if proj_rna == "EQUIRECTANGULAR":
+        proj = 0
+    elif proj_rna == "MIRROR_BALL":
+        proj = 1
+    else:
+        raise QuantTraceSyncError(
+            f"Environment Texture projection {proj_rna!r} refused (Slice 2aa)"
+        )
+    cs = ""
+    if img is not None:
+        cs_settings = getattr(img, "colorspace_settings", None)
+        if cs_settings is not None:
+            cs = str(getattr(cs_settings, "name", "") or "")
+    return {
+        "world_strength": strength,
+        "world_image_path": path,
+        "world_image_colorspace": cs,
+        "world_projection": proj,
+    }
+
+
+def _world_strength(scene) -> float:
+    """Back-compat: strength only (calls _world_info)."""
+    return float(_world_info(scene)["world_strength"])
 
 
 def _light_strength(lamp_obj, scene) -> Tuple[float, float, float]:
@@ -969,7 +1041,7 @@ def classify_simple(scene) -> dict:
     mat = mats[0] if mats else None
     # Probe principled + world early.
     _principled_from_material(mat)
-    _world_strength(scene)
+    _world_info(scene)
     return {
         "mesh": mesh_obj,
         "light": lamp,
@@ -1336,7 +1408,7 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
         "metallic": metal,
         "ior": ior,
         "alpha": alpha,
-        "world_strength": _world_strength(scene),
+        **_world_info(scene),
         "uvs": uvs,
         **tex_fields,
     }
@@ -1417,7 +1489,7 @@ def classify_scene(scene, depsgraph=None) -> dict:
         mat = mlist[0] if mlist else None
         _principled_from_material(mat)
         mats.append(mat)
-    _world_strength(scene)
+    _world_info(scene)
     return {
         "meshes": meshes,
         "lights": lights,
@@ -1437,7 +1509,7 @@ def can_sync_scene(scene, depsgraph=None) -> bool:
 def pack_scene(scene, depsgraph=None) -> dict:
     """Pack N meshes + N AREA lights into Python buffers for QT_Scene.
 
-    Returns dict with width/height/samples, camera fields, world_strength,
+    Returns dict with width/height/samples, camera fields, world_* fields,
     and lists `meshes` / `lights` (each a dict of arrays/floats).
     """
     if depsgraph is not None:
@@ -1553,7 +1625,7 @@ def pack_scene(scene, depsgraph=None) -> dict:
         "cam_sensor_h": sensor_h_mm / 1000.0,
         "cam_near": near,
         "cam_far": far,
-        "world_strength": _world_strength(scene),
+        **_world_info(scene),
     }
 
 
@@ -1936,6 +2008,9 @@ def make_qt_simple_scene_type():
             ("ior", ctypes.c_float),
             ("alpha", ctypes.c_float),
             ("world_strength", ctypes.c_float),
+            ("world_image_path", ctypes.c_char_p),
+            ("world_image_colorspace", ctypes.c_char_p),
+            ("world_projection", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
@@ -2210,6 +2285,11 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     desc.ior = float(packed["ior"])
     desc.alpha = float(packed["alpha"])
     desc.world_strength = float(packed["world_strength"])
+    wip = (packed.get("world_image_path") or "").encode("utf-8")
+    wics = (packed.get("world_image_colorspace") or "").encode("utf-8")
+    desc.world_image_path = wip if wip else None
+    desc.world_image_colorspace = wics if wics else None
+    desc.world_projection = int(packed.get("world_projection", 0) or 0)
     if exr_path:
         desc.exr_path = exr_path.encode("utf-8")
     else:
@@ -2223,7 +2303,7 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     tex_keep: list = []
     _fill_tex_ctypes(desc, packed, tex_keep)
     # Keep buffers alive with the struct.
-    desc._keep = (verts, tris, uvs_buf, tex_keep)
+    desc._keep = (verts, tris, uvs_buf, tex_keep, wip, wics)
     return desc
 
 
@@ -2509,6 +2589,9 @@ def make_qt_scene_types():
             ("cam_near", ctypes.c_float),
             ("cam_far", ctypes.c_float),
             ("world_strength", ctypes.c_float),
+            ("world_image_path", ctypes.c_char_p),
+            ("world_image_colorspace", ctypes.c_char_p),
+            ("world_projection", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
         ]
 
@@ -2582,6 +2665,13 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
     desc.cam_near = float(packed["cam_near"])
     desc.cam_far = float(packed["cam_far"])
     desc.world_strength = float(packed["world_strength"])
+    wip = (packed.get("world_image_path") or "").encode("utf-8")
+    wics = (packed.get("world_image_colorspace") or "").encode("utf-8")
+    keep.append(wip)
+    keep.append(wics)
+    desc.world_image_path = wip if wip else None
+    desc.world_image_colorspace = wics if wics else None
+    desc.world_projection = int(packed.get("world_projection", 0) or 0)
     if exr_path:
         desc.exr_path = exr_path.encode("utf-8")
     else:

@@ -522,6 +522,9 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->cam_near = s->cam_near;
     out->cam_far = s->cam_far;
     out->world_strength = s->world_strength;
+    out->world_image_path = s->world_image_path;
+    out->world_image_colorspace = s->world_image_colorspace;
+    out->world_projection = s->world_projection;
     out->exr_path = s->exr_path;
 }
 
@@ -1314,15 +1317,49 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
     cam->need_flags_update = true;
     cam->update(scene);
 
-    /* World Background: Color black, Strength from desc. */
+    /* World Background: black+strength (Slice 2b) or Environment Texture (Slice 2aa).
+     * EnvironmentTextureNode Vector left default LINK_POSITION (Cycles shader_nodes.cpp).
+     * Empty world_image_path keeps bit-identical black world for locked cubes.
+     * With env: add BackgroundLight + MIS (Blender world.cycles sample_map 1024 /
+     * sampling AUTOMATIC) so surface lighting matches stock; camera-ray bg alone
+     * already matched without it. */
     {
         unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
         BackgroundNode *bg = graph->create_node<BackgroundNode>();
         bg->set_color(make_float3(0.0f, 0.0f, 0.0f));
         bg->set_strength(desc->world_strength);
+        const bool has_env = desc->world_image_path && desc->world_image_path[0];
+        if (has_env) {
+            EnvironmentTextureNode *env = graph->create_node<EnvironmentTextureNode>();
+            env->set_filename(ustring(desc->world_image_path));
+            if (desc->world_image_colorspace && desc->world_image_colorspace[0]) {
+                env->set_colorspace(ustring(desc->world_image_colorspace));
+            }
+            const int proj = desc->world_projection;
+            env->set_projection(proj == 1 ? NODE_ENVIRONMENT_MIRROR_BALL :
+                                           NODE_ENVIRONMENT_EQUIRECTANGULAR);
+            /* Vector: leave unlinked → SOCKET LINK_POSITION default. */
+            graph->connect(env->output("Color"), bg->input("Color"));
+        }
         graph->connect(bg->output("Background"), graph->output()->input("Surface"));
         scene->default_background->set_graph(std::move(graph));
         scene->default_background->tag_update(scene);
+
+        if (has_env) {
+            BackgroundLight *bg_light = scene->create_node<BackgroundLight>();
+            bg_light->set_use_mis(true);
+            bg_light->set_map_resolution(1024); /* Blender factory sample_map_resolution */
+            {
+                array<Node *> used;
+                used.push_back_slow(scene->default_background);
+                bg_light->set_used_shaders(used);
+            }
+            Object *bg_obj = scene->create_node<Object>();
+            bg_obj->set_geometry(bg_light);
+            bg_obj->set_visibility(PATH_RAY_VISIBILITY_ALL & ~PATH_RAY_VISIBILITY_CAMERA);
+            bg_obj->name = "QTWorld";
+            bg_obj->set_random_id(hash_uint2(hash_string("QTWorld"), 0));
+        }
     }
 
     Shader *lamp_shader = make_area_emission(scene);

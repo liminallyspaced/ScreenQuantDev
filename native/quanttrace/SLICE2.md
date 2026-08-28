@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2z landed** (2026-08-28 2pm PlugWalk ET). Principled Normal Map space OBJECT + WORLD (plus Coat Normal space, same helper). Object 32²/4 Δmax=3.58e-7; 256²/128 Δmax=5.96e-7 PASS (0 px ≥1e-3). World 32²/4 Δmax=3.58e-7; 256²/128 Δmax=7.15e-7 PASS. Tangent 2j regression 32²/4 Δmax=3.58e-7 PASS. Bump 2x regression 32²/4 Δmax=2.38e-7 PASS. Coat Normal Object 32²/4 Δmax=2.38e-7 PASS (optional). Stock Object vs Tangent 32²/4 Δmax=0.821 (82 px ≥1e-3) so the space enum is live. Packed `normal_space` 1/2/0. `is_tracer=1`. Native `0.0.27-slice2z`.
+Status: **Slice 2aa landed** (2026-08-28 3pm PlugWalk ET). HDR / Environment Texture world (TEX_ENVIRONMENT → Background Color). Equirect 32²/4 Δmax=6.13e-4; 256²/128 Δmax=2.01e-4 PASS (0 px ≥1e-3). Black-world empty-path regression 32²/4 Δmax=3.58e-7 PASS. Object Normal 2z regression 32²/4 Δmax=3.58e-7 PASS. Optional MIRROR_BALL 32²/4 Δmax=6.90e-4 PASS. Stock HDR vs black Δmax=0.857 (graph live). Packed path/projection=0/strength=1.0. `is_tracer=1`. Native `0.0.28-slice2aa`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -9,6 +9,49 @@ Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 `is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
+
+
+
+---
+
+## 3pm PlugWalk (2026-08-28) — HDR / Environment Texture world (Slice 2aa)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `world_image_path` / `world_image_colorspace` / `world_projection` after `world_strength` on `QT_Scene` + `QT_SimpleScene`. Empty path = Slice 2b black+strength (bit-identical). projection 0=EQUIRECTANGULAR, 1=MIRROR_BALL. Vector left unlinked (Cycles `LINK_POSITION`). |
+| Python | `_world_info(scene)` replaces `_world_strength` call sites. TEX_ENVIRONMENT + disk filepath only; packed-only / linked Vector / linked Strength / other Color sources refuse (Slice 2aa). Colorspace from `Image.colorspace_settings.name`. ctypes `_fields_` + `simple_to_qt` / `to_ctypes_*` lockstep. |
+| Native | `EnvironmentTextureNode` filename/colorspace/projection → Background Color. Empty path keeps black Background. With path: `BackgroundLight` + `use_mis=true` + `map_resolution=1024` (Blender factory `sample_map_resolution`) so surface lighting matches; camera-ray bg alone matched without it. Cite `shader_nodes.cpp` EnvironmentTextureNode (LINK_POSITION Vector default). |
+| Version | `0.0.28-slice2aa` |
+| Tools | `tools/_quanttrace_slice2aa_scene.py`, `tools/_quanttrace_slice2aa_smoke.py` (tiny OIIO linear EXR gradient, not a studio HDR) |
+| Visibility | Env left-red/right-cyan; stock Combined chromatic + non-constant; packed path non-empty, projection 0, strength 1.0. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| HDR EQUIRECTANGULAR | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+| HDR EQUIRECTANGULAR | 256² / 128 | **2.01e-4** | 9.02e-7 | 0 | **PASS** |
+| Black-world empty path (regression) | 32² / 4 | **3.58e-7** | 5.34e-9 | 0 | **PASS** |
+| Object Normal (2z regression) | 32² / 4 | **3.58e-7** | 6.75e-9 | 0 | **PASS** |
+| MIRROR_BALL (optional) | 32² / 4 | **6.90e-4** | 4.63e-6 | 0 | **PASS** |
+
+Live graph (stock HDR vs stock black-world) 32²/4: Δmax=**0.857** (1024 px ≥1e-3, MAE 0.308). Packed `world_image_path` non-empty, `world_projection=0`, `world_strength=1.0`, colorspace `Linear Rec.709`. Proof plate `docs/proof/quanttrace-hdr-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- Linked Vector / Mapping / TEX_COORD on Environment Texture, packed-only images, Sky Texture / Nishita / TEX_IMAGE / RGB / Mix → Background Color, linked Strength, world rotation ABI, transparent film, MIS knobs beyond factory BackgroundLight: still refuse.
+- HDR Δmax is ~1e-4 class (BackgroundLight MIS map), not the 1e-7 black-world class — still under the 1e-3 gate with 0 px ≥1e-3.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Object-with-pointer, or `BLENDER_OBJECT`/`BLENDER_WORLD` Normal space, or linked env Vector / Mapping. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
 
 
 

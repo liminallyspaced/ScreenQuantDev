@@ -112,7 +112,11 @@ typedef struct QT_SimpleScene {
   float metallic;
   float ior;
   float alpha;
-  float world_strength; /* Background Strength; Color black */
+  float world_strength; /* Background Strength; Color black when path empty */
+  /* Slice 2aa: Environment Texture world (NULL/empty path = Slice 2b black) */
+  const char *world_image_path;
+  const char *world_image_colorspace;
+  int world_projection; /* 0=EQUIRECTANGULAR, 1=MIRROR_BALL */
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -736,6 +740,10 @@ typedef struct QT_Scene {
   float cam_near;
   float cam_far;
   float world_strength;
+  /* Slice 2aa: Environment Texture world (NULL/empty path = Slice 2b black) */
+  const char *world_image_path;
+  const char *world_image_colorspace;
+  int world_projection; /* 0=EQUIRECTANGULAR, 1=MIRROR_BALL */
   const char *exr_path;
 } QT_Scene;
 
