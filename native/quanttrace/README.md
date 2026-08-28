@@ -1,10 +1,10 @@
-<!-- Slice 2q: Principled Coat/Sheen/Emission Strength TEX_IMAGE; version 0.0.18-slice2q -->
+<!-- Slice 2u: Specular Tint / Thin Film / Subsurface TEX_IMAGE; version 0.0.22-slice2u -->
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.18-slice2q`.
+`-DQT_WITH_CYCLES=ON`. Native `0.0.22-slice2u`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -32,8 +32,12 @@ this tree never feeds Auto clocks.
 | **2o — IOR/Alpha TEX_IMAGE** | **PASS** | IOR 256²/128 Δmax **5.96e-7**; Alpha 256²/128 Δmax **6.80e-4**; Both 256²/128 Δmax **6.33e-4**. Native `0.0.16-slice2o`. |
 | **2p — Transmission/Specular TEX_IMAGE** | **PASS** | Transmission 256²/128 Δmax **4.44e-6**; Specular 256²/128 Δmax **4.17e-7**; Both 256²/128 Δmax **7.23e-5**. Native `0.0.17-slice2p`. |
 | **2q — Coat/Sheen/Emission Strength TEX_IMAGE** | **PASS** | Coat 256²/128 Δmax **3.58e-7**; Sheen 256²/128 Δmax **3.58e-7**; Emission Strength 256²/128 Δmax **9.54e-7**. Native `0.0.18-slice2q`. |
+| **2r — Emission Color TEX_IMAGE** | **PASS** | Color 256²/128 Δmax **9.54e-7**. Native `0.0.19-slice2r`. |
+| **2s — Coat/Sheen extras TEX_IMAGE** | **PASS** | CoatRough/IOR/Tint + SheenRough/Tint. Native `0.0.20-slice2s`. |
+| **2t — Coat Normal Map TEX_IMAGE** | **PASS** | Coat Normal 256²/128 Δmax **3.58e-7**. Native `0.0.21-slice2t`. |
+| **2u — Specular Tint / Thin Film / Subsurface TEX_IMAGE** | **32/4 PASS; SSSWeight 256 1-px FAIL** | SpecTint 256²/128 Δmax **4.77e-7**; FilmThick 256²/128 Δmax **4.77e-7**; SSSWeight 32²/4 Δmax **8.34e-7** PASS, 256²/128 Δmax **0.00164** (1 px). Native `0.0.22-slice2u`. |
 
-Kitchens / HDR worlds / Emission Color / Coat Roughness·IOR·Tint / Sheen Roughness·Tint / Object·World Normal space / Bump / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
+Kitchens / HDR worlds / Subsurface IOR·Anisotropy / Thin Wall / Diffuse Roughness / Anisotropic / Tangent / Object·World Normal space / Bump / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
 
 ## Build (Linux) — hello stub (default)
 
@@ -53,7 +57,7 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=1, session_probe=1, version 0.0.18-slice2q
+# ABI: is_tracer=1, session_probe=1, version 0.0.22-slice2u
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 blender --background --python tools/_quanttrace_f12_smoke.py -- \

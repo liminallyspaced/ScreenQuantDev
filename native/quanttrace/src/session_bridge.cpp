@@ -23,6 +23,8 @@
  * Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission).
  * Slice 2s: Coat/Sheen extras TEX_IMAGE.
  * Slice 2t: Normal Map (Tangent) + TEX_IMAGE → Principled Coat Normal.
+ * Slice 2u: TEX_IMAGE → Principled Specular Tint / Thin Film Thickness+IOR /
+ *   Subsurface Weight / Radius / Scale.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -385,6 +387,48 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->coat_normal_map_scale, s->coat_normal_map_scale, sizeof(mesh->coat_normal_map_scale));
     mesh->coat_normal_map_type = s->coat_normal_map_type;
     mesh->coat_normal_strength = s->coat_normal_strength;
+    mesh->spec_tint_image_path = s->spec_tint_image_path;
+    mesh->spec_tint_image_colorspace = s->spec_tint_image_colorspace;
+    mesh->spec_tint_tex_vector_mode = s->spec_tint_tex_vector_mode;
+    std::memcpy(mesh->spec_tint_map_location, s->spec_tint_map_location, sizeof(mesh->spec_tint_map_location));
+    std::memcpy(mesh->spec_tint_map_rotation, s->spec_tint_map_rotation, sizeof(mesh->spec_tint_map_rotation));
+    std::memcpy(mesh->spec_tint_map_scale, s->spec_tint_map_scale, sizeof(mesh->spec_tint_map_scale));
+    mesh->spec_tint_map_type = s->spec_tint_map_type;
+    mesh->film_thick_image_path = s->film_thick_image_path;
+    mesh->film_thick_image_colorspace = s->film_thick_image_colorspace;
+    mesh->film_thick_tex_vector_mode = s->film_thick_tex_vector_mode;
+    std::memcpy(mesh->film_thick_map_location, s->film_thick_map_location, sizeof(mesh->film_thick_map_location));
+    std::memcpy(mesh->film_thick_map_rotation, s->film_thick_map_rotation, sizeof(mesh->film_thick_map_rotation));
+    std::memcpy(mesh->film_thick_map_scale, s->film_thick_map_scale, sizeof(mesh->film_thick_map_scale));
+    mesh->film_thick_map_type = s->film_thick_map_type;
+    mesh->film_ior_image_path = s->film_ior_image_path;
+    mesh->film_ior_image_colorspace = s->film_ior_image_colorspace;
+    mesh->film_ior_tex_vector_mode = s->film_ior_tex_vector_mode;
+    std::memcpy(mesh->film_ior_map_location, s->film_ior_map_location, sizeof(mesh->film_ior_map_location));
+    std::memcpy(mesh->film_ior_map_rotation, s->film_ior_map_rotation, sizeof(mesh->film_ior_map_rotation));
+    std::memcpy(mesh->film_ior_map_scale, s->film_ior_map_scale, sizeof(mesh->film_ior_map_scale));
+    mesh->film_ior_map_type = s->film_ior_map_type;
+    mesh->sss_weight_image_path = s->sss_weight_image_path;
+    mesh->sss_weight_image_colorspace = s->sss_weight_image_colorspace;
+    mesh->sss_weight_tex_vector_mode = s->sss_weight_tex_vector_mode;
+    std::memcpy(mesh->sss_weight_map_location, s->sss_weight_map_location, sizeof(mesh->sss_weight_map_location));
+    std::memcpy(mesh->sss_weight_map_rotation, s->sss_weight_map_rotation, sizeof(mesh->sss_weight_map_rotation));
+    std::memcpy(mesh->sss_weight_map_scale, s->sss_weight_map_scale, sizeof(mesh->sss_weight_map_scale));
+    mesh->sss_weight_map_type = s->sss_weight_map_type;
+    mesh->sss_radius_image_path = s->sss_radius_image_path;
+    mesh->sss_radius_image_colorspace = s->sss_radius_image_colorspace;
+    mesh->sss_radius_tex_vector_mode = s->sss_radius_tex_vector_mode;
+    std::memcpy(mesh->sss_radius_map_location, s->sss_radius_map_location, sizeof(mesh->sss_radius_map_location));
+    std::memcpy(mesh->sss_radius_map_rotation, s->sss_radius_map_rotation, sizeof(mesh->sss_radius_map_rotation));
+    std::memcpy(mesh->sss_radius_map_scale, s->sss_radius_map_scale, sizeof(mesh->sss_radius_map_scale));
+    mesh->sss_radius_map_type = s->sss_radius_map_type;
+    mesh->sss_scale_image_path = s->sss_scale_image_path;
+    mesh->sss_scale_image_colorspace = s->sss_scale_image_colorspace;
+    mesh->sss_scale_tex_vector_mode = s->sss_scale_tex_vector_mode;
+    std::memcpy(mesh->sss_scale_map_location, s->sss_scale_map_location, sizeof(mesh->sss_scale_map_location));
+    std::memcpy(mesh->sss_scale_map_rotation, s->sss_scale_map_rotation, sizeof(mesh->sss_scale_map_rotation));
+    std::memcpy(mesh->sss_scale_map_scale, s->sss_scale_map_scale, sizeof(mesh->sss_scale_map_scale));
+    mesh->sss_scale_map_type = s->sss_scale_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -484,7 +528,13 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->coat_tint_tex_vector_mode) ||
            tex_mode_is_generated(m->sheen_rough_tex_vector_mode) ||
            tex_mode_is_generated(m->sheen_tint_tex_vector_mode) ||
-           tex_mode_is_generated(m->coat_normal_tex_vector_mode);
+           tex_mode_is_generated(m->coat_normal_tex_vector_mode) ||
+           tex_mode_is_generated(m->spec_tint_tex_vector_mode) ||
+           tex_mode_is_generated(m->film_thick_tex_vector_mode) ||
+           tex_mode_is_generated(m->film_ior_tex_vector_mode) ||
+           tex_mode_is_generated(m->sss_weight_tex_vector_mode) ||
+           tex_mode_is_generated(m->sss_radius_tex_vector_mode) ||
+           tex_mode_is_generated(m->sss_scale_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -795,6 +845,63 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         graph->connect(img->output("Color"), nmap->input("Color"));
         graph->connect(nmap->output("Normal"), bsdf->input("Coat Normal"));
     }
+
+    /* Slice 2u: Specular Tint Color→Color; Thin Film Thickness/IOR via NODE_CONVERT_CF;
+     * Subsurface Weight/Scale via NODE_CONVERT_CF; Subsurface Radius Color→Vector.
+     * Pin subsurface_weight=1 when Radius/Scale map and Weight is unmapped.
+     * Pin thin_film_thickness=400 nm when Film IOR maps and Thickness is unmapped
+     * (Cycles default thickness is 0 = no film). */
+    if (m->spec_tint_image_path && m->spec_tint_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->spec_tint_image_path, m->spec_tint_image_colorspace,
+            m->spec_tint_tex_vector_mode, m->spec_tint_map_location,
+            m->spec_tint_map_rotation, m->spec_tint_map_scale, m->spec_tint_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Specular Tint"));
+    }
+    if (m->film_thick_image_path && m->film_thick_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->film_thick_image_path, m->film_thick_image_colorspace,
+            m->film_thick_tex_vector_mode, m->film_thick_map_location,
+            m->film_thick_map_rotation, m->film_thick_map_scale, m->film_thick_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Thin Film Thickness"));
+    }
+    if (m->film_ior_image_path && m->film_ior_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->film_ior_image_path, m->film_ior_image_colorspace,
+            m->film_ior_tex_vector_mode, m->film_ior_map_location,
+            m->film_ior_map_rotation, m->film_ior_map_scale, m->film_ior_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Thin Film IOR"));
+    }
+    if (m->sss_weight_image_path && m->sss_weight_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->sss_weight_image_path, m->sss_weight_image_colorspace,
+            m->sss_weight_tex_vector_mode, m->sss_weight_map_location,
+            m->sss_weight_map_rotation, m->sss_weight_map_scale, m->sss_weight_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Subsurface Weight"));
+    }
+    if (m->sss_radius_image_path && m->sss_radius_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->sss_radius_image_path, m->sss_radius_image_colorspace,
+            m->sss_radius_tex_vector_mode, m->sss_radius_map_location,
+            m->sss_radius_map_rotation, m->sss_radius_map_scale, m->sss_radius_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Subsurface Radius"));
+    }
+    if (m->sss_scale_image_path && m->sss_scale_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->sss_scale_image_path, m->sss_scale_image_colorspace,
+            m->sss_scale_tex_vector_mode, m->sss_scale_map_location,
+            m->sss_scale_map_rotation, m->sss_scale_map_scale, m->sss_scale_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Subsurface Scale"));
+    }
+    if (((m->sss_radius_image_path && m->sss_radius_image_path[0]) ||
+         (m->sss_scale_image_path && m->sss_scale_image_path[0])) &&
+        !(m->sss_weight_image_path && m->sss_weight_image_path[0])) {
+        bsdf->set_subsurface_weight(1.0f);
+    }
+    if ((m->film_ior_image_path && m->film_ior_image_path[0]) &&
+        !(m->film_thick_image_path && m->film_thick_image_path[0])) {
+        bsdf->set_thin_film_thickness(400.0f);
+    }
     if (((m->coat_rough_image_path && m->coat_rough_image_path[0]) ||
          (m->coat_ior_image_path && m->coat_ior_image_path[0]) ||
          (m->coat_tint_image_path && m->coat_tint_image_path[0]) ||
@@ -875,7 +982,13 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->coat_tint_image_path && m->coat_tint_image_path[0]) ||
         (m->sheen_rough_image_path && m->sheen_rough_image_path[0]) ||
         (m->sheen_tint_image_path && m->sheen_tint_image_path[0]) ||
-        (m->coat_normal_image_path && m->coat_normal_image_path[0]);
+        (m->coat_normal_image_path && m->coat_normal_image_path[0]) ||
+        (m->spec_tint_image_path && m->spec_tint_image_path[0]) ||
+        (m->film_thick_image_path && m->film_thick_image_path[0]) ||
+        (m->film_ior_image_path && m->film_ior_image_path[0]) ||
+        (m->sss_weight_image_path && m->sss_weight_image_path[0]) ||
+        (m->sss_radius_image_path && m->sss_radius_image_path[0]) ||
+        (m->sss_scale_image_path && m->sss_scale_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
@@ -1146,7 +1259,13 @@ static int run_qt_session(const QT_Scene *desc,
             (m->coat_tint_image_path && m->coat_tint_image_path[0]) ||
             (m->sheen_rough_image_path && m->sheen_rough_image_path[0]) ||
             (m->sheen_tint_image_path && m->sheen_tint_image_path[0]) ||
-            (m->coat_normal_image_path && m->coat_normal_image_path[0]);
+            (m->coat_normal_image_path && m->coat_normal_image_path[0]) ||
+            (m->spec_tint_image_path && m->spec_tint_image_path[0]) ||
+            (m->film_thick_image_path && m->film_thick_image_path[0]) ||
+            (m->film_ior_image_path && m->film_ior_image_path[0]) ||
+            (m->sss_weight_image_path && m->sss_weight_image_path[0]) ||
+            (m->sss_radius_image_path && m->sss_radius_image_path[0]) ||
+            (m->sss_scale_image_path && m->sss_scale_image_path[0]);
         if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;

@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2t landed** (2026-08-28 8am PlugWalk ET). Principled Coat Normal Map (Tangent) + TEX_IMAGE PASS. Coat Normal 32²/4 Δmax=2.98e-7; 256²/128 Δmax=3.58e-7. Coat Weight 32²/4 regression Δmax=2.38e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.21-slice2t`.
+Status: **Slice 2u landed** (2026-08-28 9am PlugWalk ET). Principled Specular Tint / Thin Film Thickness+IOR / Subsurface Weight+Radius+Scale TEX_IMAGE. SpecTint 32²/4 Δmax=4.77e-7; 256²/128 Δmax=4.77e-7 PASS. FilmThick 256²/128 Δmax=4.77e-7 PASS. SSSWeight 32²/4 PASS; 256²/128 1px Δmax=0.00164 FAIL (noise-class, documented). Coat Weight 32²/4 regression Δmax=2.38e-7 PASS. `is_tracer=1`. Native `0.0.22-slice2u`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -11,6 +11,52 @@ addon zip or public commit tree.
 
 
 ---
+
+## 9am PlugWalk (2026-08-28) — Specular Tint / Thin Film / Subsurface TEX_IMAGE (Slice 2u)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `spec_tint_` / `film_thick_` / `film_ior_` / `sss_weight_` / `sss_radius_` / `sss_scale_` on `QT_Mesh` + `QT_SimpleScene` |
+| Python | `sync._principled_from_material` accepts Specular Tint, Thin Film Thickness/IOR, Subsurface Weight/Radius/Scale (5.2 names; legacy Subsurface for Weight) |
+| Native | Tint Color→Color; Thickness/IOR/Weight/Scale Color→float via NODE_CONVERT_CF; Radius Color→Vector. Pins `set_subsurface_weight(1.0)` when Radius/Scale map and Weight is unmapped. Pins `set_thin_film_thickness(400.0)` nm when Film IOR maps and Thickness is unmapped |
+| Version | `0.0.22-slice2u` |
+| Tools | `tools/_quanttrace_slice2u_scene.py`, `tools/_quanttrace_slice2u_smoke.py` |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Socket | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| SpecTint | 32² / 4 | **4.77e-7** | 5.58e-9 | **PASS** |
+| SpecTint | 256² / 128 | **4.77e-7** | 3.77e-9 | **PASS** |
+| FilmThick | 32² / 4 | **3.58e-7** | 5.17e-9 | **PASS** |
+| FilmThick | 256² / 128 | **4.77e-7** | 3.64e-9 | **PASS** |
+| FilmIOR | 32² / 4 | **1.22e-6** | 2.82e-9 | **PASS** |
+| SSSWeight | 32² / 4 | **8.34e-7** | 9.08e-9 | **PASS** |
+| SSSWeight | 256² / 128 | **0.00164** | 2.34e-8 | **FAIL** (1 px / 65536) |
+| SSSRadius | 32² / 4 | **6.68e-6** | 4.51e-8 | **PASS** |
+| SSSScale | 32² / 4 | **4.20e-6** | 1.89e-8 | **PASS** |
+| Combo (SpecTint+FilmThick) | 32² / 4 | **4.77e-7** | 5.58e-9 | **PASS** |
+| Coat Weight (2q regression) | 32² / 4 | **2.38e-7** | 4.71e-9 | **PASS** |
+
+SSSWeight 256² leftover is 1 pixel at (143,111). MAE 2.3e-8. Same noise-class silhouette residue as still-life 256² — not claimed fixed.
+
+### Honesty
+
+- Object/World space, linked Strength, Bump, custom uv_map, HDR / kitchens, Object-with-pointer, packed-only, linked Mapping L/R/S still refuse.
+- Subsurface IOR / Subsurface Anisotropy / Thin Wall / Diffuse Roughness / Anisotropic / Tangent still refuse (not this slice).
+- Still-life 256² 1px noise-class residue still documented (not claimed fixed). SSSWeight 256² 1px same class.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Subsurface IOR/Anisotropy, Thin Wall, Diffuse Roughness, Anisotropic/Tangent, Bump, close still-life / SSSWeight 256² 1px residue. Not ReSTIR. Not Classroom time %.
+
+
 
 ## 8am PlugWalk (2026-08-28) — Coat Normal Map TEX_IMAGE (Slice 2t)
 

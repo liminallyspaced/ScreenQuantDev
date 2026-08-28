@@ -19,6 +19,8 @@
  * Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission).
  * Slice 2s: TEX_IMAGE → Principled Coat Roughness/IOR/Tint + Sheen Roughness/Tint.
  * Slice 2t: Normal Map (Tangent) + TEX_IMAGE → Principled Coat Normal.
+ * Slice 2u: TEX_IMAGE → Principled Specular Tint / Thin Film Thickness+IOR /
+ *   Subsurface Weight / Radius / Scale.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -247,6 +249,54 @@ typedef struct QT_SimpleScene {
   float coat_normal_map_scale[3];
   int coat_normal_map_type;
   float coat_normal_strength; /* Coat Normal Map Strength, default 1.0 */
+  /* Slice 2u: Specular Tint TEX_IMAGE (NULL/empty = Cycles default 1,1,1) */
+  const char *spec_tint_image_path;
+  const char *spec_tint_image_colorspace;
+  int spec_tint_tex_vector_mode;
+  float spec_tint_map_location[3];
+  float spec_tint_map_rotation[3];
+  float spec_tint_map_scale[3];
+  int spec_tint_map_type;
+  /* Slice 2u: Thin Film Thickness TEX_IMAGE (NULL/empty = constant 0) */
+  const char *film_thick_image_path;
+  const char *film_thick_image_colorspace;
+  int film_thick_tex_vector_mode;
+  float film_thick_map_location[3];
+  float film_thick_map_rotation[3];
+  float film_thick_map_scale[3];
+  int film_thick_map_type;
+  /* Slice 2u: Thin Film IOR TEX_IMAGE (NULL/empty = constant 1.33) */
+  const char *film_ior_image_path;
+  const char *film_ior_image_colorspace;
+  int film_ior_tex_vector_mode;
+  float film_ior_map_location[3];
+  float film_ior_map_rotation[3];
+  float film_ior_map_scale[3];
+  int film_ior_map_type;
+  /* Slice 2u: Subsurface Weight TEX_IMAGE (NULL/empty = constant 0) */
+  const char *sss_weight_image_path;
+  const char *sss_weight_image_colorspace;
+  int sss_weight_tex_vector_mode;
+  float sss_weight_map_location[3];
+  float sss_weight_map_rotation[3];
+  float sss_weight_map_scale[3];
+  int sss_weight_map_type;
+  /* Slice 2u: Subsurface Radius TEX_IMAGE (NULL/empty = constant 1,0.2,0.1) */
+  const char *sss_radius_image_path;
+  const char *sss_radius_image_colorspace;
+  int sss_radius_tex_vector_mode;
+  float sss_radius_map_location[3];
+  float sss_radius_map_rotation[3];
+  float sss_radius_map_scale[3];
+  int sss_radius_map_type;
+  /* Slice 2u: Subsurface Scale TEX_IMAGE (NULL/empty = constant 0.005) */
+  const char *sss_scale_image_path;
+  const char *sss_scale_image_colorspace;
+  int sss_scale_tex_vector_mode;
+  float sss_scale_map_location[3];
+  float sss_scale_map_rotation[3];
+  float sss_scale_map_scale[3];
+  int sss_scale_map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -418,6 +468,54 @@ typedef struct QT_Mesh {
   float coat_normal_map_scale[3];
   int coat_normal_map_type;
   float coat_normal_strength; /* Coat Normal Map Strength, default 1.0 */
+  /* Slice 2u: Specular Tint TEX_IMAGE (NULL/empty = Cycles default 1,1,1) */
+  const char *spec_tint_image_path;
+  const char *spec_tint_image_colorspace;
+  int spec_tint_tex_vector_mode;
+  float spec_tint_map_location[3];
+  float spec_tint_map_rotation[3];
+  float spec_tint_map_scale[3];
+  int spec_tint_map_type;
+  /* Slice 2u: Thin Film Thickness TEX_IMAGE (NULL/empty = constant 0) */
+  const char *film_thick_image_path;
+  const char *film_thick_image_colorspace;
+  int film_thick_tex_vector_mode;
+  float film_thick_map_location[3];
+  float film_thick_map_rotation[3];
+  float film_thick_map_scale[3];
+  int film_thick_map_type;
+  /* Slice 2u: Thin Film IOR TEX_IMAGE (NULL/empty = constant 1.33) */
+  const char *film_ior_image_path;
+  const char *film_ior_image_colorspace;
+  int film_ior_tex_vector_mode;
+  float film_ior_map_location[3];
+  float film_ior_map_rotation[3];
+  float film_ior_map_scale[3];
+  int film_ior_map_type;
+  /* Slice 2u: Subsurface Weight TEX_IMAGE (NULL/empty = constant 0) */
+  const char *sss_weight_image_path;
+  const char *sss_weight_image_colorspace;
+  int sss_weight_tex_vector_mode;
+  float sss_weight_map_location[3];
+  float sss_weight_map_rotation[3];
+  float sss_weight_map_scale[3];
+  int sss_weight_map_type;
+  /* Slice 2u: Subsurface Radius TEX_IMAGE (NULL/empty = constant 1,0.2,0.1) */
+  const char *sss_radius_image_path;
+  const char *sss_radius_image_colorspace;
+  int sss_radius_tex_vector_mode;
+  float sss_radius_map_location[3];
+  float sss_radius_map_rotation[3];
+  float sss_radius_map_scale[3];
+  int sss_radius_map_type;
+  /* Slice 2u: Subsurface Scale TEX_IMAGE (NULL/empty = constant 0.005) */
+  const char *sss_scale_image_path;
+  const char *sss_scale_image_colorspace;
+  int sss_scale_tex_vector_mode;
+  float sss_scale_map_location[3];
+  float sss_scale_map_rotation[3];
+  float sss_scale_map_scale[3];
+  int sss_scale_map_type;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

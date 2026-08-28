@@ -22,6 +22,8 @@
 #   Sheen Roughness / Sheen Tint.
 # Slice 2t: Principled.Coat Normal ← Normal Map (Tangent) ← TEX_IMAGE Color
 #   (same Vector rules as Normal). Object/World/Bump/linked Strength still refuse.
+# Slice 2u: TEX_IMAGE → Principled Specular Tint / Thin Film Thickness+IOR /
+#   Subsurface Weight / Radius / Scale. Subsurface IOR/Anisotropy still refuse.
 #   Other linked sockets / HDR worlds refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
@@ -354,7 +356,7 @@ def _tex_image_from_base_color(sock) -> dict:
 
 
 def _prefix_tex(info: dict, prefix: str) -> dict:
-    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_ (or keep for base)."""
+    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_/spec_tint_/film_thick_/film_ior_/sss_weight_/sss_radius_/sss_scale_ (or keep for base)."""
     if not prefix:
         return dict(info)
     return {
@@ -473,6 +475,12 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(_empty_tex_info(), "sheen_rough_"),
         **_prefix_tex(_empty_tex_info(), "sheen_tint_"),
         **_empty_normal_info("coat_normal_"),
+        **_prefix_tex(_empty_tex_info(), "spec_tint_"),
+        **_prefix_tex(_empty_tex_info(), "film_thick_"),
+        **_prefix_tex(_empty_tex_info(), "film_ior_"),
+        **_prefix_tex(_empty_tex_info(), "sss_weight_"),
+        **_prefix_tex(_empty_tex_info(), "sss_radius_"),
+        **_prefix_tex(_empty_tex_info(), "sss_scale_"),
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -503,6 +511,12 @@ def _principled_from_material(mat) -> dict:
     coat_tint_tex = _empty_tex_info()
     sheen_rough_tex = _empty_tex_info()
     sheen_tint_tex = _empty_tex_info()
+    spec_tint_tex = _empty_tex_info()
+    film_thick_tex = _empty_tex_info()
+    film_ior_tex = _empty_tex_info()
+    sss_weight_tex = _empty_tex_info()
+    sss_radius_tex = _empty_tex_info()
+    sss_scale_tex = _empty_tex_info()
     # 5.x names first; legacy Transmission / Specular / Coat / Sheen / Emission accepted.
     allowed = (
         ("Base Color", ("Base Color",), "base"),
@@ -521,6 +535,12 @@ def _principled_from_material(mat) -> dict:
         ("Coat Tint", ("Coat Tint",), "coat_tint"),
         ("Sheen Roughness", ("Sheen Roughness",), "sheen_rough"),
         ("Sheen Tint", ("Sheen Tint",), "sheen_tint"),
+        ("Specular Tint", ("Specular Tint",), "spec_tint"),
+        ("Thin Film Thickness", ("Thin Film Thickness",), "film_thick"),
+        ("Thin Film IOR", ("Thin Film IOR",), "film_ior"),
+        ("Subsurface Weight", ("Subsurface Weight", "Subsurface"), "sss_weight"),
+        ("Subsurface Radius", ("Subsurface Radius",), "sss_radius"),
+        ("Subsurface Scale", ("Subsurface Scale",), "sss_scale"),
     )
     for label, names, kind in allowed:
         _name, sock = _input_by_names(bsdf, *names)
@@ -559,6 +579,18 @@ def _principled_from_material(mat) -> dict:
             sheen_rough_tex = tex
         elif kind == "sheen_tint":
             sheen_tint_tex = tex
+        elif kind == "spec_tint":
+            spec_tint_tex = tex
+        elif kind == "film_thick":
+            film_thick_tex = tex
+        elif kind == "film_ior":
+            film_ior_tex = tex
+        elif kind == "sss_weight":
+            sss_weight_tex = tex
+        elif kind == "sss_radius":
+            sss_radius_tex = tex
+        elif kind == "sss_scale":
+            sss_scale_tex = tex
     _cn_name, coat_n_sock = _input_by_names(bsdf, "Coat Normal")
     coat_normal_info = _normal_map_from_sock(
         coat_n_sock, prefix="coat_normal_", label="Coat Normal"
@@ -589,6 +621,12 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(sheen_rough_tex, "sheen_rough_"),
         **_prefix_tex(sheen_tint_tex, "sheen_tint_"),
         **coat_normal_info,
+        **_prefix_tex(spec_tint_tex, "spec_tint_"),
+        **_prefix_tex(film_thick_tex, "film_thick_"),
+        **_prefix_tex(film_ior_tex, "film_ior_"),
+        **_prefix_tex(sss_weight_tex, "sss_weight_"),
+        **_prefix_tex(sss_radius_tex, "sss_radius_"),
+        **_prefix_tex(sss_scale_tex, "sss_scale_"),
     }
 
 
@@ -748,7 +786,7 @@ def classify_simple(scene) -> dict:
 
 
 def _pack_tex_fields(pr: dict) -> dict:
-    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal TEX_IMAGE fields."""
+    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal/spec_tint/film_thick/film_ior/sss_weight/sss_radius/sss_scale TEX_IMAGE fields."""
     def loc(key, default):
         return list(pr.get(key) or default)
     out = {
@@ -880,6 +918,48 @@ def _pack_tex_fields(pr: dict) -> dict:
         "coat_normal_map_scale": loc("coat_normal_map_scale", (1.0, 1.0, 1.0)),
         "coat_normal_map_type": int(pr.get("coat_normal_map_type", 2) if pr.get("coat_normal_map_type") is not None else 2),
         "coat_normal_strength": float(pr.get("coat_normal_strength", 1.0) if pr.get("coat_normal_strength") is not None else 1.0),
+        "spec_tint_image_path": pr.get("spec_tint_image_path") or "",
+        "spec_tint_image_colorspace": pr.get("spec_tint_image_colorspace") or "",
+        "spec_tint_tex_vector_mode": int(pr.get("spec_tint_tex_vector_mode", 0) or 0),
+        "spec_tint_map_location": loc("spec_tint_map_location", (0.0, 0.0, 0.0)),
+        "spec_tint_map_rotation": loc("spec_tint_map_rotation", (0.0, 0.0, 0.0)),
+        "spec_tint_map_scale": loc("spec_tint_map_scale", (1.0, 1.0, 1.0)),
+        "spec_tint_map_type": int(pr.get("spec_tint_map_type", 2) if pr.get("spec_tint_map_type") is not None else 2),
+        "film_thick_image_path": pr.get("film_thick_image_path") or "",
+        "film_thick_image_colorspace": pr.get("film_thick_image_colorspace") or "",
+        "film_thick_tex_vector_mode": int(pr.get("film_thick_tex_vector_mode", 0) or 0),
+        "film_thick_map_location": loc("film_thick_map_location", (0.0, 0.0, 0.0)),
+        "film_thick_map_rotation": loc("film_thick_map_rotation", (0.0, 0.0, 0.0)),
+        "film_thick_map_scale": loc("film_thick_map_scale", (1.0, 1.0, 1.0)),
+        "film_thick_map_type": int(pr.get("film_thick_map_type", 2) if pr.get("film_thick_map_type") is not None else 2),
+        "film_ior_image_path": pr.get("film_ior_image_path") or "",
+        "film_ior_image_colorspace": pr.get("film_ior_image_colorspace") or "",
+        "film_ior_tex_vector_mode": int(pr.get("film_ior_tex_vector_mode", 0) or 0),
+        "film_ior_map_location": loc("film_ior_map_location", (0.0, 0.0, 0.0)),
+        "film_ior_map_rotation": loc("film_ior_map_rotation", (0.0, 0.0, 0.0)),
+        "film_ior_map_scale": loc("film_ior_map_scale", (1.0, 1.0, 1.0)),
+        "film_ior_map_type": int(pr.get("film_ior_map_type", 2) if pr.get("film_ior_map_type") is not None else 2),
+        "sss_weight_image_path": pr.get("sss_weight_image_path") or "",
+        "sss_weight_image_colorspace": pr.get("sss_weight_image_colorspace") or "",
+        "sss_weight_tex_vector_mode": int(pr.get("sss_weight_tex_vector_mode", 0) or 0),
+        "sss_weight_map_location": loc("sss_weight_map_location", (0.0, 0.0, 0.0)),
+        "sss_weight_map_rotation": loc("sss_weight_map_rotation", (0.0, 0.0, 0.0)),
+        "sss_weight_map_scale": loc("sss_weight_map_scale", (1.0, 1.0, 1.0)),
+        "sss_weight_map_type": int(pr.get("sss_weight_map_type", 2) if pr.get("sss_weight_map_type") is not None else 2),
+        "sss_radius_image_path": pr.get("sss_radius_image_path") or "",
+        "sss_radius_image_colorspace": pr.get("sss_radius_image_colorspace") or "",
+        "sss_radius_tex_vector_mode": int(pr.get("sss_radius_tex_vector_mode", 0) or 0),
+        "sss_radius_map_location": loc("sss_radius_map_location", (0.0, 0.0, 0.0)),
+        "sss_radius_map_rotation": loc("sss_radius_map_rotation", (0.0, 0.0, 0.0)),
+        "sss_radius_map_scale": loc("sss_radius_map_scale", (1.0, 1.0, 1.0)),
+        "sss_radius_map_type": int(pr.get("sss_radius_map_type", 2) if pr.get("sss_radius_map_type") is not None else 2),
+        "sss_scale_image_path": pr.get("sss_scale_image_path") or "",
+        "sss_scale_image_colorspace": pr.get("sss_scale_image_colorspace") or "",
+        "sss_scale_tex_vector_mode": int(pr.get("sss_scale_tex_vector_mode", 0) or 0),
+        "sss_scale_map_location": loc("sss_scale_map_location", (0.0, 0.0, 0.0)),
+        "sss_scale_map_rotation": loc("sss_scale_map_rotation", (0.0, 0.0, 0.0)),
+        "sss_scale_map_scale": loc("sss_scale_map_scale", (1.0, 1.0, 1.0)),
+        "sss_scale_map_type": int(pr.get("sss_scale_map_type", 2) if pr.get("sss_scale_map_type") is not None else 2),
     }
     return out
 
@@ -904,6 +984,12 @@ def _any_tex_path(pr: dict) -> bool:
         or (pr.get("sheen_rough_image_path") or "")
         or (pr.get("sheen_tint_image_path") or "")
         or (pr.get("coat_normal_image_path") or "")
+        or (pr.get("spec_tint_image_path") or "")
+        or (pr.get("film_thick_image_path") or "")
+        or (pr.get("film_ior_image_path") or "")
+        or (pr.get("sss_weight_image_path") or "")
+        or (pr.get("sss_radius_image_path") or "")
+        or (pr.get("sss_scale_image_path") or "")
     )
 
 
@@ -1400,6 +1486,66 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("coat_normal_strength", 1.0) if packed.get("coat_normal_strength") is not None else 1.0
     )
 
+    desc.spec_tint_image_path = enc("spec_tint_image_path")
+    desc.spec_tint_image_colorspace = enc("spec_tint_image_colorspace")
+    desc.spec_tint_tex_vector_mode = int(packed.get("spec_tint_tex_vector_mode", 0) or 0)
+    vec3("spec_tint_map_location", "spec_tint_map_location")
+    vec3("spec_tint_map_rotation", "spec_tint_map_rotation")
+    vec3("spec_tint_map_scale", "spec_tint_map_scale", (1.0, 1.0, 1.0))
+    desc.spec_tint_map_type = int(
+        packed.get("spec_tint_map_type", 2) if packed.get("spec_tint_map_type") is not None else 2
+    )
+
+    desc.film_thick_image_path = enc("film_thick_image_path")
+    desc.film_thick_image_colorspace = enc("film_thick_image_colorspace")
+    desc.film_thick_tex_vector_mode = int(packed.get("film_thick_tex_vector_mode", 0) or 0)
+    vec3("film_thick_map_location", "film_thick_map_location")
+    vec3("film_thick_map_rotation", "film_thick_map_rotation")
+    vec3("film_thick_map_scale", "film_thick_map_scale", (1.0, 1.0, 1.0))
+    desc.film_thick_map_type = int(
+        packed.get("film_thick_map_type", 2) if packed.get("film_thick_map_type") is not None else 2
+    )
+
+    desc.film_ior_image_path = enc("film_ior_image_path")
+    desc.film_ior_image_colorspace = enc("film_ior_image_colorspace")
+    desc.film_ior_tex_vector_mode = int(packed.get("film_ior_tex_vector_mode", 0) or 0)
+    vec3("film_ior_map_location", "film_ior_map_location")
+    vec3("film_ior_map_rotation", "film_ior_map_rotation")
+    vec3("film_ior_map_scale", "film_ior_map_scale", (1.0, 1.0, 1.0))
+    desc.film_ior_map_type = int(
+        packed.get("film_ior_map_type", 2) if packed.get("film_ior_map_type") is not None else 2
+    )
+
+    desc.sss_weight_image_path = enc("sss_weight_image_path")
+    desc.sss_weight_image_colorspace = enc("sss_weight_image_colorspace")
+    desc.sss_weight_tex_vector_mode = int(packed.get("sss_weight_tex_vector_mode", 0) or 0)
+    vec3("sss_weight_map_location", "sss_weight_map_location")
+    vec3("sss_weight_map_rotation", "sss_weight_map_rotation")
+    vec3("sss_weight_map_scale", "sss_weight_map_scale", (1.0, 1.0, 1.0))
+    desc.sss_weight_map_type = int(
+        packed.get("sss_weight_map_type", 2) if packed.get("sss_weight_map_type") is not None else 2
+    )
+
+    desc.sss_radius_image_path = enc("sss_radius_image_path")
+    desc.sss_radius_image_colorspace = enc("sss_radius_image_colorspace")
+    desc.sss_radius_tex_vector_mode = int(packed.get("sss_radius_tex_vector_mode", 0) or 0)
+    vec3("sss_radius_map_location", "sss_radius_map_location")
+    vec3("sss_radius_map_rotation", "sss_radius_map_rotation")
+    vec3("sss_radius_map_scale", "sss_radius_map_scale", (1.0, 1.0, 1.0))
+    desc.sss_radius_map_type = int(
+        packed.get("sss_radius_map_type", 2) if packed.get("sss_radius_map_type") is not None else 2
+    )
+
+    desc.sss_scale_image_path = enc("sss_scale_image_path")
+    desc.sss_scale_image_colorspace = enc("sss_scale_image_colorspace")
+    desc.sss_scale_tex_vector_mode = int(packed.get("sss_scale_tex_vector_mode", 0) or 0)
+    vec3("sss_scale_map_location", "sss_scale_map_location")
+    vec3("sss_scale_map_rotation", "sss_scale_map_rotation")
+    vec3("sss_scale_map_scale", "sss_scale_map_scale", (1.0, 1.0, 1.0))
+    desc.sss_scale_map_type = int(
+        packed.get("sss_scale_map_type", 2) if packed.get("sss_scale_map_type") is not None else 2
+    )
+
 
 def make_qt_simple_scene_type():
     """ctypes Structure matching QT_SimpleScene in quanttrace.h."""
@@ -1560,6 +1706,48 @@ def make_qt_simple_scene_type():
             ("coat_normal_map_scale", ctypes.c_float * 3),
             ("coat_normal_map_type", ctypes.c_int),
             ("coat_normal_strength", ctypes.c_float),
+            ("spec_tint_image_path", ctypes.c_char_p),
+            ("spec_tint_image_colorspace", ctypes.c_char_p),
+            ("spec_tint_tex_vector_mode", ctypes.c_int),
+            ("spec_tint_map_location", ctypes.c_float * 3),
+            ("spec_tint_map_rotation", ctypes.c_float * 3),
+            ("spec_tint_map_scale", ctypes.c_float * 3),
+            ("spec_tint_map_type", ctypes.c_int),
+            ("film_thick_image_path", ctypes.c_char_p),
+            ("film_thick_image_colorspace", ctypes.c_char_p),
+            ("film_thick_tex_vector_mode", ctypes.c_int),
+            ("film_thick_map_location", ctypes.c_float * 3),
+            ("film_thick_map_rotation", ctypes.c_float * 3),
+            ("film_thick_map_scale", ctypes.c_float * 3),
+            ("film_thick_map_type", ctypes.c_int),
+            ("film_ior_image_path", ctypes.c_char_p),
+            ("film_ior_image_colorspace", ctypes.c_char_p),
+            ("film_ior_tex_vector_mode", ctypes.c_int),
+            ("film_ior_map_location", ctypes.c_float * 3),
+            ("film_ior_map_rotation", ctypes.c_float * 3),
+            ("film_ior_map_scale", ctypes.c_float * 3),
+            ("film_ior_map_type", ctypes.c_int),
+            ("sss_weight_image_path", ctypes.c_char_p),
+            ("sss_weight_image_colorspace", ctypes.c_char_p),
+            ("sss_weight_tex_vector_mode", ctypes.c_int),
+            ("sss_weight_map_location", ctypes.c_float * 3),
+            ("sss_weight_map_rotation", ctypes.c_float * 3),
+            ("sss_weight_map_scale", ctypes.c_float * 3),
+            ("sss_weight_map_type", ctypes.c_int),
+            ("sss_radius_image_path", ctypes.c_char_p),
+            ("sss_radius_image_colorspace", ctypes.c_char_p),
+            ("sss_radius_tex_vector_mode", ctypes.c_int),
+            ("sss_radius_map_location", ctypes.c_float * 3),
+            ("sss_radius_map_rotation", ctypes.c_float * 3),
+            ("sss_radius_map_scale", ctypes.c_float * 3),
+            ("sss_radius_map_type", ctypes.c_int),
+            ("sss_scale_image_path", ctypes.c_char_p),
+            ("sss_scale_image_colorspace", ctypes.c_char_p),
+            ("sss_scale_tex_vector_mode", ctypes.c_int),
+            ("sss_scale_map_location", ctypes.c_float * 3),
+            ("sss_scale_map_rotation", ctypes.c_float * 3),
+            ("sss_scale_map_scale", ctypes.c_float * 3),
+            ("sss_scale_map_type", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -1761,6 +1949,48 @@ def make_qt_scene_types():
             ("coat_normal_map_scale", ctypes.c_float * 3),
             ("coat_normal_map_type", ctypes.c_int),
             ("coat_normal_strength", ctypes.c_float),
+            ("spec_tint_image_path", ctypes.c_char_p),
+            ("spec_tint_image_colorspace", ctypes.c_char_p),
+            ("spec_tint_tex_vector_mode", ctypes.c_int),
+            ("spec_tint_map_location", ctypes.c_float * 3),
+            ("spec_tint_map_rotation", ctypes.c_float * 3),
+            ("spec_tint_map_scale", ctypes.c_float * 3),
+            ("spec_tint_map_type", ctypes.c_int),
+            ("film_thick_image_path", ctypes.c_char_p),
+            ("film_thick_image_colorspace", ctypes.c_char_p),
+            ("film_thick_tex_vector_mode", ctypes.c_int),
+            ("film_thick_map_location", ctypes.c_float * 3),
+            ("film_thick_map_rotation", ctypes.c_float * 3),
+            ("film_thick_map_scale", ctypes.c_float * 3),
+            ("film_thick_map_type", ctypes.c_int),
+            ("film_ior_image_path", ctypes.c_char_p),
+            ("film_ior_image_colorspace", ctypes.c_char_p),
+            ("film_ior_tex_vector_mode", ctypes.c_int),
+            ("film_ior_map_location", ctypes.c_float * 3),
+            ("film_ior_map_rotation", ctypes.c_float * 3),
+            ("film_ior_map_scale", ctypes.c_float * 3),
+            ("film_ior_map_type", ctypes.c_int),
+            ("sss_weight_image_path", ctypes.c_char_p),
+            ("sss_weight_image_colorspace", ctypes.c_char_p),
+            ("sss_weight_tex_vector_mode", ctypes.c_int),
+            ("sss_weight_map_location", ctypes.c_float * 3),
+            ("sss_weight_map_rotation", ctypes.c_float * 3),
+            ("sss_weight_map_scale", ctypes.c_float * 3),
+            ("sss_weight_map_type", ctypes.c_int),
+            ("sss_radius_image_path", ctypes.c_char_p),
+            ("sss_radius_image_colorspace", ctypes.c_char_p),
+            ("sss_radius_tex_vector_mode", ctypes.c_int),
+            ("sss_radius_map_location", ctypes.c_float * 3),
+            ("sss_radius_map_rotation", ctypes.c_float * 3),
+            ("sss_radius_map_scale", ctypes.c_float * 3),
+            ("sss_radius_map_type", ctypes.c_int),
+            ("sss_scale_image_path", ctypes.c_char_p),
+            ("sss_scale_image_colorspace", ctypes.c_char_p),
+            ("sss_scale_tex_vector_mode", ctypes.c_int),
+            ("sss_scale_map_location", ctypes.c_float * 3),
+            ("sss_scale_map_rotation", ctypes.c_float * 3),
+            ("sss_scale_map_scale", ctypes.c_float * 3),
+            ("sss_scale_map_type", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):
