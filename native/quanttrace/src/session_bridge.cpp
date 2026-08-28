@@ -12,6 +12,7 @@
  * Slice 2g: SPOT (spot_size/spot_blend).
  * Slice 2h: TEX_COORD UV + Mapping → TEX_IMAGE Vector.
  * Slice 2i: TEX_IMAGE → Principled Roughness / Metallic.
+ * Slice 2j: Normal Map (Tangent) + TEX_IMAGE → Principled Normal.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -267,6 +268,14 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->metal_map_rotation, s->metal_map_rotation, sizeof(mesh->metal_map_rotation));
     std::memcpy(mesh->metal_map_scale, s->metal_map_scale, sizeof(mesh->metal_map_scale));
     mesh->metal_map_type = s->metal_map_type;
+    mesh->normal_image_path = s->normal_image_path;
+    mesh->normal_image_colorspace = s->normal_image_colorspace;
+    mesh->normal_tex_vector_mode = s->normal_tex_vector_mode;
+    std::memcpy(mesh->normal_map_location, s->normal_map_location, sizeof(mesh->normal_map_location));
+    std::memcpy(mesh->normal_map_rotation, s->normal_map_rotation, sizeof(mesh->normal_map_rotation));
+    std::memcpy(mesh->normal_map_scale, s->normal_map_scale, sizeof(mesh->normal_map_scale));
+    mesh->normal_map_type = s->normal_map_type;
+    mesh->normal_strength = s->normal_strength;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -350,7 +359,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h/2i: TEX_IMAGE → Base Color / Roughness / Metallic.
+    /* Slice 2f/2h/2i/2j: TEX_IMAGE → Base Color / Roughness / Metallic / Normal Map.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
      * mode 2: TextureCoordinate UV → Mapping → Image Vector. */
@@ -374,6 +383,24 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->metal_tex_vector_mode, m->metal_map_location, m->metal_map_rotation,
             m->metal_map_scale, m->metal_map_type);
         graph->connect(img->output("Color"), bsdf->input("Metallic"));
+    }
+    /* Slice 2j: TEX_IMAGE Color → NormalMap Color → Principled Normal.
+     * Official Blender sync (intern/cycles/blender/shader.cpp ShaderNodeNormalMap):
+     *   space TANGENT → NODE_NORMAL_MAP_TANGENT (default).
+     *   Strength unlinked RNA default 1.0 → set_strength.
+     *   Color from Image Texture Color; convention OpenGL default;
+     *   attribute empty → ATTR_STD_UV + undisplaced tangents
+     *   (Mesh::update_tangents during geometry update). */
+    if (m->normal_image_path && m->normal_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->normal_image_path, m->normal_image_colorspace,
+            m->normal_tex_vector_mode, m->normal_map_location, m->normal_map_rotation,
+            m->normal_map_scale, m->normal_map_type);
+        NormalMapNode *nmap = graph->create_node<NormalMapNode>();
+        nmap->set_space(NODE_NORMAL_MAP_TANGENT);
+        nmap->set_strength(m->normal_strength);
+        graph->connect(img->output("Color"), nmap->input("Color"));
+        graph->connect(nmap->output("Normal"), bsdf->input("Normal"));
     }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
     surf->set_graph(std::move(graph));
@@ -428,7 +455,8 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
     const bool needs_uv =
         (m->image_path && m->image_path[0]) ||
         (m->rough_image_path && m->rough_image_path[0]) ||
-        (m->metal_image_path && m->metal_image_path[0]);
+        (m->metal_image_path && m->metal_image_path[0]) ||
+        (m->normal_image_path && m->normal_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
@@ -681,7 +709,8 @@ static int run_qt_session(const QT_Scene *desc,
         const bool needs_uv =
             (m->image_path && m->image_path[0]) ||
             (m->rough_image_path && m->rough_image_path[0]) ||
-            (m->metal_image_path && m->metal_image_path[0]);
+            (m->metal_image_path && m->metal_image_path[0]) ||
+            (m->normal_image_path && m->normal_image_path[0]);
         if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;

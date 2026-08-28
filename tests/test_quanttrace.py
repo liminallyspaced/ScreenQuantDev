@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.7-slice2f" in hello_c, "hello.c version string 0.0.7-slice2f")
+    check("0.0.11-slice2j" in hello_c, "hello.c version string 0.0.11-slice2j")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -437,6 +437,55 @@ def main():
     smoke = _read("tools/_quanttrace_tex_smoke.py")
     check("pack_scene" in smoke and "render_qt_scene_rgba" in smoke,
           "tex smoke packs QT_Scene")
+
+    section("Slice 2j Normal Map TEX_IMAGE ABI")
+    hdr = _read("native/quanttrace/src/quanttrace.h")
+    check("normal_image_path" in hdr, "QT_Mesh has normal_image_path")
+    check("normal_strength" in hdr, "QT_Mesh has normal_strength")
+    bridge = _read("native/quanttrace/src/session_bridge.cpp")
+    check("NormalMapNode" in bridge, "bridge builds NormalMapNode")
+    check("NODE_NORMAL_MAP_TANGENT" in bridge, "bridge pins Tangent space")
+    hello = _read("native/quanttrace/src/hello.c")
+    check("0.0.11-slice2j" in hello, "hello version is 0.0.11-slice2j")
+    sync_src = _read("scenequant/quanttrace/sync.py")
+    check("_normal_map_from_sock" in sync_src, "sync parses Normal Map")
+    check(callable(sync._normal_map_from_sock), "sync._normal_map_from_sock")
+    ntools = _read("tools/_quanttrace_normal_scene.py")
+    check("ShaderNodeNormalMap" in ntools, "normal scene wires Normal Map")
+    nsmoke = _read("tools/_quanttrace_normal_smoke.py")
+    check("pack_scene" in nsmoke and "render_qt_scene_rgba" in nsmoke,
+          "normal smoke packs QT_Scene")
+
+    class _Bump:
+        type = "BUMP"
+    class _FromN:
+        name = "Normal"
+    class _NLink:
+        from_node = _Bump()
+        from_socket = _FromN()
+    class _BsdfN:
+        type = "BSDF_PRINCIPLED"
+        inputs = _Inputs({
+            "Base Color": _Sock((0.8, 0.8, 0.8, 1)),
+            "Roughness": _Sock(0.5),
+            "Metallic": _Sock(0.0),
+            "IOR": _Sock(1.45),
+            "Alpha": _Sock(1.0),
+            "Normal": _Sock((0, 0, 1), linked=True, links=[_NLink()]),
+        })
+    class _TreeN:
+        nodes = [_BsdfN()]
+    class _MatN:
+        use_nodes = True
+        node_tree = _TreeN()
+    raised_n = None
+    try:
+        sync._principled_from_material(_MatN())
+    except sync.QuantTraceSyncError as exc:
+        raised_n = exc
+    check(raised_n is not None, "linked Bump → Normal refuses")
+    check("bump" in str(raised_n).lower() or "normal map" in str(raised_n).lower(),
+          "refuse names Bump / Normal Map")
 
     section("research brief present")
     brief = os.path.join(PROJECT_ROOT, "docs", "research", "SIDECAR-INTEGRATOR.md")

@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2i landed** (2026-08-27 9pm PlugWalk ET). Principled Roughness/Metallic TEX_IMAGE (same Vector rules as Base Color) PASS. Roughness 256²/128 Δmax=4.77e-7; Metallic 256²/128 Δmax=5.36e-7; Both 32²/4 Δmax=2.98e-7; 2f/2h regressions PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.10-slice2i`.
+Status: **Slice 2j landed** (2026-08-27 10pm PlugWalk ET). Principled Normal Map (Tangent) + TEX_IMAGE PASS. Normal 32²/4 Δmax=3.58e-7; 256²/128 Δmax=5.96e-7. Roughness 32²/4 regression Δmax=3.58e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.11-slice2j`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -932,4 +932,48 @@ Proof plate: `docs/proof/quanttrace-rough-32-pair.png` (+ `/workspace/quanttrace
 
 ### Next
 
-More Principled sockets / Normal maps / close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 10pm: Normal Map TEX_IMAGE. See 10pm section.
+
+---
+
+## 10pm PlugWalk (2026-08-27) — Slice 2j: Normal Map TEX_IMAGE
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `normal_image_path` / `normal_image_colorspace` + `normal_tex_vector_mode` + Mapping L/R/S/type + `normal_strength` on `QT_Mesh` / `QT_SimpleScene` |
+| Packer | Principled.Normal ← Normal Map.Normal; Color ← TEX_IMAGE (same Vector rules as Base/Rough/Metal). Strength unlinked float (default 1.0). Space = Tangent only. |
+| Native | `NormalMapNode` + `ImageTextureNode` Color→Color; Normal → Principled Normal. `set_space(NODE_NORMAL_MAP_TANGENT)` + `set_strength`. Cite Blender sync `intern/cycles/blender/shader.cpp` ShaderNodeNormalMap. UVs when any socket including Normal is textured. Tangents via Cycles `Mesh::update_tangents` (ATTR_STD_UV). |
+| Version | `0.0.11-slice2j` |
+| Tools | `_quanttrace_normal_scene/smoke.py` (16×16 Non-Color tangent normal PNG, center bump) |
+
+### Measured — Normal Map TEX_IMAGE (16×16 Non-Color tangent map, Strength 1.0, unlinked Vector)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Normal Session | 32² / 4 | **3.58e-7** | 7.27e-9 | 0 / 1024 | **PASS** |
+| Normal Session | 256² / 128 | **5.96e-7** | 4.79e-9 | 0 / 65536 | **PASS** |
+
+### Measured — regressions (32² / 4)
+
+| Path | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| Roughness TEX_IMAGE | 32² / 4 | **3.58e-7** | 6.71e-9 | **PASS** |
+| Locked cube constant | 32² / 4 | Session smoke OK | — | **PASS** (`is_tracer=1`, ver `0.0.11-slice2j`) |
+
+Proof plate: `docs/proof/quanttrace-normal-32-pair.png` (+ `/workspace/quanttrace-normal-32-pair.png`).
+
+### Honesty / still refuses
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented (not claimed fixed).
+- HDR worlds, kitchens, Generated/Object/Camera/Window/Reflection TEX_COORD, linked Mapping L/R/S, packed-only images, Object/World Normal Map space, linked Strength, Bump/other Normal sources, custom `uv_map`, IOR/Alpha still raise `QuantTraceSyncError`.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+More Principled sockets / close still-life 1px. Not ReSTIR. Not Classroom time %.

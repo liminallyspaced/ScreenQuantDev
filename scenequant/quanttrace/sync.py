@@ -7,6 +7,7 @@
 # Slice 2f: TEX_IMAGE → Principled Base Color (default UV, disk filepath).
 # Slice 2h: TEX_COORD UV (+ optional Mapping Vector-type constants) → TEX_IMAGE Vector.
 # Slice 2i: TEX_IMAGE → Principled Roughness / Metallic (same Vector rules as Base Color).
+# Slice 2j: Principled.Normal ← Normal Map (Tangent) ← TEX_IMAGE Color (same Vector rules).
 # Other linked sockets / HDR worlds still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
@@ -269,7 +270,7 @@ def _tex_image_from_base_color(sock) -> dict:
 
 
 def _prefix_tex(info: dict, prefix: str) -> dict:
-    """Remap image_path/… keys to rough_/metal_ (or keep for base)."""
+    """Remap image_path/… keys to rough_/metal_/normal_ (or keep for base)."""
     if not prefix:
         return dict(info)
     return {
@@ -283,6 +284,72 @@ def _prefix_tex(info: dict, prefix: str) -> dict:
     }
 
 
+
+def _empty_normal_info() -> dict:
+    out = _prefix_tex(_empty_tex_info(), "normal_")
+    out["normal_strength"] = 1.0
+    return out
+
+
+def _normal_map_from_sock(sock) -> dict:
+    """Principled.Normal ← Normal Map.Normal; Color ← TEX_IMAGE; Strength unlinked.
+
+    Space must be Tangent (default). Object/World, Bump, linked Strength,
+    packed-only images, and custom uv_map names refuse.
+    """
+    empty = _empty_normal_info()
+    if sock is None:
+        return empty
+    links = list(getattr(sock, "links", None) or [])
+    if not links:
+        return empty
+    if len(links) != 1:
+        raise QuantTraceSyncError("Principled.Normal has multiple links")
+    src = links[0]
+    from_node = getattr(src, "from_node", None)
+    from_sock = getattr(src, "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype != "NORMAL_MAP":
+        raise QuantTraceSyncError(
+            f"Principled.Normal from {ntype!r} refused "
+            "(Slice 2j: Normal Map only; Bump/etc refuse)"
+        )
+    sock_name = getattr(from_sock, "name", "") if from_sock is not None else ""
+    if sock_name not in ("Normal", "normal"):
+        raise QuantTraceSyncError(
+            "Principled.Normal must come from Normal Map Normal (Slice 2j)"
+        )
+    space = str(getattr(from_node, "space", "TANGENT") or "TANGENT").upper()
+    if space not in ("TANGENT",):
+        raise QuantTraceSyncError(
+            f"Normal Map space={space!r} refused (Slice 2j: Tangent only)"
+        )
+    uv_map = str(getattr(from_node, "uv_map", "") or "").strip()
+    if uv_map:
+        raise QuantTraceSyncError(
+            f"Normal Map uv_map={uv_map!r} refused (Slice 2j: default UV only)"
+        )
+    inputs = getattr(from_node, "inputs", None)
+    getter = getattr(inputs, "get", None) if inputs is not None else None
+    strength_sock = getter("Strength") if callable(getter) else None
+    color_sock = getter("Color") if callable(getter) else None
+    if strength_sock is not None and getattr(strength_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Normal Map Strength is linked (Slice 2j: unlinked float only)"
+        )
+    strength = 1.0
+    if strength_sock is not None:
+        strength = float(getattr(strength_sock, "default_value", 1.0))
+    if color_sock is None or not getattr(color_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Normal Map Color must be TEX_IMAGE (Slice 2j)"
+        )
+    tex = _tex_image_from_sock(color_sock, "Normal Map Color")
+    out = _prefix_tex(tex, "normal_")
+    out["normal_strength"] = strength
+    return out
+
+
 def _principled_from_material(mat) -> dict:
     """Return principled dict (constants + optional TEX_IMAGE on Base/Rough/Metal)."""
     empty = {
@@ -294,6 +361,7 @@ def _principled_from_material(mat) -> dict:
         **_empty_tex_info(),
         **_prefix_tex(_empty_tex_info(), "rough_"),
         **_prefix_tex(_empty_tex_info(), "metal_"),
+        **_empty_normal_info(),
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -328,9 +396,10 @@ def _principled_from_material(mat) -> dict:
             continue
         raise QuantTraceSyncError(
             f"Principled.{sock_name} is linked "
-            "(Slice 2i: only Base Color / Roughness / Metallic may be TEX_IMAGE; "
-            "IOR/Alpha/Normal/etc stay constant-only)"
+            "(Slice 2j: only Base Color / Roughness / Metallic may be TEX_IMAGE; "
+            "Normal is Normal Map ← TEX_IMAGE; IOR/Alpha/etc stay constant-only)"
         )
+    normal_info = _normal_map_from_sock(bsdf.inputs.get("Normal"))
     base = bsdf.inputs["Base Color"].default_value
     return {
         "base_color": (float(base[0]), float(base[1]), float(base[2])),
@@ -341,6 +410,7 @@ def _principled_from_material(mat) -> dict:
         **base_tex,
         **_prefix_tex(rough_tex, "rough_"),
         **_prefix_tex(metal_tex, "metal_"),
+        **normal_info,
     }
 
 
@@ -525,6 +595,14 @@ def _pack_tex_fields(pr: dict) -> dict:
         "metal_map_rotation": loc("metal_map_rotation", (0.0, 0.0, 0.0)),
         "metal_map_scale": loc("metal_map_scale", (1.0, 1.0, 1.0)),
         "metal_map_type": int(pr.get("metal_map_type", 2) if pr.get("metal_map_type") is not None else 2),
+        "normal_image_path": pr.get("normal_image_path") or "",
+        "normal_image_colorspace": pr.get("normal_image_colorspace") or "",
+        "normal_tex_vector_mode": int(pr.get("normal_tex_vector_mode", 0) or 0),
+        "normal_map_location": loc("normal_map_location", (0.0, 0.0, 0.0)),
+        "normal_map_rotation": loc("normal_map_rotation", (0.0, 0.0, 0.0)),
+        "normal_map_scale": loc("normal_map_scale", (1.0, 1.0, 1.0)),
+        "normal_map_type": int(pr.get("normal_map_type", 2) if pr.get("normal_map_type") is not None else 2),
+        "normal_strength": float(pr.get("normal_strength", 1.0) if pr.get("normal_strength") is not None else 1.0),
     }
     return out
 
@@ -534,6 +612,7 @@ def _any_tex_path(pr: dict) -> bool:
         (pr.get("image_path") or "")
         or (pr.get("rough_image_path") or "")
         or (pr.get("metal_image_path") or "")
+        or (pr.get("normal_image_path") or "")
     )
 
 
@@ -874,6 +953,19 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("metal_map_type", 2) if packed.get("metal_map_type") is not None else 2
     )
 
+    desc.normal_image_path = enc("normal_image_path")
+    desc.normal_image_colorspace = enc("normal_image_colorspace")
+    desc.normal_tex_vector_mode = int(packed.get("normal_tex_vector_mode", 0) or 0)
+    vec3("normal_map_location", "normal_map_location")
+    vec3("normal_map_rotation", "normal_map_rotation")
+    vec3("normal_map_scale", "normal_map_scale", (1.0, 1.0, 1.0))
+    desc.normal_map_type = int(
+        packed.get("normal_map_type", 2) if packed.get("normal_map_type") is not None else 2
+    )
+    desc.normal_strength = float(
+        packed.get("normal_strength", 1.0) if packed.get("normal_strength") is not None else 1.0
+    )
+
 
 def make_qt_simple_scene_type():
     """ctypes Structure matching QT_SimpleScene in quanttrace.h."""
@@ -927,6 +1019,14 @@ def make_qt_simple_scene_type():
             ("metal_map_rotation", ctypes.c_float * 3),
             ("metal_map_scale", ctypes.c_float * 3),
             ("metal_map_type", ctypes.c_int),
+            ("normal_image_path", ctypes.c_char_p),
+            ("normal_image_colorspace", ctypes.c_char_p),
+            ("normal_tex_vector_mode", ctypes.c_int),
+            ("normal_map_location", ctypes.c_float * 3),
+            ("normal_map_rotation", ctypes.c_float * 3),
+            ("normal_map_scale", ctypes.c_float * 3),
+            ("normal_map_type", ctypes.c_int),
+            ("normal_strength", ctypes.c_float),
         ]
 
     return QT_SimpleScene
@@ -1021,6 +1121,14 @@ def make_qt_scene_types():
             ("metal_map_rotation", ctypes.c_float * 3),
             ("metal_map_scale", ctypes.c_float * 3),
             ("metal_map_type", ctypes.c_int),
+            ("normal_image_path", ctypes.c_char_p),
+            ("normal_image_colorspace", ctypes.c_char_p),
+            ("normal_tex_vector_mode", ctypes.c_int),
+            ("normal_map_location", ctypes.c_float * 3),
+            ("normal_map_rotation", ctypes.c_float * 3),
+            ("normal_map_scale", ctypes.c_float * 3),
+            ("normal_map_type", ctypes.c_int),
+            ("normal_strength", ctypes.c_float),
         ]
 
     class QT_Light(ctypes.Structure):

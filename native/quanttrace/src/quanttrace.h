@@ -8,6 +8,7 @@
  * Slice 2g: SPOT (spot_size/spot_blend + soft radius / is_sphere).
  * Slice 2h: TEX_COORD UV + Mapping → TEX_IMAGE Vector.
  * Slice 2i: TEX_IMAGE → Principled Roughness / Metallic (same Vector rules).
+ * Slice 2j: Normal Map (Tangent) + TEX_IMAGE → Principled Normal.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -114,6 +115,15 @@ typedef struct QT_SimpleScene {
   float metal_map_rotation[3];
   float metal_map_scale[3];
   int metal_map_type;
+  /* Slice 2j: Normal Map Color ← TEX_IMAGE (NULL/empty = geometric Normal) */
+  const char *normal_image_path;
+  const char *normal_image_colorspace;
+  int normal_tex_vector_mode;
+  float normal_map_location[3];
+  float normal_map_rotation[3];
+  float normal_map_scale[3];
+  int normal_map_type;
+  float normal_strength; /* Normal Map Strength, default 1.0 */
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -163,6 +173,15 @@ typedef struct QT_Mesh {
   float metal_map_rotation[3];
   float metal_map_scale[3];
   int metal_map_type;
+  /* Slice 2j: Normal Map Color ← TEX_IMAGE */
+  const char *normal_image_path;
+  const char *normal_image_colorspace;
+  int normal_tex_vector_mode;
+  float normal_map_location[3];
+  float normal_map_rotation[3];
+  float normal_map_scale[3];
+  int normal_map_type;
+  float normal_strength; /* Normal Map Strength, default 1.0 */
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
