@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2v landed** (2026-08-28 10am PlugWalk ET). Principled Subsurface IOR / Subsurface Anisotropy / Diffuse Roughness TEX_IMAGE. Thin Wall is BOOLEAN in Blender 5.2 — ABI reserved, packer refuses. SSSIOR 32²/4 Δmax=5.96e-7; 256²/128 Δmax=8.78e-4 PASS. SSSAniso 32²/4 Δmax=2.74e-5 PASS; 256²/128 Δmax=0.0206 FAIL (3 px, SSS noise-class, documented). DiffuseRough 32²/4 Δmax=3.58e-7; 256²/128 Δmax=4.77e-7 PASS. Combo 32²/4 PASS. Coat Weight + SpecTint 32²/4 regressions PASS. `is_tracer=1`. Native `0.0.23-slice2v`.
+Status: **Slice 2w landed** (2026-08-28 11am PlugWalk ET). Principled Anisotropic / Anisotropic Rotation / Tangent TEX_IMAGE. Aniso 32²/4 Δmax=3.35e-8; 256²/128 Δmax=1.09e-7 PASS. AnisoRot 32²/4 Δmax=2.04e-6; 256²/128 Δmax=9.35e-6 PASS. Tangent 32²/4 Δmax=5.09e-11; 256²/128 Δmax=5.09e-11 PASS. Combo 32²/4 PASS. DiffuseRough 32²/4 regression PASS. Fills ATTR_STD_GENERATED bbox orco when Aniso/AnisoRot map and Tangent is unlinked (Principled default LINK_TANGENT → Geometry.Tangent). Pins set_anisotropic(1.0) when Rotation/Tangent map and Anisotropic path empty. `is_tracer=1`. Native `0.0.24-slice2w`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -9,6 +9,51 @@ Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 `is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
+
+
+---
+
+## 11am PlugWalk (2026-08-28) — Anisotropic / Rotation / Tangent TEX_IMAGE (Slice 2w)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `aniso_` / `aniso_rot_` / `tangent_` on `QT_Mesh` + `QT_SimpleScene` |
+| Python | `sync._principled_from_material` accepts Anisotropic / Anisotropic Rotation / Tangent (Non-Color gray checker). Same Vector rules as 2v |
+| Native | Anisotropic / Rotation Color→float via NODE_CONVERT_CF; Tangent Color→Vector (same as Subsurface Radius). Pins `set_anisotropic(1.0)` when Rotation/Tangent map and Anisotropic path empty. Fills ATTR_STD_GENERATED bbox orco when Aniso/AnisoRot map and Tangent unlinked |
+| Version | `0.0.24-slice2w` |
+| Tools | `tools/_quanttrace_slice2w_scene.py`, `tools/_quanttrace_slice2w_smoke.py` |
+| Visibility | Aniso/AnisoRot/Tangent/Combo pin Metallic=1.0 Roughness=0.2 (GGX highlight). Stock Combined not constant / not all-zero |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Socket | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| Aniso | 32² / 4 | **3.35e-8** | 1.78e-10 | **PASS** |
+| Aniso | 256² / 128 | **1.09e-7** | 1.12e-10 | **PASS** |
+| AnisoRot | 32² / 4 | **2.04e-6** | 1.40e-8 | **PASS** |
+| AnisoRot | 256² / 128 | **9.35e-6** | 4.24e-9 | **PASS** |
+| Tangent | 32² / 4 | **5.09e-11** | 6.58e-13 | **PASS** |
+| Tangent | 256² / 128 | **5.09e-11** | 3.41e-13 | **PASS** |
+| Combo (Aniso+AnisoRot) | 32² / 4 | **2.42e-7** | 1.20e-9 | **PASS** |
+| DiffuseRough (2v regression) | 32² / 4 | **3.58e-7** | 5.84e-9 | **PASS** |
+
+Aniso first 32² attempt failed Δmax=0.021 until ATTR_STD_GENERATED bbox orco was filled for default Principled Tangent — documented fix, not noise-class.
+
+### Honesty
+
+- Bump / Thin Wall boolean / Object/World Normal space / linked Strength / HDR / kitchens / Object-with-pointer / packed-only / linked Mapping L/R/S still refuse.
+- Still-life 256² 1px + SSSWeight 256² 1px + SSSAniso 256² 3px noise-class residue still documented (not claimed fixed).
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Bump, Thin Wall boolean path, close still-life / SSSWeight / SSSAniso 256² SSS noise residue. Not ReSTIR. Not Classroom time %.
+
 
 
 ---

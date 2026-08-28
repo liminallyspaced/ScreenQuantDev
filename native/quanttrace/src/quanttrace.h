@@ -332,6 +332,30 @@ typedef struct QT_SimpleScene {
   float diffuse_rough_map_rotation[3];
   float diffuse_rough_map_scale[3];
   int diffuse_rough_map_type;
+  /* Slice 2w: Anisotropic TEX_IMAGE (NULL/empty = constant 0) */
+  const char *aniso_image_path;
+  const char *aniso_image_colorspace;
+  int aniso_tex_vector_mode;
+  float aniso_map_location[3];
+  float aniso_map_rotation[3];
+  float aniso_map_scale[3];
+  int aniso_map_type;
+  /* Slice 2w: Anisotropic Rotation TEX_IMAGE (NULL/empty = constant 0) */
+  const char *aniso_rot_image_path;
+  const char *aniso_rot_image_colorspace;
+  int aniso_rot_tex_vector_mode;
+  float aniso_rot_map_location[3];
+  float aniso_rot_map_rotation[3];
+  float aniso_rot_map_scale[3];
+  int aniso_rot_map_type;
+  /* Slice 2w: Tangent TEX_IMAGE (NULL/empty = LINK_TANGENT default) */
+  const char *tangent_image_path;
+  const char *tangent_image_colorspace;
+  int tangent_tex_vector_mode;
+  float tangent_map_location[3];
+  float tangent_map_rotation[3];
+  float tangent_map_scale[3];
+  int tangent_map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -583,6 +607,30 @@ typedef struct QT_Mesh {
   float diffuse_rough_map_rotation[3];
   float diffuse_rough_map_scale[3];
   int diffuse_rough_map_type;
+  /* Slice 2w: Anisotropic TEX_IMAGE (NULL/empty = constant 0) */
+  const char *aniso_image_path;
+  const char *aniso_image_colorspace;
+  int aniso_tex_vector_mode;
+  float aniso_map_location[3];
+  float aniso_map_rotation[3];
+  float aniso_map_scale[3];
+  int aniso_map_type;
+  /* Slice 2w: Anisotropic Rotation TEX_IMAGE (NULL/empty = constant 0) */
+  const char *aniso_rot_image_path;
+  const char *aniso_rot_image_colorspace;
+  int aniso_rot_tex_vector_mode;
+  float aniso_rot_map_location[3];
+  float aniso_rot_map_rotation[3];
+  float aniso_rot_map_scale[3];
+  int aniso_rot_map_type;
+  /* Slice 2w: Tangent TEX_IMAGE (NULL/empty = LINK_TANGENT default) */
+  const char *tangent_image_path;
+  const char *tangent_image_colorspace;
+  int tangent_tex_vector_mode;
+  float tangent_map_location[3];
+  float tangent_map_rotation[3];
+  float tangent_map_scale[3];
+  int tangent_map_type;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

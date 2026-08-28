@@ -457,6 +457,27 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->diffuse_rough_map_rotation, s->diffuse_rough_map_rotation, sizeof(mesh->diffuse_rough_map_rotation));
     std::memcpy(mesh->diffuse_rough_map_scale, s->diffuse_rough_map_scale, sizeof(mesh->diffuse_rough_map_scale));
     mesh->diffuse_rough_map_type = s->diffuse_rough_map_type;
+    mesh->aniso_image_path = s->aniso_image_path;
+    mesh->aniso_image_colorspace = s->aniso_image_colorspace;
+    mesh->aniso_tex_vector_mode = s->aniso_tex_vector_mode;
+    std::memcpy(mesh->aniso_map_location, s->aniso_map_location, sizeof(mesh->aniso_map_location));
+    std::memcpy(mesh->aniso_map_rotation, s->aniso_map_rotation, sizeof(mesh->aniso_map_rotation));
+    std::memcpy(mesh->aniso_map_scale, s->aniso_map_scale, sizeof(mesh->aniso_map_scale));
+    mesh->aniso_map_type = s->aniso_map_type;
+    mesh->aniso_rot_image_path = s->aniso_rot_image_path;
+    mesh->aniso_rot_image_colorspace = s->aniso_rot_image_colorspace;
+    mesh->aniso_rot_tex_vector_mode = s->aniso_rot_tex_vector_mode;
+    std::memcpy(mesh->aniso_rot_map_location, s->aniso_rot_map_location, sizeof(mesh->aniso_rot_map_location));
+    std::memcpy(mesh->aniso_rot_map_rotation, s->aniso_rot_map_rotation, sizeof(mesh->aniso_rot_map_rotation));
+    std::memcpy(mesh->aniso_rot_map_scale, s->aniso_rot_map_scale, sizeof(mesh->aniso_rot_map_scale));
+    mesh->aniso_rot_map_type = s->aniso_rot_map_type;
+    mesh->tangent_image_path = s->tangent_image_path;
+    mesh->tangent_image_colorspace = s->tangent_image_colorspace;
+    mesh->tangent_tex_vector_mode = s->tangent_tex_vector_mode;
+    std::memcpy(mesh->tangent_map_location, s->tangent_map_location, sizeof(mesh->tangent_map_location));
+    std::memcpy(mesh->tangent_map_rotation, s->tangent_map_rotation, sizeof(mesh->tangent_map_rotation));
+    std::memcpy(mesh->tangent_map_scale, s->tangent_map_scale, sizeof(mesh->tangent_map_scale));
+    mesh->tangent_map_type = s->tangent_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -539,7 +560,16 @@ static bool tex_mode_has_mapping(int mode)
 
 static bool mesh_uses_generated(const QT_Mesh *m)
 {
-    return tex_mode_is_generated(m->tex_vector_mode) ||
+    /* TEX_COORD Generated modes need orco. Slice 2w: Principled default Tangent
+     * (LINK_TANGENT → Geometry.Tangent) also requests ATTR_STD_GENERATED when
+     * Anisotropic/Rotation maps and Tangent is unlinked — fill Blender bbox orco
+     * (not Mesh::update_generated raw verts). */
+    const bool aniso_needs_default_tangent =
+        ((m->aniso_image_path && m->aniso_image_path[0]) ||
+         (m->aniso_rot_image_path && m->aniso_rot_image_path[0])) &&
+        !(m->tangent_image_path && m->tangent_image_path[0]);
+    return aniso_needs_default_tangent ||
+           tex_mode_is_generated(m->tex_vector_mode) ||
            tex_mode_is_generated(m->rough_tex_vector_mode) ||
            tex_mode_is_generated(m->metal_tex_vector_mode) ||
            tex_mode_is_generated(m->normal_tex_vector_mode) ||
@@ -566,7 +596,10 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->sss_ior_tex_vector_mode) ||
            tex_mode_is_generated(m->sss_aniso_tex_vector_mode) ||
            tex_mode_is_generated(m->thin_wall_tex_vector_mode) ||
-           tex_mode_is_generated(m->diffuse_rough_tex_vector_mode);
+           tex_mode_is_generated(m->diffuse_rough_tex_vector_mode) ||
+           tex_mode_is_generated(m->aniso_tex_vector_mode) ||
+           tex_mode_is_generated(m->aniso_rot_tex_vector_mode) ||
+           tex_mode_is_generated(m->tangent_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -958,6 +991,36 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->diffuse_rough_map_rotation, m->diffuse_rough_map_scale, m->diffuse_rough_map_type);
         graph->connect(img->output("Color"), bsdf->input("Diffuse Roughness"));
     }
+    /* Slice 2w: Anisotropic / Anisotropic Rotation Color→float via NODE_CONVERT_CF;
+     * Tangent Color→Vector (same as Subsurface Radius). Pin set_anisotropic(1.0)
+     * when Rotation or Tangent maps and Anisotropic path is empty (Cycles disconnects
+     * Rotation when Anisotropic weight is 0). */
+    if (m->aniso_image_path && m->aniso_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->aniso_image_path, m->aniso_image_colorspace,
+            m->aniso_tex_vector_mode, m->aniso_map_location,
+            m->aniso_map_rotation, m->aniso_map_scale, m->aniso_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Anisotropic"));
+    }
+    if (m->aniso_rot_image_path && m->aniso_rot_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->aniso_rot_image_path, m->aniso_rot_image_colorspace,
+            m->aniso_rot_tex_vector_mode, m->aniso_rot_map_location,
+            m->aniso_rot_map_rotation, m->aniso_rot_map_scale, m->aniso_rot_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Anisotropic Rotation"));
+    }
+    if (m->tangent_image_path && m->tangent_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->tangent_image_path, m->tangent_image_colorspace,
+            m->tangent_tex_vector_mode, m->tangent_map_location,
+            m->tangent_map_rotation, m->tangent_map_scale, m->tangent_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Tangent"));
+    }
+    if (((m->aniso_rot_image_path && m->aniso_rot_image_path[0]) ||
+         (m->tangent_image_path && m->tangent_image_path[0])) &&
+        !(m->aniso_image_path && m->aniso_image_path[0])) {
+        bsdf->set_anisotropic(1.0f);
+    }
     if (((m->sss_radius_image_path && m->sss_radius_image_path[0]) ||
          (m->sss_scale_image_path && m->sss_scale_image_path[0]) ||
          (m->sss_ior_image_path && m->sss_ior_image_path[0]) ||
@@ -1059,7 +1122,10 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->sss_ior_image_path && m->sss_ior_image_path[0]) ||
         (m->sss_aniso_image_path && m->sss_aniso_image_path[0]) ||
         (m->thin_wall_image_path && m->thin_wall_image_path[0]) ||
-        (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]);
+        (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]) ||
+        (m->aniso_image_path && m->aniso_image_path[0]) ||
+        (m->aniso_rot_image_path && m->aniso_rot_image_path[0]) ||
+        (m->tangent_image_path && m->tangent_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
@@ -1340,7 +1406,10 @@ static int run_qt_session(const QT_Scene *desc,
         (m->sss_ior_image_path && m->sss_ior_image_path[0]) ||
         (m->sss_aniso_image_path && m->sss_aniso_image_path[0]) ||
         (m->thin_wall_image_path && m->thin_wall_image_path[0]) ||
-        (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]);
+        (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]) ||
+        (m->aniso_image_path && m->aniso_image_path[0]) ||
+        (m->aniso_rot_image_path && m->aniso_rot_image_path[0]) ||
+        (m->tangent_image_path && m->tangent_image_path[0]);
         if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;

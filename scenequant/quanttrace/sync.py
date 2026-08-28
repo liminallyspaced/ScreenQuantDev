@@ -358,7 +358,7 @@ def _tex_image_from_base_color(sock) -> dict:
 
 
 def _prefix_tex(info: dict, prefix: str) -> dict:
-    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_/spec_tint_/film_thick_/film_ior_/sss_weight_/sss_radius_/sss_scale_/sss_ior_/sss_aniso_/thin_wall_/diffuse_rough_ (or keep for base)."""
+    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_/spec_tint_/film_thick_/film_ior_/sss_weight_/sss_radius_/sss_scale_/sss_ior_/sss_aniso_/thin_wall_/diffuse_rough_/aniso_/aniso_rot_/tangent_ (or keep for base)."""
     if not prefix:
         return dict(info)
     return {
@@ -494,6 +494,9 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(_empty_tex_info(), "sss_aniso_"),
         **_prefix_tex(_empty_tex_info(), "thin_wall_"),
         **_prefix_tex(_empty_tex_info(), "diffuse_rough_"),
+        **_prefix_tex(_empty_tex_info(), "aniso_"),
+        **_prefix_tex(_empty_tex_info(), "aniso_rot_"),
+        **_prefix_tex(_empty_tex_info(), "tangent_"),
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -533,6 +536,9 @@ def _principled_from_material(mat) -> dict:
     sss_ior_tex = _empty_tex_info()
     sss_aniso_tex = _empty_tex_info()
     diffuse_rough_tex = _empty_tex_info()
+    aniso_tex = _empty_tex_info()
+    aniso_rot_tex = _empty_tex_info()
+    tangent_tex = _empty_tex_info()
     # 5.x names first; legacy Transmission / Specular / Coat / Sheen / Emission accepted.
     allowed = (
         ("Base Color", ("Base Color",), "base"),
@@ -560,6 +566,9 @@ def _principled_from_material(mat) -> dict:
         ("Subsurface IOR", ("Subsurface IOR",), "sss_ior"),
         ("Subsurface Anisotropy", ("Subsurface Anisotropy",), "sss_aniso"),
         ("Diffuse Roughness", ("Diffuse Roughness",), "diffuse_rough"),
+        ("Anisotropic", ("Anisotropic",), "aniso"),
+        ("Anisotropic Rotation", ("Anisotropic Rotation",), "aniso_rot"),
+        ("Tangent", ("Tangent",), "tangent"),
     )
     for label, names, kind in allowed:
         _name, sock = _input_by_names(bsdf, *names)
@@ -616,6 +625,12 @@ def _principled_from_material(mat) -> dict:
             sss_aniso_tex = tex
         elif kind == "diffuse_rough":
             diffuse_rough_tex = tex
+        elif kind == "aniso":
+            aniso_tex = tex
+        elif kind == "aniso_rot":
+            aniso_rot_tex = tex
+        elif kind == "tangent":
+            tangent_tex = tex
     # Thin Wall is BOOLEAN in Blender 5.2 — not a TEX_IMAGE-mappable float.
     _tw_name, thin_wall_sock = _input_by_names(bsdf, "Thin Wall")
     if thin_wall_sock is not None and getattr(thin_wall_sock, "is_linked", False):
@@ -662,6 +677,9 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(sss_aniso_tex, "sss_aniso_"),
         **_prefix_tex(_empty_tex_info(), "thin_wall_"),
         **_prefix_tex(diffuse_rough_tex, "diffuse_rough_"),
+        **_prefix_tex(aniso_tex, "aniso_"),
+        **_prefix_tex(aniso_rot_tex, "aniso_rot_"),
+        **_prefix_tex(tangent_tex, "tangent_"),
     }
 
 
@@ -821,7 +839,7 @@ def classify_simple(scene) -> dict:
 
 
 def _pack_tex_fields(pr: dict) -> dict:
-    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal/spec_tint/film_thick/film_ior/sss_weight/sss_radius/sss_scale/sss_ior/sss_aniso/thin_wall/diffuse_rough TEX_IMAGE fields."""
+    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal/spec_tint/film_thick/film_ior/sss_weight/sss_radius/sss_scale/sss_ior/sss_aniso/thin_wall/diffuse_rough/aniso/aniso_rot/tangent TEX_IMAGE fields."""
     def loc(key, default):
         return list(pr.get(key) or default)
     out = {
@@ -1023,6 +1041,27 @@ def _pack_tex_fields(pr: dict) -> dict:
         "diffuse_rough_map_rotation": loc("diffuse_rough_map_rotation", (0.0, 0.0, 0.0)),
         "diffuse_rough_map_scale": loc("diffuse_rough_map_scale", (1.0, 1.0, 1.0)),
         "diffuse_rough_map_type": int(pr.get("diffuse_rough_map_type", 2) if pr.get("diffuse_rough_map_type") is not None else 2),
+        "aniso_image_path": pr.get("aniso_image_path") or "",
+        "aniso_image_colorspace": pr.get("aniso_image_colorspace") or "",
+        "aniso_tex_vector_mode": int(pr.get("aniso_tex_vector_mode", 0) or 0),
+        "aniso_map_location": loc("aniso_map_location", (0.0, 0.0, 0.0)),
+        "aniso_map_rotation": loc("aniso_map_rotation", (0.0, 0.0, 0.0)),
+        "aniso_map_scale": loc("aniso_map_scale", (1.0, 1.0, 1.0)),
+        "aniso_map_type": int(pr.get("aniso_map_type", 2) if pr.get("aniso_map_type") is not None else 2),
+        "aniso_rot_image_path": pr.get("aniso_rot_image_path") or "",
+        "aniso_rot_image_colorspace": pr.get("aniso_rot_image_colorspace") or "",
+        "aniso_rot_tex_vector_mode": int(pr.get("aniso_rot_tex_vector_mode", 0) or 0),
+        "aniso_rot_map_location": loc("aniso_rot_map_location", (0.0, 0.0, 0.0)),
+        "aniso_rot_map_rotation": loc("aniso_rot_map_rotation", (0.0, 0.0, 0.0)),
+        "aniso_rot_map_scale": loc("aniso_rot_map_scale", (1.0, 1.0, 1.0)),
+        "aniso_rot_map_type": int(pr.get("aniso_rot_map_type", 2) if pr.get("aniso_rot_map_type") is not None else 2),
+        "tangent_image_path": pr.get("tangent_image_path") or "",
+        "tangent_image_colorspace": pr.get("tangent_image_colorspace") or "",
+        "tangent_tex_vector_mode": int(pr.get("tangent_tex_vector_mode", 0) or 0),
+        "tangent_map_location": loc("tangent_map_location", (0.0, 0.0, 0.0)),
+        "tangent_map_rotation": loc("tangent_map_rotation", (0.0, 0.0, 0.0)),
+        "tangent_map_scale": loc("tangent_map_scale", (1.0, 1.0, 1.0)),
+        "tangent_map_type": int(pr.get("tangent_map_type", 2) if pr.get("tangent_map_type") is not None else 2),
     }
     return out
 
@@ -1057,6 +1096,9 @@ def _any_tex_path(pr: dict) -> bool:
         or (pr.get("sss_aniso_image_path") or "")
         or (pr.get("thin_wall_image_path") or "")
         or (pr.get("diffuse_rough_image_path") or "")
+        or (pr.get("aniso_image_path") or "")
+        or (pr.get("aniso_rot_image_path") or "")
+        or (pr.get("tangent_image_path") or "")
     )
 
 
@@ -1653,6 +1695,36 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("diffuse_rough_map_type", 2) if packed.get("diffuse_rough_map_type") is not None else 2
     )
 
+    desc.aniso_image_path = enc("aniso_image_path")
+    desc.aniso_image_colorspace = enc("aniso_image_colorspace")
+    desc.aniso_tex_vector_mode = int(packed.get("aniso_tex_vector_mode", 0) or 0)
+    vec3("aniso_map_location", "aniso_map_location")
+    vec3("aniso_map_rotation", "aniso_map_rotation")
+    vec3("aniso_map_scale", "aniso_map_scale", (1.0, 1.0, 1.0))
+    desc.aniso_map_type = int(
+        packed.get("aniso_map_type", 2) if packed.get("aniso_map_type") is not None else 2
+    )
+
+    desc.aniso_rot_image_path = enc("aniso_rot_image_path")
+    desc.aniso_rot_image_colorspace = enc("aniso_rot_image_colorspace")
+    desc.aniso_rot_tex_vector_mode = int(packed.get("aniso_rot_tex_vector_mode", 0) or 0)
+    vec3("aniso_rot_map_location", "aniso_rot_map_location")
+    vec3("aniso_rot_map_rotation", "aniso_rot_map_rotation")
+    vec3("aniso_rot_map_scale", "aniso_rot_map_scale", (1.0, 1.0, 1.0))
+    desc.aniso_rot_map_type = int(
+        packed.get("aniso_rot_map_type", 2) if packed.get("aniso_rot_map_type") is not None else 2
+    )
+
+    desc.tangent_image_path = enc("tangent_image_path")
+    desc.tangent_image_colorspace = enc("tangent_image_colorspace")
+    desc.tangent_tex_vector_mode = int(packed.get("tangent_tex_vector_mode", 0) or 0)
+    vec3("tangent_map_location", "tangent_map_location")
+    vec3("tangent_map_rotation", "tangent_map_rotation")
+    vec3("tangent_map_scale", "tangent_map_scale", (1.0, 1.0, 1.0))
+    desc.tangent_map_type = int(
+        packed.get("tangent_map_type", 2) if packed.get("tangent_map_type") is not None else 2
+    )
+
 
 def make_qt_simple_scene_type():
     """ctypes Structure matching QT_SimpleScene in quanttrace.h."""
@@ -1883,6 +1955,27 @@ def make_qt_simple_scene_type():
             ("diffuse_rough_map_rotation", ctypes.c_float * 3),
             ("diffuse_rough_map_scale", ctypes.c_float * 3),
             ("diffuse_rough_map_type", ctypes.c_int),
+            ("aniso_image_path", ctypes.c_char_p),
+            ("aniso_image_colorspace", ctypes.c_char_p),
+            ("aniso_tex_vector_mode", ctypes.c_int),
+            ("aniso_map_location", ctypes.c_float * 3),
+            ("aniso_map_rotation", ctypes.c_float * 3),
+            ("aniso_map_scale", ctypes.c_float * 3),
+            ("aniso_map_type", ctypes.c_int),
+            ("aniso_rot_image_path", ctypes.c_char_p),
+            ("aniso_rot_image_colorspace", ctypes.c_char_p),
+            ("aniso_rot_tex_vector_mode", ctypes.c_int),
+            ("aniso_rot_map_location", ctypes.c_float * 3),
+            ("aniso_rot_map_rotation", ctypes.c_float * 3),
+            ("aniso_rot_map_scale", ctypes.c_float * 3),
+            ("aniso_rot_map_type", ctypes.c_int),
+            ("tangent_image_path", ctypes.c_char_p),
+            ("tangent_image_colorspace", ctypes.c_char_p),
+            ("tangent_tex_vector_mode", ctypes.c_int),
+            ("tangent_map_location", ctypes.c_float * 3),
+            ("tangent_map_rotation", ctypes.c_float * 3),
+            ("tangent_map_scale", ctypes.c_float * 3),
+            ("tangent_map_type", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -2154,6 +2247,27 @@ def make_qt_scene_types():
             ("diffuse_rough_map_rotation", ctypes.c_float * 3),
             ("diffuse_rough_map_scale", ctypes.c_float * 3),
             ("diffuse_rough_map_type", ctypes.c_int),
+            ("aniso_image_path", ctypes.c_char_p),
+            ("aniso_image_colorspace", ctypes.c_char_p),
+            ("aniso_tex_vector_mode", ctypes.c_int),
+            ("aniso_map_location", ctypes.c_float * 3),
+            ("aniso_map_rotation", ctypes.c_float * 3),
+            ("aniso_map_scale", ctypes.c_float * 3),
+            ("aniso_map_type", ctypes.c_int),
+            ("aniso_rot_image_path", ctypes.c_char_p),
+            ("aniso_rot_image_colorspace", ctypes.c_char_p),
+            ("aniso_rot_tex_vector_mode", ctypes.c_int),
+            ("aniso_rot_map_location", ctypes.c_float * 3),
+            ("aniso_rot_map_rotation", ctypes.c_float * 3),
+            ("aniso_rot_map_scale", ctypes.c_float * 3),
+            ("aniso_rot_map_type", ctypes.c_int),
+            ("tangent_image_path", ctypes.c_char_p),
+            ("tangent_image_colorspace", ctypes.c_char_p),
+            ("tangent_tex_vector_mode", ctypes.c_int),
+            ("tangent_map_location", ctypes.c_float * 3),
+            ("tangent_map_rotation", ctypes.c_float * 3),
+            ("tangent_map_scale", ctypes.c_float * 3),
+            ("tangent_map_type", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):
