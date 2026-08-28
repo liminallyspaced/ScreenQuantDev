@@ -25,6 +25,8 @@
  * Slice 2t: Normal Map (Tangent) + TEX_IMAGE → Principled Coat Normal.
  * Slice 2u: TEX_IMAGE → Principled Specular Tint / Thin Film Thickness+IOR /
  *   Subsurface Weight / Radius / Scale.
+ * Slice 2w: TEX_IMAGE → Principled Anisotropic / Rotation / Tangent.
+ * Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (bump_* ABI).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -478,6 +480,16 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->tangent_map_rotation, s->tangent_map_rotation, sizeof(mesh->tangent_map_rotation));
     std::memcpy(mesh->tangent_map_scale, s->tangent_map_scale, sizeof(mesh->tangent_map_scale));
     mesh->tangent_map_type = s->tangent_map_type;
+    mesh->bump_image_path = s->bump_image_path;
+    mesh->bump_image_colorspace = s->bump_image_colorspace;
+    mesh->bump_tex_vector_mode = s->bump_tex_vector_mode;
+    std::memcpy(mesh->bump_map_location, s->bump_map_location, sizeof(mesh->bump_map_location));
+    std::memcpy(mesh->bump_map_rotation, s->bump_map_rotation, sizeof(mesh->bump_map_rotation));
+    std::memcpy(mesh->bump_map_scale, s->bump_map_scale, sizeof(mesh->bump_map_scale));
+    mesh->bump_map_type = s->bump_map_type;
+    mesh->bump_strength = s->bump_strength;
+    mesh->bump_distance = s->bump_distance;
+    mesh->bump_invert = s->bump_invert;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -599,7 +611,8 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->diffuse_rough_tex_vector_mode) ||
            tex_mode_is_generated(m->aniso_tex_vector_mode) ||
            tex_mode_is_generated(m->aniso_rot_tex_vector_mode) ||
-           tex_mode_is_generated(m->tangent_tex_vector_mode);
+           tex_mode_is_generated(m->tangent_tex_vector_mode) ||
+           tex_mode_is_generated(m->bump_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -748,6 +761,28 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->metal_map_scale, m->metal_map_type);
         graph->connect(img->output("Color"), bsdf->input("Metallic"));
     }
+    /* Slice 2x: TEX_IMAGE Color → NODE_CONVERT_CF → Bump Height → Principled Normal.
+     * Official Cycles BumpNode (shader_nodes.cpp NODE_DEFINE): invert=false,
+     * use_object_space=false, height=1.0, strength=1.0, distance=0.1f.
+     * Blender 5.2 ShaderNodeBump RNA (bpy-verified): invert=False, Strength=1.0,
+     * Distance=0.001, Filter Width=0.1, Height=1.0. No use_object_space RNA.
+     * Match the Blender node (packer copies RNA defaults), not Cycles 0.1 distance.
+     * ShaderGraph::refine_bump_nodes clones Height onto SampleCenter/X/Y —
+     * only connect Height; do not wire Sample*. Graph finalize on Session.
+     * If both bump_* and normal_* paths are set, Bump wins (packer fills one). */
+    if (m->bump_image_path && m->bump_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->bump_image_path, m->bump_image_colorspace,
+            m->bump_tex_vector_mode, m->bump_map_location, m->bump_map_rotation,
+            m->bump_map_scale, m->bump_map_type);
+        BumpNode *bump = graph->create_node<BumpNode>();
+        bump->set_invert(m->bump_invert != 0);
+        bump->set_use_object_space(false);
+        bump->set_strength(m->bump_strength);
+        bump->set_distance(m->bump_distance);
+        graph->connect(img->output("Color"), bump->input("Height"));
+        graph->connect(bump->output("Normal"), bsdf->input("Normal"));
+    }
     /* Slice 2j: TEX_IMAGE Color → NormalMap Color → Principled Normal.
      * Official Blender sync (intern/cycles/blender/shader.cpp ShaderNodeNormalMap):
      *   space TANGENT → NODE_NORMAL_MAP_TANGENT (default).
@@ -755,7 +790,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      *   Color from Image Texture Color; convention OpenGL default;
      *   attribute empty → ATTR_STD_UV + undisplaced tangents
      *   (Mesh::update_tangents during geometry update). */
-    if (m->normal_image_path && m->normal_image_path[0]) {
+    else if (m->normal_image_path && m->normal_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
             graph.get(), m->normal_image_path, m->normal_image_colorspace,
             m->normal_tex_vector_mode, m->normal_map_location, m->normal_map_rotation,
@@ -1125,7 +1160,8 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]) ||
         (m->aniso_image_path && m->aniso_image_path[0]) ||
         (m->aniso_rot_image_path && m->aniso_rot_image_path[0]) ||
-        (m->tangent_image_path && m->tangent_image_path[0]);
+        (m->tangent_image_path && m->tangent_image_path[0]) ||
+        (m->bump_image_path && m->bump_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();

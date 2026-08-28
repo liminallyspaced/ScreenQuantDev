@@ -26,7 +26,10 @@
 #   Subsurface Weight / Radius / Scale.
 # Slice 2v: TEX_IMAGE → Principled Subsurface IOR / Subsurface Anisotropy /
 #   Diffuse Roughness. Thin Wall is BOOLEAN in 5.2 — packer refuses TEX_IMAGE.
-#   Anisotropic/Tangent/Bump still refuse. Other linked sockets / HDR worlds refuse.
+# Slice 2w: TEX_IMAGE → Principled Anisotropic / Rotation / Tangent.
+# Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (bump_* ABI).
+#   Coat Normal stays Normal-Map-only (Bump on Coat Normal refuses).
+#   Other linked sockets / HDR worlds refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -358,7 +361,7 @@ def _tex_image_from_base_color(sock) -> dict:
 
 
 def _prefix_tex(info: dict, prefix: str) -> dict:
-    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_/spec_tint_/film_thick_/film_ior_/sss_weight_/sss_radius_/sss_scale_/sss_ior_/sss_aniso_/thin_wall_/diffuse_rough_/aniso_/aniso_rot_/tangent_ (or keep for base)."""
+    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_/spec_tint_/film_thick_/film_ior_/sss_weight_/sss_radius_/sss_scale_/sss_ior_/sss_aniso_/thin_wall_/diffuse_rough_/aniso_/aniso_rot_/tangent_/bump_ (or keep for base)."""
     if not prefix:
         return dict(info)
     return {
@@ -377,6 +380,116 @@ def _empty_normal_info(prefix: str = "normal_") -> dict:
     out = _prefix_tex(_empty_tex_info(), prefix)
     out[f"{prefix}strength"] = 1.0
     return out
+
+
+def _empty_bump_info(prefix: str = "bump_") -> dict:
+    """Empty bump_* ABI. Distance is Blender 5.2 RNA 0.001, not Cycles 0.1."""
+    out = _prefix_tex(_empty_tex_info(), prefix)
+    out[f"{prefix}strength"] = 1.0
+    out[f"{prefix}distance"] = 0.001
+    out[f"{prefix}invert"] = 0
+    return out
+
+
+def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> dict:
+    """Principled.{label} <- Bump.Normal; Height <- TEX_IMAGE Color.
+
+    Strength and Distance must be unlinked floats (Blender 5.2 RNA 1.0 / 0.001).
+    Normal input unlinked. invert RNA True is OK (packed as bump_invert 1).
+    use_object_space is not a Blender 5.2 property -- native forces false.
+    Packed-only images refuse via _tex_image_from_sock.
+    """
+    empty = _empty_bump_info(prefix)
+    if sock is None:
+        return empty
+    links = list(getattr(sock, "links", None) or [])
+    if not links:
+        return empty
+    if len(links) != 1:
+        raise QuantTraceSyncError(f"Principled.{label} has multiple links")
+    src = links[0]
+    from_node = getattr(src, "from_node", None)
+    from_sock = getattr(src, "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype != "BUMP":
+        raise QuantTraceSyncError(
+            f"Principled.{label} from {ntype!r} refused (Slice 2x: Bump only here)"
+        )
+    sock_name = getattr(from_sock, "name", "") if from_sock is not None else ""
+    if sock_name not in ("Normal", "normal"):
+        raise QuantTraceSyncError(
+            f"Principled.{label} must come from Bump Normal (Slice 2x)"
+        )
+    inputs = getattr(from_node, "inputs", None)
+    getter = getattr(inputs, "get", None) if inputs is not None else None
+
+    def _in(name):
+        if callable(getter):
+            s = getter(name)
+            if s is not None:
+                return s
+        if inputs is not None:
+            for s in inputs:
+                if getattr(s, "name", None) == name or getattr(s, "identifier", None) == name:
+                    return s
+        return None
+
+    strength_sock = _in("Strength")
+    distance_sock = _in("Distance")
+    height_sock = _in("Height")
+    normal_in = _in("Normal")
+    if strength_sock is not None and getattr(strength_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Bump Strength is linked (Slice 2x: unlinked float only)"
+        )
+    if distance_sock is not None and getattr(distance_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Bump Distance is linked (Slice 2x: unlinked float only)"
+        )
+    if normal_in is not None and getattr(normal_in, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Bump Normal input is linked (Slice 2x: unlinked only)"
+        )
+    if height_sock is None or not getattr(height_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Bump Height must be TEX_IMAGE Color (Slice 2x)"
+        )
+    tex = _tex_image_from_sock(height_sock, f"{label} Bump Height")
+    out = _prefix_tex(tex, prefix)
+    strength = 1.0
+    if strength_sock is not None:
+        strength = float(getattr(strength_sock, "default_value", 1.0))
+    distance = 0.001
+    if distance_sock is not None:
+        distance = float(getattr(distance_sock, "default_value", 0.001))
+    invert = bool(getattr(from_node, "invert", False))
+    out[f"{prefix}strength"] = strength
+    out[f"{prefix}distance"] = distance
+    out[f"{prefix}invert"] = 1 if invert else 0
+    return out
+
+
+def _principled_normal_dispatch(sock) -> dict:
+    """Principled.Normal <- Normal Map (2j) or Bump (2x). Packer fills one."""
+    empty = {**_empty_normal_info(), **_empty_bump_info()}
+    if sock is None:
+        return empty
+    links = list(getattr(sock, "links", None) or [])
+    if not links:
+        return empty
+    if len(links) != 1:
+        raise QuantTraceSyncError("Principled.Normal has multiple links")
+    src = links[0]
+    from_node = getattr(src, "from_node", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype == "NORMAL_MAP":
+        return {**_normal_map_from_sock(sock), **_empty_bump_info()}
+    if ntype == "BUMP":
+        return {**_empty_normal_info(), **_bump_from_sock(sock)}
+    raise QuantTraceSyncError(
+        f"Principled.Normal from {ntype!r} refused "
+        "(Slice 2x: Normal Map or Bump only)"
+    )
 
 
 def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal") -> dict:
@@ -497,6 +610,7 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(_empty_tex_info(), "aniso_"),
         **_prefix_tex(_empty_tex_info(), "aniso_rot_"),
         **_prefix_tex(_empty_tex_info(), "tangent_"),
+        **_empty_bump_info(),
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -641,7 +755,8 @@ def _principled_from_material(mat) -> dict:
     coat_normal_info = _normal_map_from_sock(
         coat_n_sock, prefix="coat_normal_", label="Coat Normal"
     )
-    normal_info = _normal_map_from_sock(bsdf.inputs.get("Normal"))
+    # Coat Normal stays Normal-Map-only (2t). Bump on Coat Normal still refuses.
+    normal_info = _principled_normal_dispatch(bsdf.inputs.get("Normal"))
     base = bsdf.inputs["Base Color"].default_value
     return {
         "base_color": (float(base[0]), float(base[1]), float(base[2])),
@@ -680,6 +795,7 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(aniso_tex, "aniso_"),
         **_prefix_tex(aniso_rot_tex, "aniso_rot_"),
         **_prefix_tex(tangent_tex, "tangent_"),
+        **{k: v for k, v in normal_info.items() if str(k).startswith("bump_")},
     }
 
 
@@ -839,7 +955,7 @@ def classify_simple(scene) -> dict:
 
 
 def _pack_tex_fields(pr: dict) -> dict:
-    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal/spec_tint/film_thick/film_ior/sss_weight/sss_radius/sss_scale/sss_ior/sss_aniso/thin_wall/diffuse_rough/aniso/aniso_rot/tangent TEX_IMAGE fields."""
+    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal/spec_tint/film_thick/film_ior/sss_weight/sss_radius/sss_scale/sss_ior/sss_aniso/thin_wall/diffuse_rough/aniso/aniso_rot/tangent/bump TEX_IMAGE fields."""
     def loc(key, default):
         return list(pr.get(key) or default)
     out = {
@@ -1062,6 +1178,16 @@ def _pack_tex_fields(pr: dict) -> dict:
         "tangent_map_rotation": loc("tangent_map_rotation", (0.0, 0.0, 0.0)),
         "tangent_map_scale": loc("tangent_map_scale", (1.0, 1.0, 1.0)),
         "tangent_map_type": int(pr.get("tangent_map_type", 2) if pr.get("tangent_map_type") is not None else 2),
+        "bump_image_path": pr.get("bump_image_path") or "",
+        "bump_image_colorspace": pr.get("bump_image_colorspace") or "",
+        "bump_tex_vector_mode": int(pr.get("bump_tex_vector_mode", 0) or 0),
+        "bump_map_location": loc("bump_map_location", (0.0, 0.0, 0.0)),
+        "bump_map_rotation": loc("bump_map_rotation", (0.0, 0.0, 0.0)),
+        "bump_map_scale": loc("bump_map_scale", (1.0, 1.0, 1.0)),
+        "bump_map_type": int(pr.get("bump_map_type", 2) if pr.get("bump_map_type") is not None else 2),
+        "bump_strength": float(pr.get("bump_strength", 1.0) if pr.get("bump_strength") is not None else 1.0),
+        "bump_distance": float(pr.get("bump_distance", 0.001) if pr.get("bump_distance") is not None else 0.001),
+        "bump_invert": int(pr.get("bump_invert", 0) or 0),
     }
     return out
 
@@ -1099,6 +1225,7 @@ def _any_tex_path(pr: dict) -> bool:
         or (pr.get("aniso_image_path") or "")
         or (pr.get("aniso_rot_image_path") or "")
         or (pr.get("tangent_image_path") or "")
+        or (pr.get("bump_image_path") or "")
     )
 
 
@@ -1725,6 +1852,23 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("tangent_map_type", 2) if packed.get("tangent_map_type") is not None else 2
     )
 
+    desc.bump_image_path = enc("bump_image_path")
+    desc.bump_image_colorspace = enc("bump_image_colorspace")
+    desc.bump_tex_vector_mode = int(packed.get("bump_tex_vector_mode", 0) or 0)
+    vec3("bump_map_location", "bump_map_location")
+    vec3("bump_map_rotation", "bump_map_rotation")
+    vec3("bump_map_scale", "bump_map_scale", (1.0, 1.0, 1.0))
+    desc.bump_map_type = int(
+        packed.get("bump_map_type", 2) if packed.get("bump_map_type") is not None else 2
+    )
+    desc.bump_strength = float(
+        packed.get("bump_strength", 1.0) if packed.get("bump_strength") is not None else 1.0
+    )
+    desc.bump_distance = float(
+        packed.get("bump_distance", 0.001) if packed.get("bump_distance") is not None else 0.001
+    )
+    desc.bump_invert = int(packed.get("bump_invert", 0) or 0)
+
 
 def make_qt_simple_scene_type():
     """ctypes Structure matching QT_SimpleScene in quanttrace.h."""
@@ -1976,6 +2120,16 @@ def make_qt_simple_scene_type():
             ("tangent_map_rotation", ctypes.c_float * 3),
             ("tangent_map_scale", ctypes.c_float * 3),
             ("tangent_map_type", ctypes.c_int),
+            ("bump_image_path", ctypes.c_char_p),
+            ("bump_image_colorspace", ctypes.c_char_p),
+            ("bump_tex_vector_mode", ctypes.c_int),
+            ("bump_map_location", ctypes.c_float * 3),
+            ("bump_map_rotation", ctypes.c_float * 3),
+            ("bump_map_scale", ctypes.c_float * 3),
+            ("bump_map_type", ctypes.c_int),
+            ("bump_strength", ctypes.c_float),
+            ("bump_distance", ctypes.c_float),
+            ("bump_invert", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -2268,6 +2422,16 @@ def make_qt_scene_types():
             ("tangent_map_rotation", ctypes.c_float * 3),
             ("tangent_map_scale", ctypes.c_float * 3),
             ("tangent_map_type", ctypes.c_int),
+            ("bump_image_path", ctypes.c_char_p),
+            ("bump_image_colorspace", ctypes.c_char_p),
+            ("bump_tex_vector_mode", ctypes.c_int),
+            ("bump_map_location", ctypes.c_float * 3),
+            ("bump_map_rotation", ctypes.c_float * 3),
+            ("bump_map_scale", ctypes.c_float * 3),
+            ("bump_map_type", ctypes.c_int),
+            ("bump_strength", ctypes.c_float),
+            ("bump_distance", ctypes.c_float),
+            ("bump_invert", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):

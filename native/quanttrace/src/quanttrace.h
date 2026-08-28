@@ -24,6 +24,11 @@
  * Slice 2v: TEX_IMAGE → Principled Subsurface IOR / Subsurface Anisotropy /
  *   Diffuse Roughness. Thin Wall is BOOLEAN in Blender 5.2 — ABI reserved,
  *   packer refuses TEX_IMAGE (not a float socket).
+ * Slice 2w: TEX_IMAGE → Principled Anisotropic / Rotation / Tangent.
+ * Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (parallel bump_* ABI;
+ *   not reuse of normal_image_path). Strength/Distance unlinked floats
+ *   (Blender 5.2 RNA 1.0 / 0.001). invert RNA 0/1. use_object_space false.
+ *   If both bump_* and normal_* paths are set, Bump wins; packer fills one.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -356,6 +361,19 @@ typedef struct QT_SimpleScene {
   float tangent_map_rotation[3];
   float tangent_map_scale[3];
   int tangent_map_type;
+  /* Slice 2x: Bump Height ← TEX_IMAGE (NULL/empty = geometric Normal).
+   * Strength/Distance unlinked floats (Blender 5.2 RNA: 1.0 / 0.001).
+   * invert RNA 0/1. use_object_space always false (no Blender 5.2 RNA). */
+  const char *bump_image_path;
+  const char *bump_image_colorspace;
+  int bump_tex_vector_mode;
+  float bump_map_location[3];
+  float bump_map_rotation[3];
+  float bump_map_scale[3];
+  int bump_map_type;
+  float bump_strength;
+  float bump_distance;
+  int bump_invert;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -631,6 +649,19 @@ typedef struct QT_Mesh {
   float tangent_map_rotation[3];
   float tangent_map_scale[3];
   int tangent_map_type;
+  /* Slice 2x: Bump Height ← TEX_IMAGE (NULL/empty = geometric Normal).
+   * Strength/Distance unlinked floats (Blender 5.2 RNA: 1.0 / 0.001).
+   * invert RNA 0/1. use_object_space always false (no Blender 5.2 RNA). */
+  const char *bump_image_path;
+  const char *bump_image_colorspace;
+  int bump_tex_vector_mode;
+  float bump_map_location[3];
+  float bump_map_rotation[3];
+  float bump_map_scale[3];
+  int bump_map_type;
+  float bump_strength;
+  float bump_distance;
+  int bump_invert;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2w landed** (2026-08-28 11am PlugWalk ET). Principled Anisotropic / Anisotropic Rotation / Tangent TEX_IMAGE. Aniso 32²/4 Δmax=3.35e-8; 256²/128 Δmax=1.09e-7 PASS. AnisoRot 32²/4 Δmax=2.04e-6; 256²/128 Δmax=9.35e-6 PASS. Tangent 32²/4 Δmax=5.09e-11; 256²/128 Δmax=5.09e-11 PASS. Combo 32²/4 PASS. DiffuseRough 32²/4 regression PASS. Fills ATTR_STD_GENERATED bbox orco when Aniso/AnisoRot map and Tangent is unlinked (Principled default LINK_TANGENT → Geometry.Tangent). Pins set_anisotropic(1.0) when Rotation/Tangent map and Anisotropic path empty. `is_tracer=1`. Native `0.0.24-slice2w`.
+Status: **Slice 2x landed** (2026-08-28 12pm PlugWalk ET). Principled.Normal ← Bump ← TEX_IMAGE Height. Bump 32²/4 Δmax=2.38e-7; 256²/128 Δmax=4.77e-7 PASS (0 px ≥1e-3). Combined not constant / not all-zero; vs no-bump cube 32²/4 Δmax=0.205 (82 px) so the bump graph is live. NormalMap 32²/4 2j regression Δmax=3.58e-7 PASS. Aniso 32²/4 2w regression Δmax=3.35e-8 PASS. Parallel `bump_*` ABI (not reuse of `normal_image_path`). Blender 5.2 RNA Distance=0.001 (not Cycles 0.1). If both bump_* and normal_* set, Bump wins; packer fills one. `is_tracer=1`. Native `0.0.25-slice2x`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -9,6 +9,50 @@ Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 `is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
+
+
+
+---
+
+## 12pm PlugWalk (2026-08-28) — Principled Bump TEX_IMAGE Height (Slice 2x)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `bump_` on `QT_Mesh` + `QT_SimpleScene` (path/cs/vector/map + strength/distance/invert). Parallel to `normal_*`; not reuse. |
+| Python | `sync._principled_normal_dispatch`: NORMAL_MAP → 2j; BUMP → `_bump_from_sock`; else refuse. Coat Normal stays Normal-Map-only (Bump on Coat Normal refuses). Height must be TEX_IMAGE Color. Strength/Distance/Normal-input linked refuse. invert RNA OK. |
+| Native | ImageTexture Color → NODE_CONVERT_CF → BumpNode Height. `set_invert` / `set_use_object_space(false)` / `set_strength` / `set_distance`. Do not wire Sample*; `refine_bump_nodes` clones Height. If both ABI paths set, Bump wins. |
+| RNA | bpy-verified ShaderNodeBump: invert=False, Strength=1.0, Distance=**0.001** (not Cycles NODE_DEFINE 0.1), Filter Width=0.1, Height=1.0. No use_object_space RNA. |
+| Version | `0.0.25-slice2x` |
+| Tools | `tools/_quanttrace_slice2x_scene.py`, `tools/_quanttrace_slice2x_smoke.py` |
+| Visibility | Roughness=0.5 Metallic=0. 16×16 Non-Color height hill (0.15 outside / 0.9 center). Stock Combined not constant / not all-zero. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Socket | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| Bump | 32² / 4 | **2.38e-7** | 5.49e-9 | **PASS** |
+| Bump | 256² / 128 | **4.77e-7** | 4.00e-9 | **PASS** |
+| NormalMap (2j regression) | 32² / 4 | **3.58e-7** | 7.27e-9 | **PASS** |
+| Aniso (2w regression) | 32² / 4 | **3.35e-8** | 1.78e-10 | **PASS** |
+
+Bump vs no-bump cube (stock 32²/4): Δmax=0.205 (82 px / 1024) — graph is live, not a geometric-normal match. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- Thin Wall BOOLEAN / Object/World Normal space / linked Strength / HDR / kitchens / Object-with-pointer / packed-only / linked Mapping L/R/S still refuse.
+- Bump on Coat Normal still refuses (2t Normal-Map-only).
+- Still-life 256² 1px + SSSWeight 256² 1px + SSSAniso 256² 3px noise-class residue still documented (not claimed fixed).
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Thin Wall boolean path, close still-life / SSSWeight / SSSAniso 256² SSS noise residue. Not ReSTIR. Not Classroom time %.
+
 
 
 ---
