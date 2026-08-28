@@ -1,10 +1,10 @@
-<!-- Slice 2n: TEX_COORD Window + Reflection; version 0.0.15-slice2n -->
+<!-- Slice 2o: Principled IOR/Alpha TEX_IMAGE; version 0.0.16-slice2o -->
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.15-slice2n`.
+`-DQT_WITH_CYCLES=ON`. Native `0.0.16-slice2o`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -27,9 +27,11 @@ this tree never feeds Auto clocks.
 | **2j — Normal Map TEX_IMAGE** | **PASS** | Tangent Normal Map ← TEX_IMAGE. 16×16 Non-Color bump 32²/4 Δmax **3.58e-7**; 256²/128 Δmax **5.96e-7**. Native `0.0.11-slice2j`. |
 | **2k — TEX_COORD Generated** | **PASS** | Generated 32²/4 Δmax **2.15e-6**; 256²/128 Δmax **2.56e-6**. Generated+Mapping 256²/128 Δmax **3.93e-6**. Native `0.0.12-slice2k`. |
 | **2l — TEX_COORD Object** | **PASS** | Object 32²/4 Δmax **7.99e-6**; 256²/128 Δmax **4.35e-6**. Object+Mapping 256²/128 Δmax **6.56e-6**. Native `0.0.13-slice2l`. |
-| **2m — TEX_COORD Camera** | **PASS** | Camera 32²/4 Δmax **1.79e-6**; 256²/128 Δmax **3.46e-6**. Camera+Mapping 256²/128 Δmax **5.96e-6**. Native `0.0.15-slice2n`. |
+| **2m — TEX_COORD Camera** | **PASS** | Camera 32²/4 Δmax **1.79e-6**; 256²/128 Δmax **3.46e-6**. Camera+Mapping 256²/128 Δmax **5.96e-6**. Native `0.0.14-slice2m`. |
+| **2n — TEX_COORD Window + Reflection** | **PASS** | Window 256²/128 Δmax **4.77e-7**; Reflection 256²/128 Δmax **5.96e-7**. Native `0.0.15-slice2n`. |
+| **2o — IOR/Alpha TEX_IMAGE** | **PASS** | IOR 256²/128 Δmax **5.96e-7**; Alpha 256²/128 Δmax **6.80e-4**; Both 256²/128 Δmax **6.33e-4**. Native `0.0.16-slice2o`. |
 
-Kitchens / HDR worlds / IOR·Alpha links / Object·World Normal space / Bump / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
+Kitchens / HDR worlds / Transmission·Specular·Coat / Object·World Normal space / Bump / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
 
 ## Build (Linux) — hello stub (default)
 
@@ -49,7 +51,7 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=1, session_probe=1, version 0.0.15-slice2n
+# ABI: is_tracer=1, session_probe=1, version 0.0.16-slice2o
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 blender --background --python tools/_quanttrace_f12_smoke.py -- \

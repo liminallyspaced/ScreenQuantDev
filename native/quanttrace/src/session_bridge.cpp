@@ -279,6 +279,20 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->normal_map_scale, s->normal_map_scale, sizeof(mesh->normal_map_scale));
     mesh->normal_map_type = s->normal_map_type;
     mesh->normal_strength = s->normal_strength;
+    mesh->ior_image_path = s->ior_image_path;
+    mesh->ior_image_colorspace = s->ior_image_colorspace;
+    mesh->ior_tex_vector_mode = s->ior_tex_vector_mode;
+    std::memcpy(mesh->ior_map_location, s->ior_map_location, sizeof(mesh->ior_map_location));
+    std::memcpy(mesh->ior_map_rotation, s->ior_map_rotation, sizeof(mesh->ior_map_rotation));
+    std::memcpy(mesh->ior_map_scale, s->ior_map_scale, sizeof(mesh->ior_map_scale));
+    mesh->ior_map_type = s->ior_map_type;
+    mesh->alpha_image_path = s->alpha_image_path;
+    mesh->alpha_image_colorspace = s->alpha_image_colorspace;
+    mesh->alpha_tex_vector_mode = s->alpha_tex_vector_mode;
+    std::memcpy(mesh->alpha_map_location, s->alpha_map_location, sizeof(mesh->alpha_map_location));
+    std::memcpy(mesh->alpha_map_rotation, s->alpha_map_rotation, sizeof(mesh->alpha_map_rotation));
+    std::memcpy(mesh->alpha_map_scale, s->alpha_map_scale, sizeof(mesh->alpha_map_scale));
+    mesh->alpha_map_type = s->alpha_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -364,7 +378,9 @@ static bool mesh_uses_generated(const QT_Mesh *m)
     return tex_mode_is_generated(m->tex_vector_mode) ||
            tex_mode_is_generated(m->rough_tex_vector_mode) ||
            tex_mode_is_generated(m->metal_tex_vector_mode) ||
-           tex_mode_is_generated(m->normal_tex_vector_mode);
+           tex_mode_is_generated(m->normal_tex_vector_mode) ||
+           tex_mode_is_generated(m->ior_tex_vector_mode) ||
+           tex_mode_is_generated(m->alpha_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -404,7 +420,7 @@ static void fill_generated_orco(Mesh *mesh, const QT_Mesh *m)
 }
 
 /* Wire ImageTexture (+ optional TEX_COORD UV/Generated/Object/Camera/Window/Reflection + Mapping).
- * Color→float (Roughness/Metallic) gets ConvertNode via ShaderGraph::connect. */
+ * Color→float (Roughness/Metallic/IOR/Alpha) gets ConvertNode via ShaderGraph::connect. */
 static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
                                         const char *path,
                                         const char *colorspace,
@@ -481,7 +497,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h/2i/2j/2k/2l/2m: TEX_IMAGE → Base / Rough / Metal / Normal Map.
+    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
      * mode 2: TextureCoordinate UV → Mapping → Image Vector.
@@ -529,6 +545,20 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         nmap->set_strength(m->normal_strength);
         graph->connect(img->output("Color"), nmap->input("Color"));
         graph->connect(nmap->output("Normal"), bsdf->input("Normal"));
+    }
+    if (m->ior_image_path && m->ior_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->ior_image_path, m->ior_image_colorspace,
+            m->ior_tex_vector_mode, m->ior_map_location, m->ior_map_rotation,
+            m->ior_map_scale, m->ior_map_type);
+        graph->connect(img->output("Color"), bsdf->input("IOR"));
+    }
+    if (m->alpha_image_path && m->alpha_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->alpha_image_path, m->alpha_image_colorspace,
+            m->alpha_tex_vector_mode, m->alpha_map_location, m->alpha_map_rotation,
+            m->alpha_map_scale, m->alpha_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Alpha"));
     }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
     surf->set_graph(std::move(graph));
@@ -584,7 +614,9 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->image_path && m->image_path[0]) ||
         (m->rough_image_path && m->rough_image_path[0]) ||
         (m->metal_image_path && m->metal_image_path[0]) ||
-        (m->normal_image_path && m->normal_image_path[0]);
+        (m->normal_image_path && m->normal_image_path[0]) ||
+        (m->ior_image_path && m->ior_image_path[0]) ||
+        (m->alpha_image_path && m->alpha_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();

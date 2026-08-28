@@ -128,6 +128,22 @@ typedef struct QT_SimpleScene {
   float normal_map_scale[3];
   int normal_map_type;
   float normal_strength; /* Normal Map Strength, default 1.0 */
+  /* Slice 2o: IOR TEX_IMAGE (NULL/empty = constant ior) */
+  const char *ior_image_path;
+  const char *ior_image_colorspace;
+  int ior_tex_vector_mode;
+  float ior_map_location[3];
+  float ior_map_rotation[3];
+  float ior_map_scale[3];
+  int ior_map_type;
+  /* Slice 2o: Alpha TEX_IMAGE (NULL/empty = constant alpha) */
+  const char *alpha_image_path;
+  const char *alpha_image_colorspace;
+  int alpha_tex_vector_mode;
+  float alpha_map_location[3];
+  float alpha_map_rotation[3];
+  float alpha_map_scale[3];
+  int alpha_map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -186,6 +202,22 @@ typedef struct QT_Mesh {
   float normal_map_scale[3];
   int normal_map_type;
   float normal_strength; /* Normal Map Strength, default 1.0 */
+  /* Slice 2o: IOR TEX_IMAGE */
+  const char *ior_image_path;
+  const char *ior_image_colorspace;
+  int ior_tex_vector_mode;
+  float ior_map_location[3];
+  float ior_map_rotation[3];
+  float ior_map_scale[3];
+  int ior_map_type;
+  /* Slice 2o: Alpha TEX_IMAGE */
+  const char *alpha_image_path;
+  const char *alpha_image_colorspace;
+  int alpha_tex_vector_mode;
+  float alpha_map_location[3];
+  float alpha_map_rotation[3];
+  float alpha_map_scale[3];
+  int alpha_map_type;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2n landed** (2026-08-28 2am PlugWalk ET). TEX_COORD Window + Reflection (+ Mapping) PASS. Window 32²/4 Δmax=8.34e-7; 256²/128 Δmax=4.77e-7. Window+Mapping 32²/4 Δmax=8.64e-7 / 256²/128 Δmax=8.94e-7. Reflection 32²/4 Δmax=5.07e-7; 256²/128 Δmax=5.96e-7. Reflection+Mapping 32²/4 Δmax=1.07e-6 / 256²/128 Δmax=6.56e-7. Camera 32²/4 regression Δmax=1.79e-6 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.15-slice2n`.
+Status: **Slice 2o landed** (2026-08-28 3am PlugWalk ET). Principled IOR/Alpha TEX_IMAGE PASS. IOR 32²/4 Δmax=8.34e-7; 256²/128 Δmax=5.96e-7. Alpha 32²/4 Δmax=1.04e-6; 256²/128 Δmax=6.80e-4. Both 32²/4 Δmax=2.38e-6; 256²/128 Δmax=6.33e-4. Roughness 32²/4 regression Δmax=3.58e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.16-slice2o`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -1185,4 +1185,60 @@ Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Re
 
 ### Next
 
-Principled IOR/Alpha constant/socket sync, or close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 3am: IOR/Alpha TEX_IMAGE. See 3am section.
+
+---
+
+## 3am PlugWalk (2026-08-28) — Slice 2o: Principled IOR / Alpha TEX_IMAGE
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `ior_image_path` / `alpha_image_path` (+ colorspace, tex_vector_mode, Mapping) on `QT_SimpleScene` and `QT_Mesh` (NULL/empty = existing constant `ior`/`alpha`) |
+| Packer | Principled IOR and Alpha may be TEX_IMAGE Color (same Vector graph as Base/Rough/Metal). Other linked sockets still refuse. |
+| Native | Color → IOR / Alpha via `ShaderGraph::connect` (`NODE_CONVERT_CF`). `needs_uv` and `mesh_uses_generated` include both sockets. |
+| Version | `0.0.16-slice2o` |
+| Tools | `_quanttrace_ioralpha_scene/smoke.py` (8×8 Non-Color gray checker) |
+
+### Measured — TEX_IMAGE → Principled IOR
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| IOR Session | 32² / 4 | **8.34e-7** | 8.21e-9 | 0 / 1024 | **PASS** |
+| IOR Session | 256² / 128 | **5.96e-7** | 4.73e-9 | 0 / 65536 | **PASS** |
+
+### Measured — TEX_IMAGE → Principled Alpha
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Alpha Session | 32² / 4 | **1.04e-6** | 1.27e-8 | 0 / 1024 | **PASS** |
+| Alpha Session | 256² / 128 | **6.80e-4** | 1.79e-8 | 0 / 65536 | **PASS** |
+
+### Measured — both sockets, same filepath
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Both Session | 32² / 4 | **2.38e-6** | 1.98e-8 | 0 / 1024 | **PASS** |
+| Both Session | 256² / 128 | **6.33e-4** | 2.73e-8 | 0 / 65536 | **PASS** |
+
+### Measured — regressions (32² / 4)
+
+| Path | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| 2i Roughness TEX_IMAGE | 32² / 4 | **3.58e-7** | 6.71e-9 | **PASS** |
+
+### Honesty / still refuses
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented (not claimed fixed).
+- HDR worlds, kitchens, TEX_COORD Object **with** Object reference (use_transform / object_itfm), linked Mapping L/R/S, packed-only images, Transmission/Specular/Coat/Sheen/Emission still raise `QuantTraceSyncError`.
+- Film stays opaque (`film_transparent=False`); Combined RGB is over black world. Session Combined A mean stays 1.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Transmission / Specular TEX_IMAGE, or close still-life 1px. Not ReSTIR. Not Classroom time %.

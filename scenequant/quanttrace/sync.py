@@ -343,7 +343,7 @@ def _tex_image_from_base_color(sock) -> dict:
 
 
 def _prefix_tex(info: dict, prefix: str) -> dict:
-    """Remap image_path/… keys to rough_/metal_/normal_ (or keep for base)."""
+    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_ (or keep for base)."""
     if not prefix:
         return dict(info)
     return {
@@ -424,7 +424,7 @@ def _normal_map_from_sock(sock) -> dict:
 
 
 def _principled_from_material(mat) -> dict:
-    """Return principled dict (constants + optional TEX_IMAGE on Base/Rough/Metal)."""
+    """Return principled dict (constants + optional TEX_IMAGE on Base/Rough/Metal/IOR/Alpha)."""
     empty = {
         "base_color": (0.8, 0.8, 0.8),
         "roughness": 0.5,
@@ -435,6 +435,8 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(_empty_tex_info(), "rough_"),
         **_prefix_tex(_empty_tex_info(), "metal_"),
         **_empty_normal_info(),
+        **_prefix_tex(_empty_tex_info(), "ior_"),
+        **_prefix_tex(_empty_tex_info(), "alpha_"),
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -452,6 +454,8 @@ def _principled_from_material(mat) -> dict:
     base_tex = _empty_tex_info()
     rough_tex = _empty_tex_info()
     metal_tex = _empty_tex_info()
+    ior_tex = _empty_tex_info()
+    alpha_tex = _empty_tex_info()
     for sock_name in ("Base Color", "Roughness", "Metallic", "IOR", "Alpha"):
         sock = bsdf.inputs.get(sock_name)
         if sock is None:
@@ -467,10 +471,16 @@ def _principled_from_material(mat) -> dict:
         if sock_name == "Metallic":
             metal_tex = _tex_image_from_sock(sock, "Metallic")
             continue
+        if sock_name == "IOR":
+            ior_tex = _tex_image_from_sock(sock, "IOR")
+            continue
+        if sock_name == "Alpha":
+            alpha_tex = _tex_image_from_sock(sock, "Alpha")
+            continue
         raise QuantTraceSyncError(
             f"Principled.{sock_name} is linked "
-            "(Slice 2j: only Base Color / Roughness / Metallic may be TEX_IMAGE; "
-            "Normal is Normal Map ← TEX_IMAGE; IOR/Alpha/etc stay constant-only)"
+            "(Slice 2o: only Base Color / Roughness / Metallic / IOR / Alpha "
+            "may be TEX_IMAGE; Normal is Normal Map ← TEX_IMAGE)"
         )
     normal_info = _normal_map_from_sock(bsdf.inputs.get("Normal"))
     base = bsdf.inputs["Base Color"].default_value
@@ -484,6 +494,8 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(rough_tex, "rough_"),
         **_prefix_tex(metal_tex, "metal_"),
         **normal_info,
+        **_prefix_tex(ior_tex, "ior_"),
+        **_prefix_tex(alpha_tex, "alpha_"),
     }
 
 
@@ -643,7 +655,7 @@ def classify_simple(scene) -> dict:
 
 
 def _pack_tex_fields(pr: dict) -> dict:
-    """Flatten base/rough/metal TEX_IMAGE fields from principled dict."""
+    """Flatten base/rough/metal/normal/ior/alpha TEX_IMAGE fields from principled dict."""
     def loc(key, default):
         return list(pr.get(key) or default)
     out = {
@@ -676,6 +688,20 @@ def _pack_tex_fields(pr: dict) -> dict:
         "normal_map_scale": loc("normal_map_scale", (1.0, 1.0, 1.0)),
         "normal_map_type": int(pr.get("normal_map_type", 2) if pr.get("normal_map_type") is not None else 2),
         "normal_strength": float(pr.get("normal_strength", 1.0) if pr.get("normal_strength") is not None else 1.0),
+        "ior_image_path": pr.get("ior_image_path") or "",
+        "ior_image_colorspace": pr.get("ior_image_colorspace") or "",
+        "ior_tex_vector_mode": int(pr.get("ior_tex_vector_mode", 0) or 0),
+        "ior_map_location": loc("ior_map_location", (0.0, 0.0, 0.0)),
+        "ior_map_rotation": loc("ior_map_rotation", (0.0, 0.0, 0.0)),
+        "ior_map_scale": loc("ior_map_scale", (1.0, 1.0, 1.0)),
+        "ior_map_type": int(pr.get("ior_map_type", 2) if pr.get("ior_map_type") is not None else 2),
+        "alpha_image_path": pr.get("alpha_image_path") or "",
+        "alpha_image_colorspace": pr.get("alpha_image_colorspace") or "",
+        "alpha_tex_vector_mode": int(pr.get("alpha_tex_vector_mode", 0) or 0),
+        "alpha_map_location": loc("alpha_map_location", (0.0, 0.0, 0.0)),
+        "alpha_map_rotation": loc("alpha_map_rotation", (0.0, 0.0, 0.0)),
+        "alpha_map_scale": loc("alpha_map_scale", (1.0, 1.0, 1.0)),
+        "alpha_map_type": int(pr.get("alpha_map_type", 2) if pr.get("alpha_map_type") is not None else 2),
     }
     return out
 
@@ -686,6 +712,8 @@ def _any_tex_path(pr: dict) -> bool:
         or (pr.get("rough_image_path") or "")
         or (pr.get("metal_image_path") or "")
         or (pr.get("normal_image_path") or "")
+        or (pr.get("ior_image_path") or "")
+        or (pr.get("alpha_image_path") or "")
     )
 
 
@@ -1039,6 +1067,26 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("normal_strength", 1.0) if packed.get("normal_strength") is not None else 1.0
     )
 
+    desc.ior_image_path = enc("ior_image_path")
+    desc.ior_image_colorspace = enc("ior_image_colorspace")
+    desc.ior_tex_vector_mode = int(packed.get("ior_tex_vector_mode", 0) or 0)
+    vec3("ior_map_location", "ior_map_location")
+    vec3("ior_map_rotation", "ior_map_rotation")
+    vec3("ior_map_scale", "ior_map_scale", (1.0, 1.0, 1.0))
+    desc.ior_map_type = int(
+        packed.get("ior_map_type", 2) if packed.get("ior_map_type") is not None else 2
+    )
+
+    desc.alpha_image_path = enc("alpha_image_path")
+    desc.alpha_image_colorspace = enc("alpha_image_colorspace")
+    desc.alpha_tex_vector_mode = int(packed.get("alpha_tex_vector_mode", 0) or 0)
+    vec3("alpha_map_location", "alpha_map_location")
+    vec3("alpha_map_rotation", "alpha_map_rotation")
+    vec3("alpha_map_scale", "alpha_map_scale", (1.0, 1.0, 1.0))
+    desc.alpha_map_type = int(
+        packed.get("alpha_map_type", 2) if packed.get("alpha_map_type") is not None else 2
+    )
+
 
 def make_qt_simple_scene_type():
     """ctypes Structure matching QT_SimpleScene in quanttrace.h."""
@@ -1100,6 +1148,20 @@ def make_qt_simple_scene_type():
             ("normal_map_scale", ctypes.c_float * 3),
             ("normal_map_type", ctypes.c_int),
             ("normal_strength", ctypes.c_float),
+            ("ior_image_path", ctypes.c_char_p),
+            ("ior_image_colorspace", ctypes.c_char_p),
+            ("ior_tex_vector_mode", ctypes.c_int),
+            ("ior_map_location", ctypes.c_float * 3),
+            ("ior_map_rotation", ctypes.c_float * 3),
+            ("ior_map_scale", ctypes.c_float * 3),
+            ("ior_map_type", ctypes.c_int),
+            ("alpha_image_path", ctypes.c_char_p),
+            ("alpha_image_colorspace", ctypes.c_char_p),
+            ("alpha_tex_vector_mode", ctypes.c_int),
+            ("alpha_map_location", ctypes.c_float * 3),
+            ("alpha_map_rotation", ctypes.c_float * 3),
+            ("alpha_map_scale", ctypes.c_float * 3),
+            ("alpha_map_type", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -1202,6 +1264,20 @@ def make_qt_scene_types():
             ("normal_map_scale", ctypes.c_float * 3),
             ("normal_map_type", ctypes.c_int),
             ("normal_strength", ctypes.c_float),
+            ("ior_image_path", ctypes.c_char_p),
+            ("ior_image_colorspace", ctypes.c_char_p),
+            ("ior_tex_vector_mode", ctypes.c_int),
+            ("ior_map_location", ctypes.c_float * 3),
+            ("ior_map_rotation", ctypes.c_float * 3),
+            ("ior_map_scale", ctypes.c_float * 3),
+            ("ior_map_type", ctypes.c_int),
+            ("alpha_image_path", ctypes.c_char_p),
+            ("alpha_image_colorspace", ctypes.c_char_p),
+            ("alpha_tex_vector_mode", ctypes.c_int),
+            ("alpha_map_location", ctypes.c_float * 3),
+            ("alpha_map_rotation", ctypes.c_float * 3),
+            ("alpha_map_scale", ctypes.c_float * 3),
+            ("alpha_map_type", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):
