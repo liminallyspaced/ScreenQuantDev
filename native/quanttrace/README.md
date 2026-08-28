@@ -1,10 +1,10 @@
-<!-- Slice 2u: Specular Tint / Thin Film / Subsurface TEX_IMAGE; version 0.0.22-slice2u -->
+<!-- Slice 2v: Subsurface IOR / Anisotropy / Diffuse Roughness TEX_IMAGE; version 0.0.23-slice2v -->
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.22-slice2u`.
+`-DQT_WITH_CYCLES=ON`. Native `0.0.23-slice2v`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -36,8 +36,9 @@ this tree never feeds Auto clocks.
 | **2s — Coat/Sheen extras TEX_IMAGE** | **PASS** | CoatRough/IOR/Tint + SheenRough/Tint. Native `0.0.20-slice2s`. |
 | **2t — Coat Normal Map TEX_IMAGE** | **PASS** | Coat Normal 256²/128 Δmax **3.58e-7**. Native `0.0.21-slice2t`. |
 | **2u — Specular Tint / Thin Film / Subsurface TEX_IMAGE** | **32/4 PASS; SSSWeight 256 1-px FAIL** | SpecTint 256²/128 Δmax **4.77e-7**; FilmThick 256²/128 Δmax **4.77e-7**; SSSWeight 32²/4 Δmax **8.34e-7** PASS, 256²/128 Δmax **0.00164** (1 px). Native `0.0.22-slice2u`. |
+| **2v — Subsurface IOR / Anisotropy / Diffuse Roughness TEX_IMAGE** | **32/4 PASS; SSSAniso 256 3-px FAIL** | SSSIOR 256²/128 Δmax **8.78e-4**; DiffuseRough 256²/128 Δmax **4.77e-7**; SSSAniso 32²/4 Δmax **2.74e-5** PASS, 256²/128 Δmax **0.0206** (3 px). Thin Wall BOOLEAN refused. Native `0.0.23-slice2v`. |
 
-Kitchens / HDR worlds / Subsurface IOR·Anisotropy / Thin Wall / Diffuse Roughness / Anisotropic / Tangent / Object·World Normal space / Bump / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
+Kitchens / HDR worlds / Thin Wall (BOOLEAN) / Anisotropic / Tangent / Object·World Normal space / Bump / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
 
 ## Build (Linux) — hello stub (default)
 
@@ -57,7 +58,7 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=1, session_probe=1, version 0.0.22-slice2u
+# ABI: is_tracer=1, session_probe=1, version 0.0.23-slice2v
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 blender --background --python tools/_quanttrace_f12_smoke.py -- \

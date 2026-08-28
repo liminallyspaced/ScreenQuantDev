@@ -23,8 +23,10 @@
 # Slice 2t: Principled.Coat Normal ← Normal Map (Tangent) ← TEX_IMAGE Color
 #   (same Vector rules as Normal). Object/World/Bump/linked Strength still refuse.
 # Slice 2u: TEX_IMAGE → Principled Specular Tint / Thin Film Thickness+IOR /
-#   Subsurface Weight / Radius / Scale. Subsurface IOR/Anisotropy still refuse.
-#   Other linked sockets / HDR worlds refuse.
+#   Subsurface Weight / Radius / Scale.
+# Slice 2v: TEX_IMAGE → Principled Subsurface IOR / Subsurface Anisotropy /
+#   Diffuse Roughness. Thin Wall is BOOLEAN in 5.2 — packer refuses TEX_IMAGE.
+#   Anisotropic/Tangent/Bump still refuse. Other linked sockets / HDR worlds refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -356,7 +358,7 @@ def _tex_image_from_base_color(sock) -> dict:
 
 
 def _prefix_tex(info: dict, prefix: str) -> dict:
-    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_/spec_tint_/film_thick_/film_ior_/sss_weight_/sss_radius_/sss_scale_ (or keep for base)."""
+    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_/spec_tint_/film_thick_/film_ior_/sss_weight_/sss_radius_/sss_scale_/sss_ior_/sss_aniso_/thin_wall_/diffuse_rough_ (or keep for base)."""
     if not prefix:
         return dict(info)
     return {
@@ -437,7 +439,11 @@ def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal
 
 
 def _input_by_names(bsdf, *names):
-    """First matching Principled input (Blender 5.x name, then legacy)."""
+    """First matching Principled input (Blender 5.x name, then legacy).
+
+    Keyed get can miss panel-unavailable sockets (e.g. Subsurface IOR when
+    subsurface_method != RANDOM_WALK_SKIN); fall back to iterating inputs.
+    """
     inputs = getattr(bsdf, "inputs", None)
     if inputs is None:
         return None, None
@@ -446,6 +452,9 @@ def _input_by_names(bsdf, *names):
         sock = getter(name) if callable(getter) else None
         if sock is not None:
             return name, sock
+        for s in inputs:
+            if getattr(s, "name", None) == name or getattr(s, "identifier", None) == name:
+                return name, s
     return None, None
 
 
@@ -481,6 +490,10 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(_empty_tex_info(), "sss_weight_"),
         **_prefix_tex(_empty_tex_info(), "sss_radius_"),
         **_prefix_tex(_empty_tex_info(), "sss_scale_"),
+        **_prefix_tex(_empty_tex_info(), "sss_ior_"),
+        **_prefix_tex(_empty_tex_info(), "sss_aniso_"),
+        **_prefix_tex(_empty_tex_info(), "thin_wall_"),
+        **_prefix_tex(_empty_tex_info(), "diffuse_rough_"),
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -517,6 +530,9 @@ def _principled_from_material(mat) -> dict:
     sss_weight_tex = _empty_tex_info()
     sss_radius_tex = _empty_tex_info()
     sss_scale_tex = _empty_tex_info()
+    sss_ior_tex = _empty_tex_info()
+    sss_aniso_tex = _empty_tex_info()
+    diffuse_rough_tex = _empty_tex_info()
     # 5.x names first; legacy Transmission / Specular / Coat / Sheen / Emission accepted.
     allowed = (
         ("Base Color", ("Base Color",), "base"),
@@ -541,6 +557,9 @@ def _principled_from_material(mat) -> dict:
         ("Subsurface Weight", ("Subsurface Weight", "Subsurface"), "sss_weight"),
         ("Subsurface Radius", ("Subsurface Radius",), "sss_radius"),
         ("Subsurface Scale", ("Subsurface Scale",), "sss_scale"),
+        ("Subsurface IOR", ("Subsurface IOR",), "sss_ior"),
+        ("Subsurface Anisotropy", ("Subsurface Anisotropy",), "sss_aniso"),
+        ("Diffuse Roughness", ("Diffuse Roughness",), "diffuse_rough"),
     )
     for label, names, kind in allowed:
         _name, sock = _input_by_names(bsdf, *names)
@@ -591,6 +610,18 @@ def _principled_from_material(mat) -> dict:
             sss_radius_tex = tex
         elif kind == "sss_scale":
             sss_scale_tex = tex
+        elif kind == "sss_ior":
+            sss_ior_tex = tex
+        elif kind == "sss_aniso":
+            sss_aniso_tex = tex
+        elif kind == "diffuse_rough":
+            diffuse_rough_tex = tex
+    # Thin Wall is BOOLEAN in Blender 5.2 — not a TEX_IMAGE-mappable float.
+    _tw_name, thin_wall_sock = _input_by_names(bsdf, "Thin Wall")
+    if thin_wall_sock is not None and getattr(thin_wall_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Principled.Thin Wall is BOOLEAN (Slice 2v refuses TEX_IMAGE; not a float socket)"
+        )
     _cn_name, coat_n_sock = _input_by_names(bsdf, "Coat Normal")
     coat_normal_info = _normal_map_from_sock(
         coat_n_sock, prefix="coat_normal_", label="Coat Normal"
@@ -627,6 +658,10 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(sss_weight_tex, "sss_weight_"),
         **_prefix_tex(sss_radius_tex, "sss_radius_"),
         **_prefix_tex(sss_scale_tex, "sss_scale_"),
+        **_prefix_tex(sss_ior_tex, "sss_ior_"),
+        **_prefix_tex(sss_aniso_tex, "sss_aniso_"),
+        **_prefix_tex(_empty_tex_info(), "thin_wall_"),
+        **_prefix_tex(diffuse_rough_tex, "diffuse_rough_"),
     }
 
 
@@ -786,7 +821,7 @@ def classify_simple(scene) -> dict:
 
 
 def _pack_tex_fields(pr: dict) -> dict:
-    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal/spec_tint/film_thick/film_ior/sss_weight/sss_radius/sss_scale TEX_IMAGE fields."""
+    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal/spec_tint/film_thick/film_ior/sss_weight/sss_radius/sss_scale/sss_ior/sss_aniso/thin_wall/diffuse_rough TEX_IMAGE fields."""
     def loc(key, default):
         return list(pr.get(key) or default)
     out = {
@@ -960,6 +995,34 @@ def _pack_tex_fields(pr: dict) -> dict:
         "sss_scale_map_rotation": loc("sss_scale_map_rotation", (0.0, 0.0, 0.0)),
         "sss_scale_map_scale": loc("sss_scale_map_scale", (1.0, 1.0, 1.0)),
         "sss_scale_map_type": int(pr.get("sss_scale_map_type", 2) if pr.get("sss_scale_map_type") is not None else 2),
+        "sss_ior_image_path": pr.get("sss_ior_image_path") or "",
+        "sss_ior_image_colorspace": pr.get("sss_ior_image_colorspace") or "",
+        "sss_ior_tex_vector_mode": int(pr.get("sss_ior_tex_vector_mode", 0) or 0),
+        "sss_ior_map_location": loc("sss_ior_map_location", (0.0, 0.0, 0.0)),
+        "sss_ior_map_rotation": loc("sss_ior_map_rotation", (0.0, 0.0, 0.0)),
+        "sss_ior_map_scale": loc("sss_ior_map_scale", (1.0, 1.0, 1.0)),
+        "sss_ior_map_type": int(pr.get("sss_ior_map_type", 2) if pr.get("sss_ior_map_type") is not None else 2),
+        "sss_aniso_image_path": pr.get("sss_aniso_image_path") or "",
+        "sss_aniso_image_colorspace": pr.get("sss_aniso_image_colorspace") or "",
+        "sss_aniso_tex_vector_mode": int(pr.get("sss_aniso_tex_vector_mode", 0) or 0),
+        "sss_aniso_map_location": loc("sss_aniso_map_location", (0.0, 0.0, 0.0)),
+        "sss_aniso_map_rotation": loc("sss_aniso_map_rotation", (0.0, 0.0, 0.0)),
+        "sss_aniso_map_scale": loc("sss_aniso_map_scale", (1.0, 1.0, 1.0)),
+        "sss_aniso_map_type": int(pr.get("sss_aniso_map_type", 2) if pr.get("sss_aniso_map_type") is not None else 2),
+        "thin_wall_image_path": pr.get("thin_wall_image_path") or "",
+        "thin_wall_image_colorspace": pr.get("thin_wall_image_colorspace") or "",
+        "thin_wall_tex_vector_mode": int(pr.get("thin_wall_tex_vector_mode", 0) or 0),
+        "thin_wall_map_location": loc("thin_wall_map_location", (0.0, 0.0, 0.0)),
+        "thin_wall_map_rotation": loc("thin_wall_map_rotation", (0.0, 0.0, 0.0)),
+        "thin_wall_map_scale": loc("thin_wall_map_scale", (1.0, 1.0, 1.0)),
+        "thin_wall_map_type": int(pr.get("thin_wall_map_type", 2) if pr.get("thin_wall_map_type") is not None else 2),
+        "diffuse_rough_image_path": pr.get("diffuse_rough_image_path") or "",
+        "diffuse_rough_image_colorspace": pr.get("diffuse_rough_image_colorspace") or "",
+        "diffuse_rough_tex_vector_mode": int(pr.get("diffuse_rough_tex_vector_mode", 0) or 0),
+        "diffuse_rough_map_location": loc("diffuse_rough_map_location", (0.0, 0.0, 0.0)),
+        "diffuse_rough_map_rotation": loc("diffuse_rough_map_rotation", (0.0, 0.0, 0.0)),
+        "diffuse_rough_map_scale": loc("diffuse_rough_map_scale", (1.0, 1.0, 1.0)),
+        "diffuse_rough_map_type": int(pr.get("diffuse_rough_map_type", 2) if pr.get("diffuse_rough_map_type") is not None else 2),
     }
     return out
 
@@ -990,6 +1053,10 @@ def _any_tex_path(pr: dict) -> bool:
         or (pr.get("sss_weight_image_path") or "")
         or (pr.get("sss_radius_image_path") or "")
         or (pr.get("sss_scale_image_path") or "")
+        or (pr.get("sss_ior_image_path") or "")
+        or (pr.get("sss_aniso_image_path") or "")
+        or (pr.get("thin_wall_image_path") or "")
+        or (pr.get("diffuse_rough_image_path") or "")
     )
 
 
@@ -1546,6 +1613,46 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("sss_scale_map_type", 2) if packed.get("sss_scale_map_type") is not None else 2
     )
 
+    desc.sss_ior_image_path = enc("sss_ior_image_path")
+    desc.sss_ior_image_colorspace = enc("sss_ior_image_colorspace")
+    desc.sss_ior_tex_vector_mode = int(packed.get("sss_ior_tex_vector_mode", 0) or 0)
+    vec3("sss_ior_map_location", "sss_ior_map_location")
+    vec3("sss_ior_map_rotation", "sss_ior_map_rotation")
+    vec3("sss_ior_map_scale", "sss_ior_map_scale", (1.0, 1.0, 1.0))
+    desc.sss_ior_map_type = int(
+        packed.get("sss_ior_map_type", 2) if packed.get("sss_ior_map_type") is not None else 2
+    )
+
+    desc.sss_aniso_image_path = enc("sss_aniso_image_path")
+    desc.sss_aniso_image_colorspace = enc("sss_aniso_image_colorspace")
+    desc.sss_aniso_tex_vector_mode = int(packed.get("sss_aniso_tex_vector_mode", 0) or 0)
+    vec3("sss_aniso_map_location", "sss_aniso_map_location")
+    vec3("sss_aniso_map_rotation", "sss_aniso_map_rotation")
+    vec3("sss_aniso_map_scale", "sss_aniso_map_scale", (1.0, 1.0, 1.0))
+    desc.sss_aniso_map_type = int(
+        packed.get("sss_aniso_map_type", 2) if packed.get("sss_aniso_map_type") is not None else 2
+    )
+
+    desc.thin_wall_image_path = enc("thin_wall_image_path")
+    desc.thin_wall_image_colorspace = enc("thin_wall_image_colorspace")
+    desc.thin_wall_tex_vector_mode = int(packed.get("thin_wall_tex_vector_mode", 0) or 0)
+    vec3("thin_wall_map_location", "thin_wall_map_location")
+    vec3("thin_wall_map_rotation", "thin_wall_map_rotation")
+    vec3("thin_wall_map_scale", "thin_wall_map_scale", (1.0, 1.0, 1.0))
+    desc.thin_wall_map_type = int(
+        packed.get("thin_wall_map_type", 2) if packed.get("thin_wall_map_type") is not None else 2
+    )
+
+    desc.diffuse_rough_image_path = enc("diffuse_rough_image_path")
+    desc.diffuse_rough_image_colorspace = enc("diffuse_rough_image_colorspace")
+    desc.diffuse_rough_tex_vector_mode = int(packed.get("diffuse_rough_tex_vector_mode", 0) or 0)
+    vec3("diffuse_rough_map_location", "diffuse_rough_map_location")
+    vec3("diffuse_rough_map_rotation", "diffuse_rough_map_rotation")
+    vec3("diffuse_rough_map_scale", "diffuse_rough_map_scale", (1.0, 1.0, 1.0))
+    desc.diffuse_rough_map_type = int(
+        packed.get("diffuse_rough_map_type", 2) if packed.get("diffuse_rough_map_type") is not None else 2
+    )
+
 
 def make_qt_simple_scene_type():
     """ctypes Structure matching QT_SimpleScene in quanttrace.h."""
@@ -1748,6 +1855,34 @@ def make_qt_simple_scene_type():
             ("sss_scale_map_rotation", ctypes.c_float * 3),
             ("sss_scale_map_scale", ctypes.c_float * 3),
             ("sss_scale_map_type", ctypes.c_int),
+            ("sss_ior_image_path", ctypes.c_char_p),
+            ("sss_ior_image_colorspace", ctypes.c_char_p),
+            ("sss_ior_tex_vector_mode", ctypes.c_int),
+            ("sss_ior_map_location", ctypes.c_float * 3),
+            ("sss_ior_map_rotation", ctypes.c_float * 3),
+            ("sss_ior_map_scale", ctypes.c_float * 3),
+            ("sss_ior_map_type", ctypes.c_int),
+            ("sss_aniso_image_path", ctypes.c_char_p),
+            ("sss_aniso_image_colorspace", ctypes.c_char_p),
+            ("sss_aniso_tex_vector_mode", ctypes.c_int),
+            ("sss_aniso_map_location", ctypes.c_float * 3),
+            ("sss_aniso_map_rotation", ctypes.c_float * 3),
+            ("sss_aniso_map_scale", ctypes.c_float * 3),
+            ("sss_aniso_map_type", ctypes.c_int),
+            ("thin_wall_image_path", ctypes.c_char_p),
+            ("thin_wall_image_colorspace", ctypes.c_char_p),
+            ("thin_wall_tex_vector_mode", ctypes.c_int),
+            ("thin_wall_map_location", ctypes.c_float * 3),
+            ("thin_wall_map_rotation", ctypes.c_float * 3),
+            ("thin_wall_map_scale", ctypes.c_float * 3),
+            ("thin_wall_map_type", ctypes.c_int),
+            ("diffuse_rough_image_path", ctypes.c_char_p),
+            ("diffuse_rough_image_colorspace", ctypes.c_char_p),
+            ("diffuse_rough_tex_vector_mode", ctypes.c_int),
+            ("diffuse_rough_map_location", ctypes.c_float * 3),
+            ("diffuse_rough_map_rotation", ctypes.c_float * 3),
+            ("diffuse_rough_map_scale", ctypes.c_float * 3),
+            ("diffuse_rough_map_type", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -1991,6 +2126,34 @@ def make_qt_scene_types():
             ("sss_scale_map_rotation", ctypes.c_float * 3),
             ("sss_scale_map_scale", ctypes.c_float * 3),
             ("sss_scale_map_type", ctypes.c_int),
+            ("sss_ior_image_path", ctypes.c_char_p),
+            ("sss_ior_image_colorspace", ctypes.c_char_p),
+            ("sss_ior_tex_vector_mode", ctypes.c_int),
+            ("sss_ior_map_location", ctypes.c_float * 3),
+            ("sss_ior_map_rotation", ctypes.c_float * 3),
+            ("sss_ior_map_scale", ctypes.c_float * 3),
+            ("sss_ior_map_type", ctypes.c_int),
+            ("sss_aniso_image_path", ctypes.c_char_p),
+            ("sss_aniso_image_colorspace", ctypes.c_char_p),
+            ("sss_aniso_tex_vector_mode", ctypes.c_int),
+            ("sss_aniso_map_location", ctypes.c_float * 3),
+            ("sss_aniso_map_rotation", ctypes.c_float * 3),
+            ("sss_aniso_map_scale", ctypes.c_float * 3),
+            ("sss_aniso_map_type", ctypes.c_int),
+            ("thin_wall_image_path", ctypes.c_char_p),
+            ("thin_wall_image_colorspace", ctypes.c_char_p),
+            ("thin_wall_tex_vector_mode", ctypes.c_int),
+            ("thin_wall_map_location", ctypes.c_float * 3),
+            ("thin_wall_map_rotation", ctypes.c_float * 3),
+            ("thin_wall_map_scale", ctypes.c_float * 3),
+            ("thin_wall_map_type", ctypes.c_int),
+            ("diffuse_rough_image_path", ctypes.c_char_p),
+            ("diffuse_rough_image_colorspace", ctypes.c_char_p),
+            ("diffuse_rough_tex_vector_mode", ctypes.c_int),
+            ("diffuse_rough_map_location", ctypes.c_float * 3),
+            ("diffuse_rough_map_rotation", ctypes.c_float * 3),
+            ("diffuse_rough_map_scale", ctypes.c_float * 3),
+            ("diffuse_rough_map_type", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):

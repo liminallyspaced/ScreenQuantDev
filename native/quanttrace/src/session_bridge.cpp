@@ -429,6 +429,34 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->sss_scale_map_rotation, s->sss_scale_map_rotation, sizeof(mesh->sss_scale_map_rotation));
     std::memcpy(mesh->sss_scale_map_scale, s->sss_scale_map_scale, sizeof(mesh->sss_scale_map_scale));
     mesh->sss_scale_map_type = s->sss_scale_map_type;
+    mesh->sss_ior_image_path = s->sss_ior_image_path;
+    mesh->sss_ior_image_colorspace = s->sss_ior_image_colorspace;
+    mesh->sss_ior_tex_vector_mode = s->sss_ior_tex_vector_mode;
+    std::memcpy(mesh->sss_ior_map_location, s->sss_ior_map_location, sizeof(mesh->sss_ior_map_location));
+    std::memcpy(mesh->sss_ior_map_rotation, s->sss_ior_map_rotation, sizeof(mesh->sss_ior_map_rotation));
+    std::memcpy(mesh->sss_ior_map_scale, s->sss_ior_map_scale, sizeof(mesh->sss_ior_map_scale));
+    mesh->sss_ior_map_type = s->sss_ior_map_type;
+    mesh->sss_aniso_image_path = s->sss_aniso_image_path;
+    mesh->sss_aniso_image_colorspace = s->sss_aniso_image_colorspace;
+    mesh->sss_aniso_tex_vector_mode = s->sss_aniso_tex_vector_mode;
+    std::memcpy(mesh->sss_aniso_map_location, s->sss_aniso_map_location, sizeof(mesh->sss_aniso_map_location));
+    std::memcpy(mesh->sss_aniso_map_rotation, s->sss_aniso_map_rotation, sizeof(mesh->sss_aniso_map_rotation));
+    std::memcpy(mesh->sss_aniso_map_scale, s->sss_aniso_map_scale, sizeof(mesh->sss_aniso_map_scale));
+    mesh->sss_aniso_map_type = s->sss_aniso_map_type;
+    mesh->thin_wall_image_path = s->thin_wall_image_path;
+    mesh->thin_wall_image_colorspace = s->thin_wall_image_colorspace;
+    mesh->thin_wall_tex_vector_mode = s->thin_wall_tex_vector_mode;
+    std::memcpy(mesh->thin_wall_map_location, s->thin_wall_map_location, sizeof(mesh->thin_wall_map_location));
+    std::memcpy(mesh->thin_wall_map_rotation, s->thin_wall_map_rotation, sizeof(mesh->thin_wall_map_rotation));
+    std::memcpy(mesh->thin_wall_map_scale, s->thin_wall_map_scale, sizeof(mesh->thin_wall_map_scale));
+    mesh->thin_wall_map_type = s->thin_wall_map_type;
+    mesh->diffuse_rough_image_path = s->diffuse_rough_image_path;
+    mesh->diffuse_rough_image_colorspace = s->diffuse_rough_image_colorspace;
+    mesh->diffuse_rough_tex_vector_mode = s->diffuse_rough_tex_vector_mode;
+    std::memcpy(mesh->diffuse_rough_map_location, s->diffuse_rough_map_location, sizeof(mesh->diffuse_rough_map_location));
+    std::memcpy(mesh->diffuse_rough_map_rotation, s->diffuse_rough_map_rotation, sizeof(mesh->diffuse_rough_map_rotation));
+    std::memcpy(mesh->diffuse_rough_map_scale, s->diffuse_rough_map_scale, sizeof(mesh->diffuse_rough_map_scale));
+    mesh->diffuse_rough_map_type = s->diffuse_rough_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -534,7 +562,11 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->film_ior_tex_vector_mode) ||
            tex_mode_is_generated(m->sss_weight_tex_vector_mode) ||
            tex_mode_is_generated(m->sss_radius_tex_vector_mode) ||
-           tex_mode_is_generated(m->sss_scale_tex_vector_mode);
+           tex_mode_is_generated(m->sss_scale_tex_vector_mode) ||
+           tex_mode_is_generated(m->sss_ior_tex_vector_mode) ||
+           tex_mode_is_generated(m->sss_aniso_tex_vector_mode) ||
+           tex_mode_is_generated(m->thin_wall_tex_vector_mode) ||
+           tex_mode_is_generated(m->diffuse_rough_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -893,8 +925,43 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->sss_scale_map_rotation, m->sss_scale_map_scale, m->sss_scale_map_type);
         graph->connect(img->output("Color"), bsdf->input("Subsurface Scale"));
     }
+    /* Slice 2v: Subsurface IOR / Anisotropy / Diffuse Roughness via NODE_CONVERT_CF.
+     * Thin Wall ABI reserved (BOOLEAN); Color→Int CONVERT_CI if path set.
+     * Pin subsurface_weight=1 when IOR/Anisotropy map and Weight is unmapped. */
+    if (m->sss_ior_image_path && m->sss_ior_image_path[0]) {
+        /* Blender 5.2 exposes Subsurface IOR only for RANDOM_WALK_SKIN. */
+        bsdf->set_subsurface_method(CLOSURE_BSSRDF_RANDOM_WALK_SKIN_ID);
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->sss_ior_image_path, m->sss_ior_image_colorspace,
+            m->sss_ior_tex_vector_mode, m->sss_ior_map_location,
+            m->sss_ior_map_rotation, m->sss_ior_map_scale, m->sss_ior_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Subsurface IOR"));
+    }
+    if (m->sss_aniso_image_path && m->sss_aniso_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->sss_aniso_image_path, m->sss_aniso_image_colorspace,
+            m->sss_aniso_tex_vector_mode, m->sss_aniso_map_location,
+            m->sss_aniso_map_rotation, m->sss_aniso_map_scale, m->sss_aniso_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Subsurface Anisotropy"));
+    }
+    if (m->thin_wall_image_path && m->thin_wall_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->thin_wall_image_path, m->thin_wall_image_colorspace,
+            m->thin_wall_tex_vector_mode, m->thin_wall_map_location,
+            m->thin_wall_map_rotation, m->thin_wall_map_scale, m->thin_wall_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Thin Wall"));
+    }
+    if (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->diffuse_rough_image_path, m->diffuse_rough_image_colorspace,
+            m->diffuse_rough_tex_vector_mode, m->diffuse_rough_map_location,
+            m->diffuse_rough_map_rotation, m->diffuse_rough_map_scale, m->diffuse_rough_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Diffuse Roughness"));
+    }
     if (((m->sss_radius_image_path && m->sss_radius_image_path[0]) ||
-         (m->sss_scale_image_path && m->sss_scale_image_path[0])) &&
+         (m->sss_scale_image_path && m->sss_scale_image_path[0]) ||
+         (m->sss_ior_image_path && m->sss_ior_image_path[0]) ||
+         (m->sss_aniso_image_path && m->sss_aniso_image_path[0])) &&
         !(m->sss_weight_image_path && m->sss_weight_image_path[0])) {
         bsdf->set_subsurface_weight(1.0f);
     }
@@ -988,7 +1055,11 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->film_ior_image_path && m->film_ior_image_path[0]) ||
         (m->sss_weight_image_path && m->sss_weight_image_path[0]) ||
         (m->sss_radius_image_path && m->sss_radius_image_path[0]) ||
-        (m->sss_scale_image_path && m->sss_scale_image_path[0]);
+        (m->sss_scale_image_path && m->sss_scale_image_path[0]) ||
+        (m->sss_ior_image_path && m->sss_ior_image_path[0]) ||
+        (m->sss_aniso_image_path && m->sss_aniso_image_path[0]) ||
+        (m->thin_wall_image_path && m->thin_wall_image_path[0]) ||
+        (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
@@ -1265,7 +1336,11 @@ static int run_qt_session(const QT_Scene *desc,
             (m->film_ior_image_path && m->film_ior_image_path[0]) ||
             (m->sss_weight_image_path && m->sss_weight_image_path[0]) ||
             (m->sss_radius_image_path && m->sss_radius_image_path[0]) ||
-            (m->sss_scale_image_path && m->sss_scale_image_path[0]);
+            (m->sss_scale_image_path && m->sss_scale_image_path[0]) ||
+        (m->sss_ior_image_path && m->sss_ior_image_path[0]) ||
+        (m->sss_aniso_image_path && m->sss_aniso_image_path[0]) ||
+        (m->thin_wall_image_path && m->thin_wall_image_path[0]) ||
+        (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]);
         if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;

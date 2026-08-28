@@ -1,13 +1,60 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2u landed** (2026-08-28 9am PlugWalk ET). Principled Specular Tint / Thin Film Thickness+IOR / Subsurface Weight+Radius+Scale TEX_IMAGE. SpecTint 32²/4 Δmax=4.77e-7; 256²/128 Δmax=4.77e-7 PASS. FilmThick 256²/128 Δmax=4.77e-7 PASS. SSSWeight 32²/4 PASS; 256²/128 1px Δmax=0.00164 FAIL (noise-class, documented). Coat Weight 32²/4 regression Δmax=2.38e-7 PASS. `is_tracer=1`. Native `0.0.22-slice2u`.
+Status: **Slice 2v landed** (2026-08-28 10am PlugWalk ET). Principled Subsurface IOR / Subsurface Anisotropy / Diffuse Roughness TEX_IMAGE. Thin Wall is BOOLEAN in Blender 5.2 — ABI reserved, packer refuses. SSSIOR 32²/4 Δmax=5.96e-7; 256²/128 Δmax=8.78e-4 PASS. SSSAniso 32²/4 Δmax=2.74e-5 PASS; 256²/128 Δmax=0.0206 FAIL (3 px, SSS noise-class, documented). DiffuseRough 32²/4 Δmax=3.58e-7; 256²/128 Δmax=4.77e-7 PASS. Combo 32²/4 PASS. Coat Weight + SpecTint 32²/4 regressions PASS. `is_tracer=1`. Native `0.0.23-slice2v`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
+
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 
 `is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
+
+
+---
+
+## 10am PlugWalk (2026-08-28) — Subsurface IOR / Anisotropy / Diffuse Roughness TEX_IMAGE (Slice 2v)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `sss_ior_` / `sss_aniso_` / `thin_wall_` / `diffuse_rough_` on `QT_Mesh` + `QT_SimpleScene` |
+| Python | `sync._principled_from_material` accepts Subsurface IOR / Subsurface Anisotropy / Diffuse Roughness (Non-Color gray checker). **Thin Wall** linked → `QuantTraceSyncError` (BOOLEAN in 5.2, not a float socket) |
+| Native | Color→float via NODE_CONVERT_CF into Subsurface IOR / Anisotropy / Diffuse Roughness. Thin Wall Color→Int reserved if path set. Pins `set_subsurface_weight(1.0)` when IOR/Anisotropy map and Weight is unmapped. Pins `set_subsurface_method(RANDOM_WALK_SKIN)` when Subsurface IOR maps (Blender 5.2 only exposes that socket for Skin) |
+| Version | `0.0.23-slice2v` |
+| Tools | `tools/_quanttrace_slice2v_scene.py`, `tools/_quanttrace_slice2v_smoke.py` |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Socket | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| SSSIOR | 32² / 4 | **5.96e-7** | 6.75e-9 | **PASS** |
+| SSSIOR | 256² / 128 | **8.78e-4** | 3.13e-8 | **PASS** |
+| SSSAniso | 32² / 4 | **2.74e-5** | 6.18e-8 | **PASS** |
+| SSSAniso | 256² / 128 | **0.0206** | 1.70e-7 | **FAIL** (3 px / 65536) |
+| DiffuseRough | 32² / 4 | **3.58e-7** | 5.84e-9 | **PASS** |
+| DiffuseRough | 256² / 128 | **4.77e-7** | 3.93e-9 | **PASS** |
+| Combo (SSSIOR+DiffuseRough) | 32² / 4 | **5.96e-7** | 6.75e-9 | **PASS** |
+| Coat Weight (2q regression) | 32² / 4 | **2.38e-7** | 4.71e-9 | **PASS** |
+| SpecTint (2u regression) | 32² / 4 | **4.77e-7** | 5.58e-9 | **PASS** |
+
+SSSAniso 256² leftover: 3 pixels (1 ≥1e-2) at peak (119,111). MAE 1.7e-7. Same SSS noise-class silhouette residue as SSSWeight / still-life 256² — not claimed fixed. Bisect: TEX path 32 PASS; unlinked constant Anisotropy is not synced (Session defaults 0; out of TEX scope).
+
+### Honesty
+
+- Thin Wall is BOOLEAN in Blender 5.2 Principled — packer refuses TEX_IMAGE (ABI field reserved only).
+- Anisotropic / Tangent / Bump / Object/World Normal space / linked Strength / HDR / kitchens / Object-with-pointer / packed-only / linked Mapping L/R/S still refuse.
+- Still-life 256² 1px + SSSWeight 256² 1px + SSSAniso 256² 3px noise-class residue still documented (not claimed fixed).
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Anisotropic / Tangent, Bump, Thin Wall boolean path, close still-life / SSSWeight / SSSAniso 256² SSS noise residue. Not ReSTIR. Not Classroom time %.
+
 
 
 ---

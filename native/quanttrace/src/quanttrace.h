@@ -21,6 +21,9 @@
  * Slice 2t: Normal Map (Tangent) + TEX_IMAGE → Principled Coat Normal.
  * Slice 2u: TEX_IMAGE → Principled Specular Tint / Thin Film Thickness+IOR /
  *   Subsurface Weight / Radius / Scale.
+ * Slice 2v: TEX_IMAGE → Principled Subsurface IOR / Subsurface Anisotropy /
+ *   Diffuse Roughness. Thin Wall is BOOLEAN in Blender 5.2 — ABI reserved,
+ *   packer refuses TEX_IMAGE (not a float socket).
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -297,6 +300,38 @@ typedef struct QT_SimpleScene {
   float sss_scale_map_rotation[3];
   float sss_scale_map_scale[3];
   int sss_scale_map_type;
+  /* Slice 2v: Subsurface IOR TEX_IMAGE (NULL/empty = constant 1.4) */
+  const char *sss_ior_image_path;
+  const char *sss_ior_image_colorspace;
+  int sss_ior_tex_vector_mode;
+  float sss_ior_map_location[3];
+  float sss_ior_map_rotation[3];
+  float sss_ior_map_scale[3];
+  int sss_ior_map_type;
+  /* Slice 2v: Subsurface Anisotropy TEX_IMAGE (NULL/empty = constant 0) */
+  const char *sss_aniso_image_path;
+  const char *sss_aniso_image_colorspace;
+  int sss_aniso_tex_vector_mode;
+  float sss_aniso_map_location[3];
+  float sss_aniso_map_rotation[3];
+  float sss_aniso_map_scale[3];
+  int sss_aniso_map_type;
+  /* Slice 2v: Thin Wall TEX_IMAGE reserved (BOOLEAN in 5.2; packer refuses) */
+  const char *thin_wall_image_path;
+  const char *thin_wall_image_colorspace;
+  int thin_wall_tex_vector_mode;
+  float thin_wall_map_location[3];
+  float thin_wall_map_rotation[3];
+  float thin_wall_map_scale[3];
+  int thin_wall_map_type;
+  /* Slice 2v: Diffuse Roughness TEX_IMAGE (NULL/empty = constant 0) */
+  const char *diffuse_rough_image_path;
+  const char *diffuse_rough_image_colorspace;
+  int diffuse_rough_tex_vector_mode;
+  float diffuse_rough_map_location[3];
+  float diffuse_rough_map_rotation[3];
+  float diffuse_rough_map_scale[3];
+  int diffuse_rough_map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -516,6 +551,38 @@ typedef struct QT_Mesh {
   float sss_scale_map_rotation[3];
   float sss_scale_map_scale[3];
   int sss_scale_map_type;
+  /* Slice 2v: Subsurface IOR TEX_IMAGE (NULL/empty = constant 1.4) */
+  const char *sss_ior_image_path;
+  const char *sss_ior_image_colorspace;
+  int sss_ior_tex_vector_mode;
+  float sss_ior_map_location[3];
+  float sss_ior_map_rotation[3];
+  float sss_ior_map_scale[3];
+  int sss_ior_map_type;
+  /* Slice 2v: Subsurface Anisotropy TEX_IMAGE (NULL/empty = constant 0) */
+  const char *sss_aniso_image_path;
+  const char *sss_aniso_image_colorspace;
+  int sss_aniso_tex_vector_mode;
+  float sss_aniso_map_location[3];
+  float sss_aniso_map_rotation[3];
+  float sss_aniso_map_scale[3];
+  int sss_aniso_map_type;
+  /* Slice 2v: Thin Wall TEX_IMAGE reserved (BOOLEAN in 5.2; packer refuses) */
+  const char *thin_wall_image_path;
+  const char *thin_wall_image_colorspace;
+  int thin_wall_tex_vector_mode;
+  float thin_wall_map_location[3];
+  float thin_wall_map_rotation[3];
+  float thin_wall_map_scale[3];
+  int thin_wall_map_type;
+  /* Slice 2v: Diffuse Roughness TEX_IMAGE (NULL/empty = constant 0) */
+  const char *diffuse_rough_image_path;
+  const char *diffuse_rough_image_colorspace;
+  int diffuse_rough_tex_vector_mode;
+  float diffuse_rough_map_location[3];
+  float diffuse_rough_map_rotation[3];
+  float diffuse_rough_map_scale[3];
+  int diffuse_rough_map_type;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
