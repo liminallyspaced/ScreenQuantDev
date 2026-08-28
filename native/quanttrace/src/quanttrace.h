@@ -6,6 +6,7 @@
  * Slice 2c: multi-mesh + multi-AREA (constant Principled per mesh).
  * Slice 2f: optional TEX_IMAGE on Principled Base Color + corner UVs.
  * Slice 2g: SPOT (spot_size/spot_blend + soft radius / is_sphere).
+ * Slice 2h: TEX_COORD UV + Mapping → TEX_IMAGE Vector.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -91,6 +92,11 @@ typedef struct QT_SimpleScene {
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
   const char *image_colorspace; /* OCIO name; NULL = node default */
+  int tex_vector_mode;
+  float map_location[3];
+  float map_rotation[3];
+  float map_scale[3];
+  int map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -118,6 +124,12 @@ typedef struct QT_Mesh {
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
   const char *image_colorspace; /* OCIO name from Image.colorspace_settings */
+  /* Slice 2h: TEX_IMAGE Vector graph */
+  int tex_vector_mode; /* QT_TEX_VECTOR_* */
+  float map_location[3];
+  float map_rotation[3];
+  float map_scale[3];
+  int map_type; /* NODE_MAPPING_TYPE_*: 0 POINT, 1 TEXTURE, 2 VECTOR, 3 NORMAL */
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
@@ -125,6 +137,12 @@ typedef struct QT_Mesh {
 #define QT_LIGHT_POINT 1
 #define QT_LIGHT_SUN   2
 #define QT_LIGHT_SPOT  3
+
+/* TEX_IMAGE Vector graph (Slice 2h) */
+#define QT_TEX_VECTOR_UNLINKED  0 /* default UV via unlinked Vector */
+#define QT_TEX_VECTOR_TEXCOORD  1 /* TEX_COORD UV → TEX_IMAGE Vector */
+#define QT_TEX_VECTOR_MAPPING   2 /* TEX_COORD UV → Mapping → TEX_IMAGE */
+
 
 typedef struct QT_Light {
   float tfm[12]; /* object matrix_world 3x4 (AREA/SPOT emit -Z; SUN dir -Z) */

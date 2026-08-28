@@ -10,6 +10,7 @@
  * packed by Python depsgraph walk (camera/mesh/Principled/area/world).
  * Slice 2c: quanttrace_render_qt_scene_rgba — N meshes + N lights.
  * Slice 2g: SPOT (spot_size/spot_blend).
+ * Slice 2h: TEX_COORD UV + Mapping → TEX_IMAGE Vector.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -246,6 +247,11 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->uvs = s->uvs;
     mesh->image_path = s->image_path;
     mesh->image_colorspace = s->image_colorspace;
+    mesh->tex_vector_mode = s->tex_vector_mode;
+    std::memcpy(mesh->map_location, s->map_location, sizeof(mesh->map_location));
+    std::memcpy(mesh->map_rotation, s->map_rotation, sizeof(mesh->map_rotation));
+    std::memcpy(mesh->map_scale, s->map_scale, sizeof(mesh->map_scale));
+    mesh->map_type = s->map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -286,8 +292,10 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f: TEX_IMAGE → Base Color. Vector stays unlinked so SVM
-     * LINK_TEXTURE_UV requests ATTR_STD_UV (Blender default UV). */
+    /* Slice 2f/2h: TEX_IMAGE → Base Color.
+     * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
+     * mode 1: TextureCoordinate UV → Image Vector.
+     * mode 2: TextureCoordinate UV → Mapping → Image Vector. */
     if (m->image_path && m->image_path[0]) {
         ImageTextureNode *img = graph->create_node<ImageTextureNode>();
         img->set_filename(ustring(m->image_path));
@@ -298,6 +306,27 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         img->set_extension(EXTENSION_REPEAT);
         img->set_projection(NODE_IMAGE_PROJ_FLAT);
         img->set_alpha_type(IMAGE_ALPHA_AUTO);
+        if (m->tex_vector_mode == QT_TEX_VECTOR_TEXCOORD ||
+            m->tex_vector_mode == QT_TEX_VECTOR_MAPPING) {
+            TextureCoordinateNode *texcoord =
+                graph->create_node<TextureCoordinateNode>();
+            if (m->tex_vector_mode == QT_TEX_VECTOR_MAPPING) {
+                MappingNode *mapping = graph->create_node<MappingNode>();
+                mapping->set_mapping_type(
+                    static_cast<NodeMappingType>(m->map_type));
+                mapping->set_location(make_float3(
+                    m->map_location[0], m->map_location[1], m->map_location[2]));
+                mapping->set_rotation(make_float3(
+                    m->map_rotation[0], m->map_rotation[1], m->map_rotation[2]));
+                mapping->set_scale(make_float3(
+                    m->map_scale[0], m->map_scale[1], m->map_scale[2]));
+                graph->connect(texcoord->output("UV"), mapping->input("Vector"));
+                graph->connect(mapping->output("Vector"), img->input("Vector"));
+            }
+            else {
+                graph->connect(texcoord->output("UV"), img->input("Vector"));
+            }
+        }
         graph->connect(img->output("Color"), bsdf->input("Base Color"));
     }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));

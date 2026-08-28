@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2g landed** (2026-08-27 7pm PlugWalk ET). SPOT hard + soft PASS. Hard SPOT 256²/128 Δmax=1.19e-7; soft disk soft=0.25 256²/128 Δmax=1.19e-7. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.8-slice2g`.
+Status: **Slice 2h landed** (2026-08-27 8pm PlugWalk ET). TEX_COORD UV + Mapping VECTOR → TEX_IMAGE PASS. Mapping 256²/128 Δmax=1.67e-6; TEX_COORD-only 32²/4 Δmax=1.01e-6; unlinked 2f regression PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.9-slice2h`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -823,4 +823,55 @@ Proof plate: `docs/proof/quanttrace-spot-32-pair.png` (32² preview only).
 
 ### Next
 
-Mapping/TEX_COORD, more Principled sockets, close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 8pm: Mapping/TEX_COORD. See 8pm section. More Principled sockets / still-life 1px still open.
+
+
+---
+
+## 8pm PlugWalk (2026-08-27) — Slice 2h: Mapping / TEX_COORD
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `QT_TEX_VECTOR_*` + `map_location/rotation/scale` + `map_type` on `QT_Mesh` / `QT_SimpleScene` |
+| Packer | Accepts TEX_IMAGE Vector from TEX_COORD UV, or Mapping (VECTOR, unlinked L/R/S) ← TEX_COORD UV. Refuses Generated/Object/Camera/Window/Reflection, linked Mapping params, other graph shapes. |
+| Native | `TextureCoordinateNode` UV → optional `MappingNode` (VECTOR) → `ImageTextureNode` Vector |
+| Version | `0.0.9-slice2h` |
+| Tools | `_quanttrace_mapping_scene/smoke.py` |
+
+### Measured — Mapping VECTOR scale=(2,2,2) loc=(0.1,0.2,0) rot_z=0.15 (SVM VECTOR ignores location)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Mapping Session | 32² / 4 | **2.26e-6** | 1.29e-8 | 0 / 1024 | **PASS** |
+| Mapping Session | 256² / 128 | **1.67e-6** | 6.05e-9 | 0 / 65536 | **PASS** |
+
+### Measured — TEX_COORD UV only (no Mapping)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| TEX_COORD Session | 32² / 4 | **1.01e-6** | 7.01e-9 | 0 / 1024 | **PASS** |
+
+### Measured — unlinked Vector (Slice 2f regression)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Unlinked Session | 32² / 4 | **1.01e-6** | 7.01e-9 | 0 / 1024 | **PASS** |
+
+Proof plate: `docs/proof/quanttrace-mapping-32-pair.png` (+ `/workspace/quanttrace-mapping-32-pair.png`).
+
+### Honesty
+
+- VECTOR Mapping hides Location in Blender 5.2 UI (`is_unavailable`); SVM VECTOR also ignores location. Location DNA still packed for ABI honesty.
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented.
+- HDR / kitchens / POINT|TEXTURE|NORMAL Mapping / other Principled sockets still refuse.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+More Principled sockets, close still-life 1px. Not ReSTIR. Not Classroom time %.

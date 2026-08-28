@@ -5,6 +5,7 @@
 # for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
 # Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN/SPOT lights, constant Principled.
 # Slice 2f: TEX_IMAGE → Principled Base Color (default UV, disk filepath).
+# Slice 2h: TEX_COORD UV (+ optional Mapping Vector-type constants) → TEX_IMAGE Vector.
 # Other linked sockets / HDR worlds still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
@@ -81,11 +82,99 @@ def _abspath_image(img) -> str:
     return raw if os.path.isfile(raw) else ""
 
 
-def _tex_image_from_base_color(sock) -> Tuple[str, str]:
-    """If Base Color is TEX_IMAGE Color (unlinked Vector), return (path, cs)."""
+def _sock_default_float3(sock) -> Tuple[float, float, float]:
+    """Unlinked Vector/Location/Rotation/Scale default as float3."""
+    dv = getattr(sock, "default_value", (0.0, 0.0, 0.0))
+    return (float(dv[0]), float(dv[1]), float(dv[2]))
+
+
+def _tex_coord_uv_from_vector_link(vec_sock) -> None:
+    """Require Vector linked from TEX_COORD UV only (refuse other sockets)."""
+    links = list(getattr(vec_sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            "Image/Mapping Vector must have exactly one link (Slice 2h)"
+        )
+    src = links[0]
+    from_node = getattr(src, "from_node", None)
+    from_sock = getattr(src, "from_socket", None)
+    if from_node is None or getattr(from_node, "type", None) != "TEX_COORD":
+        raise QuantTraceSyncError(
+            "TEX_IMAGE/Mapping Vector must come from TEX_COORD (Slice 2h)"
+        )
+    sock_name = getattr(from_sock, "name", "") if from_sock is not None else ""
+    if sock_name not in ("UV", "uv"):
+        raise QuantTraceSyncError(
+            f"TEX_COORD output {sock_name!r} refused "
+            "(Slice 2h accepts UV only; Generated/Object/Camera/Window/Reflection refuse)"
+        )
+
+
+def _mapping_input_by_name(map_node, name: str):
+    """Find Mapping input by name, including VECTOR-hidden Location."""
+    inputs = getattr(map_node, "inputs", None)
+    if inputs is None:
+        return None
+    # Keyed lookup fails for is_unavailable sockets (Blender 5.2 VECTOR Location).
+    for sock in inputs:
+        if getattr(sock, "name", None) == name or getattr(sock, "identifier", None) == name:
+            return sock
+    getter = getattr(inputs, "get", None)
+    if callable(getter):
+        return getter(name)
+    return None
+
+
+def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
+                                            Tuple[float, float, float],
+                                            Tuple[float, float, float],
+                                            int]:
+    """Validate MAPPING: Vector-type, Vector←TEX_COORD UV, unlinked L/R/S."""
+    vtype = str(getattr(map_node, "vector_type", "POINT") or "POINT").upper()
+    if vtype != "VECTOR":
+        raise QuantTraceSyncError(
+            f"Mapping vector_type={vtype!r} refused (Slice 2h needs VECTOR)"
+        )
+    vec_in = _mapping_input_by_name(map_node, "Vector")
+    if vec_in is None or not getattr(vec_in, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Mapping.Vector must be linked from TEX_COORD UV (Slice 2h)"
+        )
+    _tex_coord_uv_from_vector_link(vec_in)
+    loc_s = _mapping_input_by_name(map_node, "Location")
+    rot_s = _mapping_input_by_name(map_node, "Rotation")
+    scl_s = _mapping_input_by_name(map_node, "Scale")
+    for name, sock in (("Location", loc_s), ("Rotation", rot_s), ("Scale", scl_s)):
+        if sock is None:
+            raise QuantTraceSyncError(f"Mapping missing {name}")
+        if getattr(sock, "is_linked", False):
+            raise QuantTraceSyncError(
+                f"Mapping.{name} is linked (Slice 2h needs unlinked constants)"
+            )
+    # NODE_MAPPING_TYPE_VECTOR == 2 (POINT=0, TEXTURE=1, VECTOR=2, NORMAL=3)
+    # VECTOR SVM ignores Location; still pack DNA default for ABI honesty.
+    return (
+        _sock_default_float3(loc_s),
+        _sock_default_float3(rot_s),
+        _sock_default_float3(scl_s),
+        2,
+    )
+
+
+def _tex_image_from_base_color(sock) -> dict:
+    """If Base Color is TEX_IMAGE Color, return path/cs + Vector graph (2f/2h)."""
+    empty = {
+        "image_path": "",
+        "image_colorspace": "",
+        "tex_vector_mode": 0,
+        "map_location": (0.0, 0.0, 0.0),
+        "map_rotation": (0.0, 0.0, 0.0),
+        "map_scale": (1.0, 1.0, 1.0),
+        "map_type": 2,
+    }
     links = list(getattr(sock, "links", None) or [])
     if not links:
-        return "", ""
+        return empty
     if len(links) != 1:
         raise QuantTraceSyncError("Principled.Base Color has multiple links")
     src = links[0]
@@ -93,35 +182,79 @@ def _tex_image_from_base_color(sock) -> Tuple[str, str]:
     from_sock = getattr(src, "from_socket", None)
     if from_node is None or getattr(from_node, "type", None) != "TEX_IMAGE":
         raise QuantTraceSyncError(
-            "Principled.Base Color link is not TEX_IMAGE (Slice 2f)"
+            "Principled.Base Color link is not TEX_IMAGE (Slice 2f/2h)"
         )
     sock_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
     if sock_name not in ("Color", "color"):
         raise QuantTraceSyncError(
-            "Base Color must come from Image Texture Color (Slice 2f)"
+            "Base Color must come from Image Texture Color (Slice 2f/2h)"
         )
     vec = None
     inputs = getattr(from_node, "inputs", None)
     if inputs is not None:
         getter = getattr(inputs, "get", None)
         vec = getter("Vector") if callable(getter) else None
+
+    tex_vector_mode = 0  # QT_TEX_VECTOR_UNLINKED
+    map_location = (0.0, 0.0, 0.0)
+    map_rotation = (0.0, 0.0, 0.0)
+    map_scale = (1.0, 1.0, 1.0)
+    map_type = 2
+
     if vec is not None and getattr(vec, "is_linked", False):
-        raise QuantTraceSyncError(
-            "Image Texture Vector is linked (Slice 2f needs default UV)"
-        )
+        vlinks = list(getattr(vec, "links", None) or [])
+        if len(vlinks) != 1:
+            raise QuantTraceSyncError(
+                "Image Texture Vector has multiple links (Slice 2h)"
+            )
+        vsrc = vlinks[0]
+        vnode = getattr(vsrc, "from_node", None)
+        vsock = getattr(vsrc, "from_socket", None)
+        vtype = getattr(vnode, "type", None) if vnode is not None else None
+        vname = getattr(vsock, "name", "") if vsock is not None else ""
+        if vtype == "TEX_COORD":
+            if vname not in ("UV", "uv"):
+                raise QuantTraceSyncError(
+                    f"TEX_COORD output {vname!r} refused "
+                    "(Slice 2h accepts UV only)"
+                )
+            tex_vector_mode = 1  # QT_TEX_VECTOR_TEXCOORD
+        elif vtype == "MAPPING":
+            if vname not in ("Vector", "vector"):
+                raise QuantTraceSyncError(
+                    "Image Texture Vector must come from Mapping Vector"
+                )
+            map_location, map_rotation, map_scale, map_type = _mapping_constants(
+                vnode
+            )
+            tex_vector_mode = 2  # QT_TEX_VECTOR_MAPPING
+        else:
+            raise QuantTraceSyncError(
+                f"Image Texture Vector from {vtype!r} refused "
+                "(Slice 2h: TEX_COORD UV or Mapping only)"
+            )
+
     img = getattr(from_node, "image", None)
     if img is None:
         raise QuantTraceSyncError("Image Texture has no image")
     path = _abspath_image(img)
     if not path:
         raise QuantTraceSyncError(
-            "Image Texture filepath missing on disk (Slice 2f; packed-only refused)"
+            "Image Texture filepath missing on disk (Slice 2f/2h; packed-only refused)"
         )
     cs = ""
     settings = getattr(img, "colorspace_settings", None)
     if settings is not None:
         cs = str(getattr(settings, "name", "") or "")
-    return path, cs
+    return {
+        "image_path": path,
+        "image_colorspace": cs,
+        "tex_vector_mode": tex_vector_mode,
+        "map_location": map_location,
+        "map_rotation": map_rotation,
+        "map_scale": map_scale,
+        "map_type": map_type,
+    }
 
 
 def _principled_from_material(mat) -> dict:
@@ -134,6 +267,11 @@ def _principled_from_material(mat) -> dict:
         "alpha": 1.0,
         "image_path": "",
         "image_colorspace": "",
+        "tex_vector_mode": 0,
+        "map_location": (0.0, 0.0, 0.0),
+        "map_rotation": (0.0, 0.0, 0.0),
+        "map_scale": (1.0, 1.0, 1.0),
+        "map_type": 2,
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -148,8 +286,15 @@ def _principled_from_material(mat) -> dict:
             break
     if bsdf is None:
         raise QuantTraceSyncError("material has no Principled BSDF (Slice 2b)")
-    image_path = ""
-    image_cs = ""
+    tex_info = {
+        "image_path": "",
+        "image_colorspace": "",
+        "tex_vector_mode": 0,
+        "map_location": (0.0, 0.0, 0.0),
+        "map_rotation": (0.0, 0.0, 0.0),
+        "map_scale": (1.0, 1.0, 1.0),
+        "map_type": 2,
+    }
     for sock_name in ("Base Color", "Roughness", "Metallic", "IOR", "Alpha"):
         sock = bsdf.inputs.get(sock_name)
         if sock is None:
@@ -157,10 +302,10 @@ def _principled_from_material(mat) -> dict:
         if not getattr(sock, "is_linked", False):
             continue
         if sock_name == "Base Color":
-            image_path, image_cs = _tex_image_from_base_color(sock)
+            tex_info = _tex_image_from_base_color(sock)
             continue
         raise QuantTraceSyncError(
-            f"Principled.{sock_name} is linked (Slice 2f still needs constants)"
+            f"Principled.{sock_name} is linked (Slice 2f/2h still needs constants)"
         )
     base = bsdf.inputs["Base Color"].default_value
     return {
@@ -169,8 +314,7 @@ def _principled_from_material(mat) -> dict:
         "metallic": float(bsdf.inputs["Metallic"].default_value),
         "ior": float(bsdf.inputs["IOR"].default_value),
         "alpha": float(bsdf.inputs["Alpha"].default_value),
-        "image_path": image_path,
-        "image_colorspace": image_cs,
+        **tex_info,
     }
 
 
@@ -408,6 +552,11 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
         "uvs": uvs,
         "image_path": image_path,
         "image_colorspace": image_cs,
+        "tex_vector_mode": int(pr.get("tex_vector_mode", 0) or 0),
+        "map_location": list(pr.get("map_location") or (0.0, 0.0, 0.0)),
+        "map_rotation": list(pr.get("map_rotation") or (0.0, 0.0, 0.0)),
+        "map_scale": list(pr.get("map_scale") or (1.0, 1.0, 1.0)),
+        "map_type": int(pr.get("map_type", 2) if pr.get("map_type") is not None else 2),
     }
 
 
@@ -551,6 +700,11 @@ def pack_scene(scene, depsgraph=None) -> dict:
             "uvs": uvs,
             "image_path": image_path,
             "image_colorspace": image_cs,
+            "tex_vector_mode": int(pr.get("tex_vector_mode", 0) or 0),
+            "map_location": list(pr.get("map_location") or (0.0, 0.0, 0.0)),
+            "map_rotation": list(pr.get("map_rotation") or (0.0, 0.0, 0.0)),
+            "map_scale": list(pr.get("map_scale") or (1.0, 1.0, 1.0)),
+            "map_type": int(pr.get("map_type", 2) if pr.get("map_type") is not None else 2),
         })
 
     packed_lights = []
@@ -661,6 +815,11 @@ def make_qt_simple_scene_type():
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
             ("image_colorspace", ctypes.c_char_p),
+            ("tex_vector_mode", ctypes.c_int),
+            ("map_location", ctypes.c_float * 3),
+            ("map_rotation", ctypes.c_float * 3),
+            ("map_scale", ctypes.c_float * 3),
+            ("map_type", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -714,6 +873,14 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     ics = (packed.get("image_colorspace") or "").encode("utf-8")
     desc.image_path = ip if ip else None
     desc.image_colorspace = ics if ics else None
+    desc.tex_vector_mode = int(packed.get("tex_vector_mode", 0) or 0)
+    for i, v in enumerate(packed.get("map_location") or (0.0, 0.0, 0.0)):
+        desc.map_location[i] = float(v)
+    for i, v in enumerate(packed.get("map_rotation") or (0.0, 0.0, 0.0)):
+        desc.map_rotation[i] = float(v)
+    for i, v in enumerate(packed.get("map_scale") or (1.0, 1.0, 1.0)):
+        desc.map_scale[i] = float(v)
+    desc.map_type = int(packed.get("map_type", 2) if packed.get("map_type") is not None else 2)
     # Keep buffers alive with the struct.
     desc._keep = (verts, tris, uvs_buf, ip, ics)
     return desc
@@ -738,6 +905,11 @@ def make_qt_scene_types():
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
             ("image_colorspace", ctypes.c_char_p),
+            ("tex_vector_mode", ctypes.c_int),
+            ("map_location", ctypes.c_float * 3),
+            ("map_rotation", ctypes.c_float * 3),
+            ("map_scale", ctypes.c_float * 3),
+            ("map_type", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):
@@ -816,6 +988,16 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
         keep.append(ics)
         meshes_arr[i].image_path = ip if ip else None
         meshes_arr[i].image_colorspace = ics if ics else None
+        meshes_arr[i].tex_vector_mode = int(m.get("tex_vector_mode", 0) or 0)
+        for j, v in enumerate(m.get("map_location") or (0.0, 0.0, 0.0)):
+            meshes_arr[i].map_location[j] = float(v)
+        for j, v in enumerate(m.get("map_rotation") or (0.0, 0.0, 0.0)):
+            meshes_arr[i].map_rotation[j] = float(v)
+        for j, v in enumerate(m.get("map_scale") or (1.0, 1.0, 1.0)):
+            meshes_arr[i].map_scale[j] = float(v)
+        meshes_arr[i].map_type = int(
+            m.get("map_type", 2) if m.get("map_type") is not None else 2
+        )
     for i, L in enumerate(packed["lights"]):
         for j, v in enumerate(L["tfm"]):
             lights_arr[i].tfm[j] = float(v)
