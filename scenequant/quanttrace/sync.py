@@ -381,6 +381,7 @@ def _prefix_tex(info: dict, prefix: str) -> dict:
 def _empty_normal_info(prefix: str = "normal_") -> dict:
     out = _prefix_tex(_empty_tex_info(), prefix)
     out[f"{prefix}strength"] = 1.0
+    out[f"{prefix}space"] = 0  # QT_NORMAL_MAP_TANGENT
     return out
 
 
@@ -497,8 +498,8 @@ def _principled_normal_dispatch(sock) -> dict:
 def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal") -> dict:
     """Principled.{label} ← Normal Map.Normal; Color ← TEX_IMAGE; Strength unlinked.
 
-    Space must be Tangent (default). Object/World, Bump, linked Strength,
-    packed-only images, and custom uv_map names refuse.
+    Space TANGENT/OBJECT/WORLD (Slice 2z). BLENDER_OBJECT / BLENDER_WORLD,
+    Bump-on-this-helper, linked Strength, packed-only, custom uv_map refuse.
     """
     empty = _empty_normal_info(prefix)
     if sock is None:
@@ -523,10 +524,14 @@ def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal
             f"Principled.{label} must come from Normal Map Normal (Slice 2t)"
         )
     space = str(getattr(from_node, "space", "TANGENT") or "TANGENT").upper()
-    if space not in ("TANGENT",):
+    _SPACE = {"TANGENT": 0, "OBJECT": 1, "WORLD": 2}
+    if space not in _SPACE:
         raise QuantTraceSyncError(
-            f"Normal Map space={space!r} refused (Slice 2t: Tangent only)"
+            f"Normal Map space={space!r} refused "
+            "(Slice 2z: TANGENT/OBJECT/WORLD only; "
+            "BLENDER_OBJECT/BLENDER_WORLD refuse)"
         )
+    space_i = _SPACE[space]
     uv_map = str(getattr(from_node, "uv_map", "") or "").strip()
     if uv_map:
         raise QuantTraceSyncError(
@@ -550,6 +555,7 @@ def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal
     tex = _tex_image_from_sock(color_sock, f"{label} Map Color")
     out = _prefix_tex(tex, prefix)
     out[f"{prefix}strength"] = strength
+    out[f"{prefix}space"] = space_i
     return out
 
 
@@ -1007,6 +1013,7 @@ def _pack_tex_fields(pr: dict) -> dict:
         "normal_map_scale": loc("normal_map_scale", (1.0, 1.0, 1.0)),
         "normal_map_type": int(pr.get("normal_map_type", 2) if pr.get("normal_map_type") is not None else 2),
         "normal_strength": float(pr.get("normal_strength", 1.0) if pr.get("normal_strength") is not None else 1.0),
+        "normal_space": int(pr.get("normal_space", 0) or 0),
         "ior_image_path": pr.get("ior_image_path") or "",
         "ior_image_colorspace": pr.get("ior_image_colorspace") or "",
         "ior_tex_vector_mode": int(pr.get("ior_tex_vector_mode", 0) or 0),
@@ -1106,6 +1113,7 @@ def _pack_tex_fields(pr: dict) -> dict:
         "coat_normal_map_scale": loc("coat_normal_map_scale", (1.0, 1.0, 1.0)),
         "coat_normal_map_type": int(pr.get("coat_normal_map_type", 2) if pr.get("coat_normal_map_type") is not None else 2),
         "coat_normal_strength": float(pr.get("coat_normal_strength", 1.0) if pr.get("coat_normal_strength") is not None else 1.0),
+        "coat_normal_space": int(pr.get("coat_normal_space", 0) or 0),
         "spec_tint_image_path": pr.get("spec_tint_image_path") or "",
         "spec_tint_image_colorspace": pr.get("spec_tint_image_colorspace") or "",
         "spec_tint_tex_vector_mode": int(pr.get("spec_tint_tex_vector_mode", 0) or 0),
@@ -1601,6 +1609,7 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.normal_strength = float(
         packed.get("normal_strength", 1.0) if packed.get("normal_strength") is not None else 1.0
     )
+    desc.normal_space = int(packed.get("normal_space", 0) or 0)
 
     desc.ior_image_path = enc("ior_image_path")
     desc.ior_image_colorspace = enc("ior_image_colorspace")
@@ -1744,6 +1753,7 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.coat_normal_strength = float(
         packed.get("coat_normal_strength", 1.0) if packed.get("coat_normal_strength") is not None else 1.0
     )
+    desc.coat_normal_space = int(packed.get("coat_normal_space", 0) or 0)
 
     desc.spec_tint_image_path = enc("spec_tint_image_path")
     desc.spec_tint_image_colorspace = enc("spec_tint_image_colorspace")
@@ -1957,6 +1967,7 @@ def make_qt_simple_scene_type():
             ("normal_map_scale", ctypes.c_float * 3),
             ("normal_map_type", ctypes.c_int),
             ("normal_strength", ctypes.c_float),
+            ("normal_space", ctypes.c_int),
             ("ior_image_path", ctypes.c_char_p),
             ("ior_image_colorspace", ctypes.c_char_p),
             ("ior_tex_vector_mode", ctypes.c_int),
@@ -2056,6 +2067,7 @@ def make_qt_simple_scene_type():
             ("coat_normal_map_scale", ctypes.c_float * 3),
             ("coat_normal_map_type", ctypes.c_int),
             ("coat_normal_strength", ctypes.c_float),
+            ("coat_normal_space", ctypes.c_int),
             ("spec_tint_image_path", ctypes.c_char_p),
             ("spec_tint_image_colorspace", ctypes.c_char_p),
             ("spec_tint_tex_vector_mode", ctypes.c_int),
@@ -2261,6 +2273,7 @@ def make_qt_scene_types():
             ("normal_map_scale", ctypes.c_float * 3),
             ("normal_map_type", ctypes.c_int),
             ("normal_strength", ctypes.c_float),
+            ("normal_space", ctypes.c_int),
             ("ior_image_path", ctypes.c_char_p),
             ("ior_image_colorspace", ctypes.c_char_p),
             ("ior_tex_vector_mode", ctypes.c_int),
@@ -2360,6 +2373,7 @@ def make_qt_scene_types():
             ("coat_normal_map_scale", ctypes.c_float * 3),
             ("coat_normal_map_type", ctypes.c_int),
             ("coat_normal_strength", ctypes.c_float),
+            ("coat_normal_space", ctypes.c_int),
             ("spec_tint_image_path", ctypes.c_char_p),
             ("spec_tint_image_colorspace", ctypes.c_char_p),
             ("spec_tint_tex_vector_mode", ctypes.c_int),

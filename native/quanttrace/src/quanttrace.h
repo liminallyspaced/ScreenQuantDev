@@ -29,6 +29,9 @@
  *   not reuse of normal_image_path). Strength/Distance unlinked floats
  *   (Blender 5.2 RNA 1.0 / 0.001). invert RNA 0/1. use_object_space false.
  *   If both bump_* and normal_* paths are set, Bump wins; packer fills one.
+ * Slice 2z: Principled Normal Map space OBJECT + WORLD (plus Coat Normal space).
+ *   0=TANGENT (default, 2j/2t bit-identical), 1=OBJECT, 2=WORLD.
+ *   BLENDER_OBJECT / BLENDER_WORLD still refuse.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -144,6 +147,7 @@ typedef struct QT_SimpleScene {
   float normal_map_scale[3];
   int normal_map_type;
   float normal_strength; /* Normal Map Strength, default 1.0 */
+  int normal_space; /* QT_NORMAL_MAP_*: 0=TANGENT, 1=OBJECT, 2=WORLD */
   /* Slice 2o: IOR TEX_IMAGE (NULL/empty = constant ior) */
   const char *ior_image_path;
   const char *ior_image_colorspace;
@@ -257,6 +261,7 @@ typedef struct QT_SimpleScene {
   float coat_normal_map_scale[3];
   int coat_normal_map_type;
   float coat_normal_strength; /* Coat Normal Map Strength, default 1.0 */
+  int coat_normal_space; /* QT_NORMAL_MAP_*: same encoding */
   /* Slice 2u: Specular Tint TEX_IMAGE (NULL/empty = Cycles default 1,1,1) */
   const char *spec_tint_image_path;
   const char *spec_tint_image_colorspace;
@@ -439,6 +444,7 @@ typedef struct QT_Mesh {
   float normal_map_scale[3];
   int normal_map_type;
   float normal_strength; /* Normal Map Strength, default 1.0 */
+  int normal_space; /* QT_NORMAL_MAP_*: 0=TANGENT, 1=OBJECT, 2=WORLD */
   /* Slice 2o: IOR TEX_IMAGE */
   const char *ior_image_path;
   const char *ior_image_colorspace;
@@ -552,6 +558,7 @@ typedef struct QT_Mesh {
   float coat_normal_map_scale[3];
   int coat_normal_map_type;
   float coat_normal_strength; /* Coat Normal Map Strength, default 1.0 */
+  int coat_normal_space; /* QT_NORMAL_MAP_*: same encoding */
   /* Slice 2u: Specular Tint TEX_IMAGE (NULL/empty = Cycles default 1,1,1) */
   const char *spec_tint_image_path;
   const char *spec_tint_image_colorspace;
@@ -694,6 +701,11 @@ typedef struct QT_Mesh {
 #define QT_TEX_VECTOR_MAPPING_WINDOW       10 /* TEX_COORD Window → Mapping → TEX_IMAGE */
 #define QT_TEX_VECTOR_TEXCOORD_REFLECTION  11 /* TEX_COORD Reflection → TEX_IMAGE Vector */
 #define QT_TEX_VECTOR_MAPPING_REFLECTION   12 /* TEX_COORD Reflection → Mapping → TEX_IMAGE */
+
+/* Slice 2z: Normal Map space (ShaderNodeNormalMap.space) */
+#define QT_NORMAL_MAP_TANGENT 0
+#define QT_NORMAL_MAP_OBJECT  1
+#define QT_NORMAL_MAP_WORLD   2
 
 
 typedef struct QT_Light {

@@ -27,6 +27,8 @@
  *   Subsurface Weight / Radius / Scale.
  * Slice 2w: TEX_IMAGE → Principled Anisotropic / Rotation / Tangent.
  * Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (bump_* ABI).
+ * Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight.
+ * Slice 2z: Normal Map space OBJECT/WORLD (plus Coat Normal space).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -290,6 +292,7 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->normal_map_scale, s->normal_map_scale, sizeof(mesh->normal_map_scale));
     mesh->normal_map_type = s->normal_map_type;
     mesh->normal_strength = s->normal_strength;
+    mesh->normal_space = s->normal_space;
     mesh->ior_image_path = s->ior_image_path;
     mesh->ior_image_colorspace = s->ior_image_colorspace;
     mesh->ior_tex_vector_mode = s->ior_tex_vector_mode;
@@ -389,6 +392,7 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->coat_normal_map_scale, s->coat_normal_map_scale, sizeof(mesh->coat_normal_map_scale));
     mesh->coat_normal_map_type = s->coat_normal_map_type;
     mesh->coat_normal_strength = s->coat_normal_strength;
+    mesh->coat_normal_space = s->coat_normal_space;
     mesh->spec_tint_image_path = s->spec_tint_image_path;
     mesh->spec_tint_image_colorspace = s->spec_tint_image_colorspace;
     mesh->spec_tint_tex_vector_mode = s->spec_tint_tex_vector_mode;
@@ -802,7 +806,14 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->normal_tex_vector_mode, m->normal_map_location, m->normal_map_rotation,
             m->normal_map_scale, m->normal_map_type);
         NormalMapNode *nmap = graph->create_node<NormalMapNode>();
-        nmap->set_space(NODE_NORMAL_MAP_TANGENT);
+        /* Slice 2z: TANGENT/OBJECT/WORLD. Unknown → TANGENT.
+         * Cite intern/cycles/blender/shader.cpp ShaderNodeNormalMap
+         * and src/scene/shader_nodes.cpp SOCKET_ENUM space. */
+        int sp = m->normal_space;
+        ccl::NodeNormalMapSpace space = NODE_NORMAL_MAP_TANGENT;
+        if (sp == QT_NORMAL_MAP_OBJECT) space = NODE_NORMAL_MAP_OBJECT;
+        else if (sp == QT_NORMAL_MAP_WORLD) space = NODE_NORMAL_MAP_WORLD;
+        nmap->set_space(space);
         nmap->set_strength(m->normal_strength);
         graph->connect(img->output("Color"), nmap->input("Color"));
         graph->connect(nmap->output("Normal"), bsdf->input("Normal"));
@@ -951,7 +962,11 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->coat_normal_tex_vector_mode, m->coat_normal_map_location,
             m->coat_normal_map_rotation, m->coat_normal_map_scale, m->coat_normal_map_type);
         NormalMapNode *nmap = graph->create_node<NormalMapNode>();
-        nmap->set_space(NODE_NORMAL_MAP_TANGENT);
+        int csp = m->coat_normal_space;
+        ccl::NodeNormalMapSpace cspace = NODE_NORMAL_MAP_TANGENT;
+        if (csp == QT_NORMAL_MAP_OBJECT) cspace = NODE_NORMAL_MAP_OBJECT;
+        else if (csp == QT_NORMAL_MAP_WORLD) cspace = NODE_NORMAL_MAP_WORLD;
+        nmap->set_space(cspace);
         nmap->set_strength(m->coat_normal_strength);
         graph->connect(img->output("Color"), nmap->input("Color"));
         graph->connect(nmap->output("Normal"), bsdf->input("Coat Normal"));

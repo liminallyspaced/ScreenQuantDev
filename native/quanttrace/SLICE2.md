@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2y landed** (2026-08-28 1pm PlugWalk ET). Principled Thin Wall unlinked BOOLEAN + unlinked Transmission Weight constant. ThinWall 32²/4 Δmax=3.18e-12; 256²/128 Δmax=2.32e-8 PASS (0 px ≥1e-3). Combined peak 8.31e-6 / 1.24e-5 (near-black thin glass vs black world; not all-zero / not constant). True vs False 32²/4 Δmax=6.83e-5 (below 1e-3; both glass-dark). Session True matches stock True (3.18e-12) not stock False (6.83e-5) so the boolean is live. Opaque trans=0 vs trans=1 32²/4 Δmax=1.56 (82 px) so Transmission Weight is live. Bump 32²/4 2x regression Δmax=2.38e-7 PASS. Linked Thin Wall still refuses (BOOLEAN, not TEX_IMAGE). `is_tracer=1`. Native `0.0.26-slice2y`.
+Status: **Slice 2z landed** (2026-08-28 2pm PlugWalk ET). Principled Normal Map space OBJECT + WORLD (plus Coat Normal space, same helper). Object 32²/4 Δmax=3.58e-7; 256²/128 Δmax=5.96e-7 PASS (0 px ≥1e-3). World 32²/4 Δmax=3.58e-7; 256²/128 Δmax=7.15e-7 PASS. Tangent 2j regression 32²/4 Δmax=3.58e-7 PASS. Bump 2x regression 32²/4 Δmax=2.38e-7 PASS. Coat Normal Object 32²/4 Δmax=2.38e-7 PASS (optional). Stock Object vs Tangent 32²/4 Δmax=0.821 (82 px ≥1e-3) so the space enum is live. Packed `normal_space` 1/2/0. `is_tracer=1`. Native `0.0.27-slice2z`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -9,6 +9,51 @@ Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 `is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
+
+
+
+---
+
+## 2pm PlugWalk (2026-08-28) — Principled Normal Map Object/World space (Slice 2z)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `normal_space` / `coat_normal_space` int after `normal_strength` / `coat_normal_strength` on `QT_Mesh` + `QT_SimpleScene`. `QT_NORMAL_MAP_TANGENT=0` `OBJECT=1` `WORLD=2`. Default 0 fills prior float-to-pointer padding so 2j/2t Tangent cubes stay bit-identical. |
+| Python | `_normal_map_from_sock` accepts TANGENT/OBJECT/WORLD (case-insensitive). Maps to 0/1/2. `BLENDER_OBJECT` / `BLENDER_WORLD` / anything else `QuantTraceSyncError` naming Slice 2z. `_empty_normal_info` space=0. Mesh dict + `_fill_tex_ctypes` copy both ints. ctypes `_fields_` lockstep. |
+| Native | `nmap->set_space` from `m->normal_space` / `m->coat_normal_space`. Unknown → TANGENT. Cite `intern/cycles/blender/shader.cpp` ShaderNodeNormalMap + `src/scene/shader_nodes.cpp` SOCKET_ENUM space. `simple_to_qt` copies both ints. Do not invent blender_object/blender_world. Bump path / convention / base unchanged. |
+| RNA | Blender 5.2 `ShaderNodeNormalMap.space` TANGENT/OBJECT/WORLD. Cycles `NODE_NORMAL_MAP_{TANGENT,OBJECT,WORLD}`. |
+| Version | `0.0.27-slice2z` |
+| Tools | `tools/_quanttrace_slice2z_scene.py`, `tools/_quanttrace_slice2z_smoke.py` |
+| Visibility | Roughness=0.5 Metallic=0 Strength=1.0 unlinked. Same 16×16 Non-Color tangent-hill PNG as 2j. Combined not all-zero / not constant. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Socket | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| Object Normal | 32² / 4 | **3.58e-7** | 6.75e-9 | 0 | **PASS** |
+| Object Normal | 256² / 128 | **5.96e-7** | 4.27e-9 | 0 | **PASS** |
+| World Normal | 32² / 4 | **3.58e-7** | 7.10e-9 | 0 | **PASS** |
+| World Normal | 256² / 128 | **7.15e-7** | 4.26e-9 | 0 | **PASS** |
+| Tangent (2j regression) | 32² / 4 | **3.58e-7** | 7.27e-9 | 0 | **PASS** |
+| Bump (2x regression) | 32² / 4 | **2.38e-7** | 5.49e-9 | 0 | **PASS** |
+| Coat Normal Object (optional) | 32² / 4 | **2.38e-7** | 5.66e-9 | 0 | **PASS** |
+
+Live graph (stock Object vs stock Tangent, same PNG) 32²/4: Δmax=**0.821** (82 px ≥1e-3, MAE 0.0210). Packed `normal_space=1` (OBJECT) / `2` (WORLD) / `0` (TANGENT). Coat Object packed `coat_normal_space=1`. Identity-tfm cube Object vs World Combined match (object==world on unrotated mesh; not a packing miss). Proof plate `docs/proof/quanttrace-object-normal-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- Linked Strength, custom uv_map, packed-only, HDR, kitchens, Object-with-pointer, linked Mapping L/R/S, `BLENDER_OBJECT` / `BLENDER_WORLD` still refuse.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+HDR world / Object-with-pointer (or `BLENDER_OBJECT`/`BLENDER_WORLD` space). SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
 
 
 
