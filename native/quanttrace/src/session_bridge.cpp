@@ -28,6 +28,10 @@
  * Slice 2w: TEX_IMAGE → Principled Anisotropic / Rotation / Tangent.
  * Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (bump_* ABI).
  * Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight.
+ * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
+ * Slice 2ac: Env Vector TEX_COORD / Mapping.
+ * Slice 2ad: BLENDER_OBJECT / BLENDER_WORLD Normal space.
+ * Slice 2ae: Env Object-with-pointer (world_ob_use_transform + world_ob_tfm).
  * Slice 2z: Normal Map space OBJECT/WORLD (plus Coat Normal space).
  * Slice 2aa: Environment Texture world.
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
@@ -537,6 +541,8 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(out->world_map_scale, s->world_map_scale,
                 sizeof(out->world_map_scale));
     out->world_map_type = s->world_map_type;
+    out->world_ob_use_transform = s->world_ob_use_transform;
+    std::memcpy(out->world_ob_tfm, s->world_ob_tfm, sizeof(out->world_ob_tfm));
     out->exr_path = s->exr_path;
 }
 
@@ -1341,8 +1347,9 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
     cam->need_flags_update = true;
     cam->update(scene);
 
-    /* World Background: black+strength (Slice 2b) or Environment Texture (Slice 2aa/2ac).
+    /* World Background: black+strength (Slice 2b) or Environment Texture (Slice 2aa/2ac/2ae).
      * Slice 2aa: Vector unlinked LINK_POSITION. Slice 2ac: TEX_COORD (+ Mapping).
+     * Slice 2ae: Object-with-pointer (world_ob_use_transform + world_ob_tfm).
      * Empty world_image_path keeps bit-identical black world for locked cubes.
      * With env: add BackgroundLight + MIS (Blender world.cycles sample_map 1024 /
      * sampling AUTOMATIC) so surface lighting matches stock; camera-ray bg alone
@@ -1386,6 +1393,13 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
                 }
                 else if (tex_mode_is_generated(wmode)) {
                     coord_sock = "Generated";
+                }
+                /* Slice 2ae: Object pointer → use_transform + ob_tfm (matrix_world).
+                 * Empty-ref (2ac): use_transform stays false. Cycles compile already
+                 * inverses ob_tfm — do not invert twice. Cite TextureCoordinateNode. */
+                if (tex_mode_is_object(wmode) && desc->world_ob_use_transform) {
+                    texcoord->set_use_transform(true);
+                    texcoord->set_ob_tfm(tfm_from_12(desc->world_ob_tfm));
                 }
                 if (tex_mode_has_mapping(wmode)) {
                     MappingNode *mapping = graph->create_node<MappingNode>();

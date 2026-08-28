@@ -129,6 +129,9 @@ typedef struct QT_SimpleScene {
   float world_map_rotation[3];
   float world_map_scale[3];
   int world_map_type;
+  /* Slice 2ae: Env TEX_COORD Object-with-pointer (world-level; 0 = 2ac empty-ref) */
+  int world_ob_use_transform; /* 0 = empty Object (bit-identical 2ac). 1 = pointer */
+  float world_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -770,6 +773,9 @@ typedef struct QT_Scene {
   float world_map_rotation[3];
   float world_map_scale[3];
   int world_map_type;
+  /* Slice 2ae: Env TEX_COORD Object-with-pointer (world-level; 0 = 2ac empty-ref) */
+  int world_ob_use_transform; /* 0 = empty Object (bit-identical 2ac). 1 = pointer */
+  float world_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
   const char *exr_path;
 } QT_Scene;
 
