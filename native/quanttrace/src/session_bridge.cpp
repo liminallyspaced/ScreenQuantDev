@@ -11,6 +11,7 @@
  * Slice 2c: quanttrace_render_qt_scene_rgba — N meshes + N lights.
  * Slice 2g: SPOT (spot_size/spot_blend).
  * Slice 2h: TEX_COORD UV + Mapping → TEX_IMAGE Vector.
+ * Slice 2i: TEX_IMAGE → Principled Roughness / Metallic.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -252,6 +253,20 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->map_rotation, s->map_rotation, sizeof(mesh->map_rotation));
     std::memcpy(mesh->map_scale, s->map_scale, sizeof(mesh->map_scale));
     mesh->map_type = s->map_type;
+    mesh->rough_image_path = s->rough_image_path;
+    mesh->rough_image_colorspace = s->rough_image_colorspace;
+    mesh->rough_tex_vector_mode = s->rough_tex_vector_mode;
+    std::memcpy(mesh->rough_map_location, s->rough_map_location, sizeof(mesh->rough_map_location));
+    std::memcpy(mesh->rough_map_rotation, s->rough_map_rotation, sizeof(mesh->rough_map_rotation));
+    std::memcpy(mesh->rough_map_scale, s->rough_map_scale, sizeof(mesh->rough_map_scale));
+    mesh->rough_map_type = s->rough_map_type;
+    mesh->metal_image_path = s->metal_image_path;
+    mesh->metal_image_colorspace = s->metal_image_colorspace;
+    mesh->metal_tex_vector_mode = s->metal_tex_vector_mode;
+    std::memcpy(mesh->metal_map_location, s->metal_map_location, sizeof(mesh->metal_map_location));
+    std::memcpy(mesh->metal_map_rotation, s->metal_map_rotation, sizeof(mesh->metal_map_rotation));
+    std::memcpy(mesh->metal_map_scale, s->metal_map_scale, sizeof(mesh->metal_map_scale));
+    mesh->metal_map_type = s->metal_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -281,6 +296,49 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->exr_path = s->exr_path;
 }
 
+/* Wire ImageTexture (+ optional TEX_COORD/Mapping) → destination socket.
+ * Color→float (Roughness/Metallic) gets ConvertNode via ShaderGraph::connect. */
+static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
+                                        const char *path,
+                                        const char *colorspace,
+                                        int tex_vector_mode,
+                                        const float *map_location,
+                                        const float *map_rotation,
+                                        const float *map_scale,
+                                        int map_type)
+{
+    ImageTextureNode *img = graph->create_node<ImageTextureNode>();
+    img->set_filename(ustring(path));
+    if (colorspace && colorspace[0]) {
+        img->set_colorspace(ustring(colorspace));
+    }
+    img->set_interpolation(INTERPOLATION_LINEAR);
+    img->set_extension(EXTENSION_REPEAT);
+    img->set_projection(NODE_IMAGE_PROJ_FLAT);
+    img->set_alpha_type(IMAGE_ALPHA_AUTO);
+    if (tex_vector_mode == QT_TEX_VECTOR_TEXCOORD ||
+        tex_vector_mode == QT_TEX_VECTOR_MAPPING) {
+        TextureCoordinateNode *texcoord =
+            graph->create_node<TextureCoordinateNode>();
+        if (tex_vector_mode == QT_TEX_VECTOR_MAPPING) {
+            MappingNode *mapping = graph->create_node<MappingNode>();
+            mapping->set_mapping_type(static_cast<NodeMappingType>(map_type));
+            mapping->set_location(make_float3(
+                map_location[0], map_location[1], map_location[2]));
+            mapping->set_rotation(make_float3(
+                map_rotation[0], map_rotation[1], map_rotation[2]));
+            mapping->set_scale(make_float3(
+                map_scale[0], map_scale[1], map_scale[2]));
+            graph->connect(texcoord->output("UV"), mapping->input("Vector"));
+            graph->connect(mapping->output("Vector"), img->input("Vector"));
+        }
+        else {
+            graph->connect(texcoord->output("UV"), img->input("Vector"));
+        }
+    }
+    return img;
+}
+
 static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
 {
     Shader *surf = scene->create_node<Shader>();
@@ -292,42 +350,30 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h: TEX_IMAGE → Base Color.
+    /* Slice 2f/2h/2i: TEX_IMAGE → Base Color / Roughness / Metallic.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
      * mode 2: TextureCoordinate UV → Mapping → Image Vector. */
     if (m->image_path && m->image_path[0]) {
-        ImageTextureNode *img = graph->create_node<ImageTextureNode>();
-        img->set_filename(ustring(m->image_path));
-        if (m->image_colorspace && m->image_colorspace[0]) {
-            img->set_colorspace(ustring(m->image_colorspace));
-        }
-        img->set_interpolation(INTERPOLATION_LINEAR);
-        img->set_extension(EXTENSION_REPEAT);
-        img->set_projection(NODE_IMAGE_PROJ_FLAT);
-        img->set_alpha_type(IMAGE_ALPHA_AUTO);
-        if (m->tex_vector_mode == QT_TEX_VECTOR_TEXCOORD ||
-            m->tex_vector_mode == QT_TEX_VECTOR_MAPPING) {
-            TextureCoordinateNode *texcoord =
-                graph->create_node<TextureCoordinateNode>();
-            if (m->tex_vector_mode == QT_TEX_VECTOR_MAPPING) {
-                MappingNode *mapping = graph->create_node<MappingNode>();
-                mapping->set_mapping_type(
-                    static_cast<NodeMappingType>(m->map_type));
-                mapping->set_location(make_float3(
-                    m->map_location[0], m->map_location[1], m->map_location[2]));
-                mapping->set_rotation(make_float3(
-                    m->map_rotation[0], m->map_rotation[1], m->map_rotation[2]));
-                mapping->set_scale(make_float3(
-                    m->map_scale[0], m->map_scale[1], m->map_scale[2]));
-                graph->connect(texcoord->output("UV"), mapping->input("Vector"));
-                graph->connect(mapping->output("Vector"), img->input("Vector"));
-            }
-            else {
-                graph->connect(texcoord->output("UV"), img->input("Vector"));
-            }
-        }
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->image_path, m->image_colorspace, m->tex_vector_mode,
+            m->map_location, m->map_rotation, m->map_scale, m->map_type);
         graph->connect(img->output("Color"), bsdf->input("Base Color"));
+    }
+    if (m->rough_image_path && m->rough_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->rough_image_path, m->rough_image_colorspace,
+            m->rough_tex_vector_mode, m->rough_map_location, m->rough_map_rotation,
+            m->rough_map_scale, m->rough_map_type);
+        /* Color → float: ShaderGraph::connect inserts NODE_CONVERT_CF (average). */
+        graph->connect(img->output("Color"), bsdf->input("Roughness"));
+    }
+    if (m->metal_image_path && m->metal_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->metal_image_path, m->metal_image_colorspace,
+            m->metal_tex_vector_mode, m->metal_map_location, m->metal_map_rotation,
+            m->metal_map_scale, m->metal_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Metallic"));
     }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
     surf->set_graph(std::move(graph));
@@ -379,7 +425,11 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
     mesh->tag_smooth_modified();
     mesh->tag_position_modified();
     mesh->add_vertex_normals();
-    if (m->image_path && m->image_path[0] && m->uvs) {
+    const bool needs_uv =
+        (m->image_path && m->image_path[0]) ||
+        (m->rough_image_path && m->rough_image_path[0]) ||
+        (m->metal_image_path && m->metal_image_path[0]);
+    if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
         for (int c = 0; c < m->ntris * 3; c++) {
@@ -628,7 +678,11 @@ static int run_qt_session(const QT_Scene *desc,
             fprintf(stderr, "quanttrace: mesh %d too large for Slice 2c\n", i);
             return -1;
         }
-        if (m->image_path && m->image_path[0] && !m->uvs) {
+        const bool needs_uv =
+            (m->image_path && m->image_path[0]) ||
+            (m->rough_image_path && m->rough_image_path[0]) ||
+            (m->metal_image_path && m->metal_image_path[0]);
+        if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;
         }

@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2h landed** (2026-08-27 8pm PlugWalk ET). TEX_COORD UV + Mapping VECTOR → TEX_IMAGE PASS. Mapping 256²/128 Δmax=1.67e-6; TEX_COORD-only 32²/4 Δmax=1.01e-6; unlinked 2f regression PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.9-slice2h`.
+Status: **Slice 2i landed** (2026-08-27 9pm PlugWalk ET). Principled Roughness/Metallic TEX_IMAGE (same Vector rules as Base Color) PASS. Roughness 256²/128 Δmax=4.77e-7; Metallic 256²/128 Δmax=5.36e-7; Both 32²/4 Δmax=2.98e-7; 2f/2h regressions PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.10-slice2i`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -823,7 +823,7 @@ Proof plate: `docs/proof/quanttrace-spot-32-pair.png` (32² preview only).
 
 ### Next
 
-Done 8pm: Mapping/TEX_COORD. See 8pm section. More Principled sockets / still-life 1px still open.
+Done 9pm: Roughness/Metallic TEX_IMAGE. See 9pm section.
 
 
 ---
@@ -874,4 +874,62 @@ Proof plate: `docs/proof/quanttrace-mapping-32-pair.png` (+ `/workspace/quanttra
 
 ### Next
 
-More Principled sockets, close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 9pm: Roughness/Metallic. See 9pm section.
+
+---
+
+## 9pm PlugWalk (2026-08-27) — Slice 2i: Roughness / Metallic TEX_IMAGE
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `rough_image_path` / `metal_image_path` (+ colorspace, `*_tex_vector_mode`, Mapping L/R/S/type) on `QT_Mesh` / `QT_SimpleScene` |
+| Packer | Base Color / Roughness / Metallic each may be constant OR TEX_IMAGE Color with same Vector rules (unlinked / TEX_COORD UV / Mapping VECTOR←TEX_COORD UV). Separate TEX_IMAGE node per socket (same disk filepath OK). IOR/Alpha/Normal refuse linked. |
+| Native | `wire_tex_image` helper; Color→Roughness/Metallic via `ShaderGraph::connect` NODE_CONVERT_CF (average). UVs when any socket textured. |
+| Version | `0.0.10-slice2i` |
+| Tools | `_quanttrace_rough_scene/smoke.py` (`--socket Roughness|Metallic|Both`) |
+
+### Measured — Roughness TEX_IMAGE (8×8 Non-Color gray checker, unlinked Vector)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Roughness Session | 32² / 4 | **3.58e-7** | 6.71e-9 | 0 / 1024 | **PASS** |
+| Roughness Session | 256² / 128 | **4.77e-7** | 4.03e-9 | 0 / 65536 | **PASS** |
+
+### Measured — Metallic TEX_IMAGE (same gray checker)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Metallic Session | 32² / 4 | **5.36e-7** | 6.90e-9 | 0 / 1024 | **PASS** |
+| Metallic Session | 256² / 128 | **5.36e-7** | 3.55e-9 | 0 / 65536 | **PASS** |
+
+### Measured — Both Roughness + Metallic (same filepath, separate TEX_IMAGE nodes)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Both Session | 32² / 4 | **2.98e-7** | 5.82e-9 | 0 / 1024 | **PASS** |
+
+### Measured — regressions (32² / 4)
+
+| Path | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| 2f Base Color TEX_IMAGE | 32² / 4 | **1.01e-6** | 7.01e-9 | **PASS** |
+| 2h Mapping VECTOR | 32² / 4 | **2.26e-6** | 1.29e-8 | **PASS** |
+| Locked cube constant | 32² / 4 | Session smoke OK | — | **PASS** (`is_tracer=1`, ver `0.0.10-slice2i`) |
+
+Proof plate: `docs/proof/quanttrace-rough-32-pair.png` (+ `/workspace/quanttrace-rough-32-pair.png`).
+
+### Honesty / still refuses
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented (not claimed fixed).
+- HDR worlds, kitchens, Generated/Object/Camera/Window/Reflection TEX_COORD, linked Mapping L/R/S, packed-only images, other Principled sockets (IOR/Alpha/Normal/…) still raise `QuantTraceSyncError`.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+More Principled sockets / Normal maps / close still-life 1px. Not ReSTIR. Not Classroom time %.
