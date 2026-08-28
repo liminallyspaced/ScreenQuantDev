@@ -19,6 +19,7 @@
  * Slice 2n: TEX_COORD Window + Reflection (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2o: TEX_IMAGE → Principled IOR / Alpha.
  * Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level.
+ * Slice 2q: TEX_IMAGE → Principled Coat Weight / Sheen Weight / Emission Strength.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -310,6 +311,27 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->spec_map_rotation, s->spec_map_rotation, sizeof(mesh->spec_map_rotation));
     std::memcpy(mesh->spec_map_scale, s->spec_map_scale, sizeof(mesh->spec_map_scale));
     mesh->spec_map_type = s->spec_map_type;
+    mesh->coat_image_path = s->coat_image_path;
+    mesh->coat_image_colorspace = s->coat_image_colorspace;
+    mesh->coat_tex_vector_mode = s->coat_tex_vector_mode;
+    std::memcpy(mesh->coat_map_location, s->coat_map_location, sizeof(mesh->coat_map_location));
+    std::memcpy(mesh->coat_map_rotation, s->coat_map_rotation, sizeof(mesh->coat_map_rotation));
+    std::memcpy(mesh->coat_map_scale, s->coat_map_scale, sizeof(mesh->coat_map_scale));
+    mesh->coat_map_type = s->coat_map_type;
+    mesh->sheen_image_path = s->sheen_image_path;
+    mesh->sheen_image_colorspace = s->sheen_image_colorspace;
+    mesh->sheen_tex_vector_mode = s->sheen_tex_vector_mode;
+    std::memcpy(mesh->sheen_map_location, s->sheen_map_location, sizeof(mesh->sheen_map_location));
+    std::memcpy(mesh->sheen_map_rotation, s->sheen_map_rotation, sizeof(mesh->sheen_map_rotation));
+    std::memcpy(mesh->sheen_map_scale, s->sheen_map_scale, sizeof(mesh->sheen_map_scale));
+    mesh->sheen_map_type = s->sheen_map_type;
+    mesh->emit_str_image_path = s->emit_str_image_path;
+    mesh->emit_str_image_colorspace = s->emit_str_image_colorspace;
+    mesh->emit_str_tex_vector_mode = s->emit_str_tex_vector_mode;
+    std::memcpy(mesh->emit_str_map_location, s->emit_str_map_location, sizeof(mesh->emit_str_map_location));
+    std::memcpy(mesh->emit_str_map_rotation, s->emit_str_map_rotation, sizeof(mesh->emit_str_map_rotation));
+    std::memcpy(mesh->emit_str_map_scale, s->emit_str_map_scale, sizeof(mesh->emit_str_map_scale));
+    mesh->emit_str_map_type = s->emit_str_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -399,7 +421,10 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->ior_tex_vector_mode) ||
            tex_mode_is_generated(m->alpha_tex_vector_mode) ||
            tex_mode_is_generated(m->trans_tex_vector_mode) ||
-           tex_mode_is_generated(m->spec_tex_vector_mode);
+           tex_mode_is_generated(m->spec_tex_vector_mode) ||
+           tex_mode_is_generated(m->coat_tex_vector_mode) ||
+           tex_mode_is_generated(m->sheen_tex_vector_mode) ||
+           tex_mode_is_generated(m->emit_str_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -439,7 +464,7 @@ static void fill_generated_orco(Mesh *mesh, const QT_Mesh *m)
 }
 
 /* Wire ImageTexture (+ optional TEX_COORD UV/Generated/Object/Camera/Window/Reflection + Mapping).
- * Color→float (Roughness/Metallic/IOR/Alpha/Transmission/Specular) gets ConvertNode via ShaderGraph::connect. */
+ * Color→float (Roughness/Metallic/IOR/Alpha/Transmission/Specular/Coat/Sheen/Emission Strength) gets ConvertNode via ShaderGraph::connect. */
 static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
                                         const char *path,
                                         const char *colorspace,
@@ -516,7 +541,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o/2p: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha / Transmission / Specular.
+    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o/2p/2q: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha / Transmission / Specular / Coat / Sheen / Emission Strength.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
      * mode 2: TextureCoordinate UV → Mapping → Image Vector.
@@ -603,6 +628,42 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         }
         graph->connect(img->output("Color"), in);
     }
+    /* Slice 2q: Color → Coat Weight (legacy Coat / Clearcoat) via NODE_CONVERT_CF. */
+    if (m->coat_image_path && m->coat_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->coat_image_path, m->coat_image_colorspace,
+            m->coat_tex_vector_mode, m->coat_map_location, m->coat_map_rotation,
+            m->coat_map_scale, m->coat_map_type);
+        ShaderInput *in = bsdf->input("Coat Weight");
+        if (in == nullptr) {
+            in = bsdf->input("Coat");
+        }
+        if (in == nullptr) {
+            in = bsdf->input("Clearcoat");
+        }
+        graph->connect(img->output("Color"), in);
+    }
+    /* Slice 2q: Color → Sheen Weight (legacy Sheen) via NODE_CONVERT_CF. */
+    if (m->sheen_image_path && m->sheen_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->sheen_image_path, m->sheen_image_colorspace,
+            m->sheen_tex_vector_mode, m->sheen_map_location, m->sheen_map_rotation,
+            m->sheen_map_scale, m->sheen_map_type);
+        ShaderInput *in = bsdf->input("Sheen Weight");
+        if (in == nullptr) {
+            in = bsdf->input("Sheen");
+        }
+        graph->connect(img->output("Color"), in);
+    }
+    /* Slice 2q: Color → Emission Strength via NODE_CONVERT_CF. */
+    if (m->emit_str_image_path && m->emit_str_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->emit_str_image_path, m->emit_str_image_colorspace,
+            m->emit_str_tex_vector_mode, m->emit_str_map_location,
+            m->emit_str_map_rotation, m->emit_str_map_scale, m->emit_str_map_type);
+        ShaderInput *in = bsdf->input("Emission Strength");
+        graph->connect(img->output("Color"), in);
+    }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
     surf->set_graph(std::move(graph));
     surf->tag_update(scene);
@@ -661,7 +722,10 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->ior_image_path && m->ior_image_path[0]) ||
         (m->alpha_image_path && m->alpha_image_path[0]) ||
         (m->trans_image_path && m->trans_image_path[0]) ||
-        (m->spec_image_path && m->spec_image_path[0]);
+        (m->spec_image_path && m->spec_image_path[0]) ||
+        (m->coat_image_path && m->coat_image_path[0]) ||
+        (m->sheen_image_path && m->sheen_image_path[0]) ||
+        (m->emit_str_image_path && m->emit_str_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
@@ -918,7 +982,14 @@ static int run_qt_session(const QT_Scene *desc,
             (m->image_path && m->image_path[0]) ||
             (m->rough_image_path && m->rough_image_path[0]) ||
             (m->metal_image_path && m->metal_image_path[0]) ||
-            (m->normal_image_path && m->normal_image_path[0]);
+            (m->normal_image_path && m->normal_image_path[0]) ||
+            (m->ior_image_path && m->ior_image_path[0]) ||
+            (m->alpha_image_path && m->alpha_image_path[0]) ||
+            (m->trans_image_path && m->trans_image_path[0]) ||
+            (m->spec_image_path && m->spec_image_path[0]) ||
+            (m->coat_image_path && m->coat_image_path[0]) ||
+            (m->sheen_image_path && m->sheen_image_path[0]) ||
+            (m->emit_str_image_path && m->emit_str_image_path[0]);
         if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;

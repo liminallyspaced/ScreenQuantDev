@@ -15,6 +15,7 @@
  * Slice 2n: TEX_COORD Window + Reflection (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2o: TEX_IMAGE → Principled IOR / Alpha (same Vector rules).
  * Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level.
+ * Slice 2q: TEX_IMAGE → Principled Coat Weight / Sheen Weight / Emission Strength.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -162,6 +163,30 @@ typedef struct QT_SimpleScene {
   float spec_map_rotation[3];
   float spec_map_scale[3];
   int spec_map_type;
+  /* Slice 2q: Coat Weight TEX_IMAGE (NULL/empty = constant 0) */
+  const char *coat_image_path;
+  const char *coat_image_colorspace;
+  int coat_tex_vector_mode;
+  float coat_map_location[3];
+  float coat_map_rotation[3];
+  float coat_map_scale[3];
+  int coat_map_type;
+  /* Slice 2q: Sheen Weight TEX_IMAGE (NULL/empty = constant 0) */
+  const char *sheen_image_path;
+  const char *sheen_image_colorspace;
+  int sheen_tex_vector_mode;
+  float sheen_map_location[3];
+  float sheen_map_rotation[3];
+  float sheen_map_scale[3];
+  int sheen_map_type;
+  /* Slice 2q: Emission Strength TEX_IMAGE (NULL/empty = constant 0) */
+  const char *emit_str_image_path;
+  const char *emit_str_image_colorspace;
+  int emit_str_tex_vector_mode;
+  float emit_str_map_location[3];
+  float emit_str_map_rotation[3];
+  float emit_str_map_scale[3];
+  int emit_str_map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -252,6 +277,30 @@ typedef struct QT_Mesh {
   float spec_map_rotation[3];
   float spec_map_scale[3];
   int spec_map_type;
+  /* Slice 2q: Coat Weight TEX_IMAGE */
+  const char *coat_image_path;
+  const char *coat_image_colorspace;
+  int coat_tex_vector_mode;
+  float coat_map_location[3];
+  float coat_map_rotation[3];
+  float coat_map_scale[3];
+  int coat_map_type;
+  /* Slice 2q: Sheen Weight TEX_IMAGE */
+  const char *sheen_image_path;
+  const char *sheen_image_colorspace;
+  int sheen_tex_vector_mode;
+  float sheen_map_location[3];
+  float sheen_map_rotation[3];
+  float sheen_map_scale[3];
+  int sheen_map_type;
+  /* Slice 2q: Emission Strength TEX_IMAGE */
+  const char *emit_str_image_path;
+  const char *emit_str_image_colorspace;
+  int emit_str_tex_vector_mode;
+  float emit_str_map_location[3];
+  float emit_str_map_rotation[3];
+  float emit_str_map_scale[3];
+  int emit_str_map_type;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

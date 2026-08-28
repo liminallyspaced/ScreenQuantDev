@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2p landed** (2026-08-28 4am PlugWalk ET). Principled Transmission Weight / Specular IOR Level TEX_IMAGE PASS. Transmission 32²/4 Δmax=1.60e-5; 256²/128 Δmax=4.44e-6. Specular 32²/4 Δmax=3.58e-7; 256²/128 Δmax=4.17e-7. Both 32²/4 Δmax=1.59e-5; 256²/128 Δmax=7.23e-5. Roughness 32²/4 regression Δmax=3.58e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.17-slice2p`.
+Status: **Slice 2q landed** (2026-08-28 5am PlugWalk ET). Principled Coat Weight / Sheen Weight / Emission Strength TEX_IMAGE PASS. Coat 32²/4 Δmax=2.38e-7; 256²/128 Δmax=3.58e-7. Sheen 32²/4 Δmax=2.98e-7; 256²/128 Δmax=3.58e-7. Emission Strength 32²/4 Δmax=8.34e-7; 256²/128 Δmax=9.54e-7. Coat+Sheen 32²/4 Δmax=2.98e-7; All three 32²/4 Δmax=5.96e-7. Roughness 32²/4 regression Δmax=3.58e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.18-slice2q`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -1297,4 +1297,67 @@ Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Re
 
 ### Next
 
-Coat / Sheen / Emission TEX_IMAGE, or close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 5am: Coat / Sheen / Emission Strength TEX_IMAGE. See 5am section.
+
+---
+
+## 5am PlugWalk (2026-08-28) — Slice 2q: Principled Coat / Sheen / Emission Strength TEX_IMAGE
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `coat_image_path` / `sheen_image_path` / `emit_str_image_path` (+ colorspace, tex_vector_mode, Mapping) on `QT_SimpleScene` and `QT_Mesh` (NULL/empty = Cycles constant Coat Weight 0 / Sheen Weight 0 / Emission Strength 0) |
+| Packer | Principled Coat Weight (legacy Coat / Clearcoat), Sheen Weight (legacy Sheen), and Emission Strength may be TEX_IMAGE Color (same Vector graph as Transmission/Specular). Coat Roughness/IOR/Tint, Sheen Roughness/Tint, Emission Color still refuse. |
+| Native | Color → Coat Weight / Sheen Weight / Emission Strength via `ShaderGraph::connect` (`NODE_CONVERT_CF`). `needs_uv` and `mesh_uses_generated` include all three sockets. |
+| Version | `0.0.18-slice2q` |
+| Tools | `_quanttrace_coatsheen_scene/smoke.py` (8×8 Non-Color gray checker; `--socket Coat|Sheen|Emission|Both|All`) |
+
+### Measured — TEX_IMAGE → Principled Coat Weight
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Coat Session | 32² / 4 | **2.38e-7** | 4.71e-9 | 0 / 1024 | **PASS** |
+| Coat Session | 256² / 128 | **3.58e-7** | 3.38e-9 | 0 / 65536 | **PASS** |
+
+### Measured — TEX_IMAGE → Principled Sheen Weight
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Sheen Session | 32² / 4 | **2.98e-7** | 5.12e-9 | 0 / 1024 | **PASS** |
+| Sheen Session | 256² / 128 | **3.58e-7** | 3.71e-9 | 0 / 65536 | **PASS** |
+
+### Measured — TEX_IMAGE → Principled Emission Strength
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Emission Session | 32² / 4 | **8.34e-7** | 1.56e-8 | 0 / 1024 | **PASS** |
+| Emission Session | 256² / 128 | **9.54e-7** | 9.62e-9 | 0 / 65536 | **PASS** |
+
+### Measured — combined sockets, same filepath
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Coat+Sheen Session | 32² / 4 | **2.98e-7** | 5.18e-9 | 0 / 1024 | **PASS** |
+| All three Session | 32² / 4 | **5.96e-7** | 1.21e-8 | 0 / 1024 | **PASS** |
+
+### Measured — regressions (32² / 4)
+
+| Path | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| 2i Roughness TEX_IMAGE | 32² / 4 | **3.58e-7** | 6.71e-9 | **PASS** |
+
+### Honesty / still refuses
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented (not claimed fixed).
+- HDR worlds, kitchens, TEX_COORD Object **with** Object reference (use_transform / object_itfm), linked Mapping L/R/S, packed-only images, Coat Roughness/IOR/Tint, Sheen Roughness/Tint, Emission Color still raise `QuantTraceSyncError`.
+- Film stays opaque (`film_transparent=False`); Combined RGB is over black world. Session Combined A mean stays 1.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Emission Color TEX_IMAGE, Coat Roughness, or close still-life 1px. Not ReSTIR. Not Classroom time %.
