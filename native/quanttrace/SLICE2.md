@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2r landed** (2026-08-28 6am PlugWalk ET). Principled Emission Color TEX_IMAGE PASS. Color 32²/4 Δmax=5.96e-7; 256²/128 Δmax=9.54e-7. Color+Strength 32²/4 Δmax=7.15e-7. Coat Weight 32²/4 regression Δmax=2.38e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.19-slice2r`.
+Status: **Slice 2s landed** (2026-08-28 7am PlugWalk ET). Principled Coat Roughness / Coat IOR / Coat Tint / Sheen Roughness / Sheen Tint TEX_IMAGE PASS. CoatRough 32²/4 Δmax=2.38e-7; 256²/128 Δmax=4.77e-7. CoatTint 256²/128 Δmax=2.20e-4. Coat Weight 32²/4 regression Δmax=2.38e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.20-slice2s`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -8,6 +8,52 @@ Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 `is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
+
+
+---
+
+## 7am PlugWalk (2026-08-28) — Coat/Sheen extras TEX_IMAGE (Slice 2s)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `coat_rough_` / `coat_ior_` / `coat_tint_` / `sheen_rough_` / `sheen_tint_` on `QT_Mesh` + `QT_SimpleScene` |
+| Python | `sync._principled_from_material` accepts those five; **Coat Normal** still refuses |
+| Native | Color→Coat Roughness / Coat IOR / Sheen Roughness via NODE_CONVERT_CF; Tint Color→Color. Pins `set_coat_weight(1.0)` / `set_sheen_weight(1.0)` when extras map and Weight is unmapped |
+| Version | `0.0.20-slice2s` |
+| Tools | `tools/_quanttrace_coatextra_scene.py`, `tools/_quanttrace_coatextra_smoke.py` |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Socket | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| CoatRough | 32² / 4 | **2.38e-7** | 6.02e-9 | **PASS** |
+| CoatRough | 256² / 128 | **4.77e-7** | 3.78e-9 | **PASS** |
+| CoatIOR | 32² / 4 | **3.58e-7** | 5.17e-9 | **PASS** |
+| CoatIOR | 256² / 128 | **4.77e-7** | 3.64e-9 | **PASS** |
+| CoatTint | 32² / 4 | **5.96e-7** | 3.64e-9 | **PASS** |
+| CoatTint | 256² / 128 | **2.20e-4** | 3.87e-9 | **PASS** |
+| SheenRough | 32² / 4 | **5.96e-7** | 7.46e-9 | **PASS** |
+| SheenRough | 256² / 128 | **7.15e-7** | 5.06e-9 | **PASS** |
+| SheenTint | 32² / 4 | **3.58e-7** | 5.45e-9 | **PASS** |
+| SheenTint | 256² / 128 | **4.77e-7** | 3.76e-9 | **PASS** |
+| Combo (CoatRough+SheenRough) | 32² / 4 | **5.96e-7** | 8.66e-9 | **PASS** |
+| Coat Weight (2q regression) | 32² / 4 | **2.38e-7** | 4.71e-9 | **PASS** |
+
+### Honesty
+
+- Coat Normal, HDR / kitchens, Object-with-pointer, packed-only, linked Mapping L/R/S still refuse.
+- Still-life 256² 1px noise-class residue still documented (not claimed fixed).
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Specular Tint / Thin Film / Subsurface sockets, or close the still-life 1px residue. Not ReSTIR. Not Classroom time %.
+
 
 ---
 

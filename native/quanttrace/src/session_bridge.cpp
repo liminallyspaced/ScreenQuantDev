@@ -340,6 +340,41 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->emit_color_map_rotation, s->emit_color_map_rotation, sizeof(mesh->emit_color_map_rotation));
     std::memcpy(mesh->emit_color_map_scale, s->emit_color_map_scale, sizeof(mesh->emit_color_map_scale));
     mesh->emit_color_map_type = s->emit_color_map_type;
+    mesh->coat_rough_image_path = s->coat_rough_image_path;
+    mesh->coat_rough_image_colorspace = s->coat_rough_image_colorspace;
+    mesh->coat_rough_tex_vector_mode = s->coat_rough_tex_vector_mode;
+    std::memcpy(mesh->coat_rough_map_location, s->coat_rough_map_location, sizeof(mesh->coat_rough_map_location));
+    std::memcpy(mesh->coat_rough_map_rotation, s->coat_rough_map_rotation, sizeof(mesh->coat_rough_map_rotation));
+    std::memcpy(mesh->coat_rough_map_scale, s->coat_rough_map_scale, sizeof(mesh->coat_rough_map_scale));
+    mesh->coat_rough_map_type = s->coat_rough_map_type;
+    mesh->coat_ior_image_path = s->coat_ior_image_path;
+    mesh->coat_ior_image_colorspace = s->coat_ior_image_colorspace;
+    mesh->coat_ior_tex_vector_mode = s->coat_ior_tex_vector_mode;
+    std::memcpy(mesh->coat_ior_map_location, s->coat_ior_map_location, sizeof(mesh->coat_ior_map_location));
+    std::memcpy(mesh->coat_ior_map_rotation, s->coat_ior_map_rotation, sizeof(mesh->coat_ior_map_rotation));
+    std::memcpy(mesh->coat_ior_map_scale, s->coat_ior_map_scale, sizeof(mesh->coat_ior_map_scale));
+    mesh->coat_ior_map_type = s->coat_ior_map_type;
+    mesh->coat_tint_image_path = s->coat_tint_image_path;
+    mesh->coat_tint_image_colorspace = s->coat_tint_image_colorspace;
+    mesh->coat_tint_tex_vector_mode = s->coat_tint_tex_vector_mode;
+    std::memcpy(mesh->coat_tint_map_location, s->coat_tint_map_location, sizeof(mesh->coat_tint_map_location));
+    std::memcpy(mesh->coat_tint_map_rotation, s->coat_tint_map_rotation, sizeof(mesh->coat_tint_map_rotation));
+    std::memcpy(mesh->coat_tint_map_scale, s->coat_tint_map_scale, sizeof(mesh->coat_tint_map_scale));
+    mesh->coat_tint_map_type = s->coat_tint_map_type;
+    mesh->sheen_rough_image_path = s->sheen_rough_image_path;
+    mesh->sheen_rough_image_colorspace = s->sheen_rough_image_colorspace;
+    mesh->sheen_rough_tex_vector_mode = s->sheen_rough_tex_vector_mode;
+    std::memcpy(mesh->sheen_rough_map_location, s->sheen_rough_map_location, sizeof(mesh->sheen_rough_map_location));
+    std::memcpy(mesh->sheen_rough_map_rotation, s->sheen_rough_map_rotation, sizeof(mesh->sheen_rough_map_rotation));
+    std::memcpy(mesh->sheen_rough_map_scale, s->sheen_rough_map_scale, sizeof(mesh->sheen_rough_map_scale));
+    mesh->sheen_rough_map_type = s->sheen_rough_map_type;
+    mesh->sheen_tint_image_path = s->sheen_tint_image_path;
+    mesh->sheen_tint_image_colorspace = s->sheen_tint_image_colorspace;
+    mesh->sheen_tint_tex_vector_mode = s->sheen_tint_tex_vector_mode;
+    std::memcpy(mesh->sheen_tint_map_location, s->sheen_tint_map_location, sizeof(mesh->sheen_tint_map_location));
+    std::memcpy(mesh->sheen_tint_map_rotation, s->sheen_tint_map_rotation, sizeof(mesh->sheen_tint_map_rotation));
+    std::memcpy(mesh->sheen_tint_map_scale, s->sheen_tint_map_scale, sizeof(mesh->sheen_tint_map_scale));
+    mesh->sheen_tint_map_type = s->sheen_tint_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -433,7 +468,12 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->coat_tex_vector_mode) ||
            tex_mode_is_generated(m->sheen_tex_vector_mode) ||
            tex_mode_is_generated(m->emit_str_tex_vector_mode) ||
-           tex_mode_is_generated(m->emit_color_tex_vector_mode);
+           tex_mode_is_generated(m->emit_color_tex_vector_mode) ||
+           tex_mode_is_generated(m->coat_rough_tex_vector_mode) ||
+           tex_mode_is_generated(m->coat_ior_tex_vector_mode) ||
+           tex_mode_is_generated(m->coat_tint_tex_vector_mode) ||
+           tex_mode_is_generated(m->sheen_rough_tex_vector_mode) ||
+           tex_mode_is_generated(m->sheen_tint_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -551,7 +591,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o/2p/2q/2r: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha / Transmission / Specular / Coat / Sheen / Emission Strength / Emission Color.
+    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o/2p/2q/2r/2s: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha / Transmission / Specular / Coat / Sheen / Emission Strength / Emission Color.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
      * mode 2: TextureCoordinate UV → Mapping → Image Vector.
@@ -691,6 +731,57 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             bsdf->set_emission_strength(1.0f);
         }
     }
+
+    /* Slice 2s: Color → Coat Roughness / Coat IOR / Coat Tint / Sheen Roughness / Sheen Tint.
+     * Float sockets via NODE_CONVERT_CF; Tint is Color→Color.
+     * Cycles default coat_weight/sheen_weight are 0; pin 1.0 when extras map
+     * and Weight is not itself mapped (matches test-scene Weight=1.0). */
+    if (m->coat_rough_image_path && m->coat_rough_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->coat_rough_image_path, m->coat_rough_image_colorspace,
+            m->coat_rough_tex_vector_mode, m->coat_rough_map_location,
+            m->coat_rough_map_rotation, m->coat_rough_map_scale, m->coat_rough_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Coat Roughness"));
+    }
+    if (m->coat_ior_image_path && m->coat_ior_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->coat_ior_image_path, m->coat_ior_image_colorspace,
+            m->coat_ior_tex_vector_mode, m->coat_ior_map_location,
+            m->coat_ior_map_rotation, m->coat_ior_map_scale, m->coat_ior_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Coat IOR"));
+    }
+    if (m->coat_tint_image_path && m->coat_tint_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->coat_tint_image_path, m->coat_tint_image_colorspace,
+            m->coat_tint_tex_vector_mode, m->coat_tint_map_location,
+            m->coat_tint_map_rotation, m->coat_tint_map_scale, m->coat_tint_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Coat Tint"));
+    }
+    if (m->sheen_rough_image_path && m->sheen_rough_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->sheen_rough_image_path, m->sheen_rough_image_colorspace,
+            m->sheen_rough_tex_vector_mode, m->sheen_rough_map_location,
+            m->sheen_rough_map_rotation, m->sheen_rough_map_scale, m->sheen_rough_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Sheen Roughness"));
+    }
+    if (m->sheen_tint_image_path && m->sheen_tint_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->sheen_tint_image_path, m->sheen_tint_image_colorspace,
+            m->sheen_tint_tex_vector_mode, m->sheen_tint_map_location,
+            m->sheen_tint_map_rotation, m->sheen_tint_map_scale, m->sheen_tint_map_type);
+        graph->connect(img->output("Color"), bsdf->input("Sheen Tint"));
+    }
+    if (((m->coat_rough_image_path && m->coat_rough_image_path[0]) ||
+         (m->coat_ior_image_path && m->coat_ior_image_path[0]) ||
+         (m->coat_tint_image_path && m->coat_tint_image_path[0])) &&
+        !(m->coat_image_path && m->coat_image_path[0])) {
+        bsdf->set_coat_weight(1.0f);
+    }
+    if (((m->sheen_rough_image_path && m->sheen_rough_image_path[0]) ||
+         (m->sheen_tint_image_path && m->sheen_tint_image_path[0])) &&
+        !(m->sheen_image_path && m->sheen_image_path[0])) {
+        bsdf->set_sheen_weight(1.0f);
+    }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
     surf->set_graph(std::move(graph));
     surf->tag_update(scene);
@@ -753,7 +844,12 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->coat_image_path && m->coat_image_path[0]) ||
         (m->sheen_image_path && m->sheen_image_path[0]) ||
         (m->emit_str_image_path && m->emit_str_image_path[0]) ||
-        (m->emit_color_image_path && m->emit_color_image_path[0]);
+        (m->emit_color_image_path && m->emit_color_image_path[0]) ||
+        (m->coat_rough_image_path && m->coat_rough_image_path[0]) ||
+        (m->coat_ior_image_path && m->coat_ior_image_path[0]) ||
+        (m->coat_tint_image_path && m->coat_tint_image_path[0]) ||
+        (m->sheen_rough_image_path && m->sheen_rough_image_path[0]) ||
+        (m->sheen_tint_image_path && m->sheen_tint_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
@@ -1018,7 +1114,12 @@ static int run_qt_session(const QT_Scene *desc,
             (m->coat_image_path && m->coat_image_path[0]) ||
             (m->sheen_image_path && m->sheen_image_path[0]) ||
             (m->emit_str_image_path && m->emit_str_image_path[0]) ||
-            (m->emit_color_image_path && m->emit_color_image_path[0]);
+            (m->emit_color_image_path && m->emit_color_image_path[0]) ||
+            (m->coat_rough_image_path && m->coat_rough_image_path[0]) ||
+            (m->coat_ior_image_path && m->coat_ior_image_path[0]) ||
+            (m->coat_tint_image_path && m->coat_tint_image_path[0]) ||
+            (m->sheen_rough_image_path && m->sheen_rough_image_path[0]) ||
+            (m->sheen_tint_image_path && m->sheen_tint_image_path[0]);
         if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;

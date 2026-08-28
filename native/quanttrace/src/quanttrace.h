@@ -196,6 +196,46 @@ typedef struct QT_SimpleScene {
   float emit_color_map_rotation[3];
   float emit_color_map_scale[3];
   int emit_color_map_type;
+  /* Slice 2s: Coat Roughness TEX_IMAGE (NULL/empty = constant 0.03) */
+  const char *coat_rough_image_path;
+  const char *coat_rough_image_colorspace;
+  int coat_rough_tex_vector_mode;
+  float coat_rough_map_location[3];
+  float coat_rough_map_rotation[3];
+  float coat_rough_map_scale[3];
+  int coat_rough_map_type;
+  /* Slice 2s: Coat IOR TEX_IMAGE (NULL/empty = constant 1.5) */
+  const char *coat_ior_image_path;
+  const char *coat_ior_image_colorspace;
+  int coat_ior_tex_vector_mode;
+  float coat_ior_map_location[3];
+  float coat_ior_map_rotation[3];
+  float coat_ior_map_scale[3];
+  int coat_ior_map_type;
+  /* Slice 2s: Coat Tint TEX_IMAGE (NULL/empty = Cycles default 1,1,1) */
+  const char *coat_tint_image_path;
+  const char *coat_tint_image_colorspace;
+  int coat_tint_tex_vector_mode;
+  float coat_tint_map_location[3];
+  float coat_tint_map_rotation[3];
+  float coat_tint_map_scale[3];
+  int coat_tint_map_type;
+  /* Slice 2s: Sheen Roughness TEX_IMAGE (NULL/empty = constant 0.5) */
+  const char *sheen_rough_image_path;
+  const char *sheen_rough_image_colorspace;
+  int sheen_rough_tex_vector_mode;
+  float sheen_rough_map_location[3];
+  float sheen_rough_map_rotation[3];
+  float sheen_rough_map_scale[3];
+  int sheen_rough_map_type;
+  /* Slice 2s: Sheen Tint TEX_IMAGE (NULL/empty = Cycles default 1,1,1) */
+  const char *sheen_tint_image_path;
+  const char *sheen_tint_image_colorspace;
+  int sheen_tint_tex_vector_mode;
+  float sheen_tint_map_location[3];
+  float sheen_tint_map_rotation[3];
+  float sheen_tint_map_scale[3];
+  int sheen_tint_map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -318,6 +358,46 @@ typedef struct QT_Mesh {
   float emit_color_map_rotation[3];
   float emit_color_map_scale[3];
   int emit_color_map_type;
+  /* Slice 2s: Coat Roughness TEX_IMAGE (NULL/empty = constant 0.03) */
+  const char *coat_rough_image_path;
+  const char *coat_rough_image_colorspace;
+  int coat_rough_tex_vector_mode;
+  float coat_rough_map_location[3];
+  float coat_rough_map_rotation[3];
+  float coat_rough_map_scale[3];
+  int coat_rough_map_type;
+  /* Slice 2s: Coat IOR TEX_IMAGE (NULL/empty = constant 1.5) */
+  const char *coat_ior_image_path;
+  const char *coat_ior_image_colorspace;
+  int coat_ior_tex_vector_mode;
+  float coat_ior_map_location[3];
+  float coat_ior_map_rotation[3];
+  float coat_ior_map_scale[3];
+  int coat_ior_map_type;
+  /* Slice 2s: Coat Tint TEX_IMAGE (NULL/empty = Cycles default 1,1,1) */
+  const char *coat_tint_image_path;
+  const char *coat_tint_image_colorspace;
+  int coat_tint_tex_vector_mode;
+  float coat_tint_map_location[3];
+  float coat_tint_map_rotation[3];
+  float coat_tint_map_scale[3];
+  int coat_tint_map_type;
+  /* Slice 2s: Sheen Roughness TEX_IMAGE (NULL/empty = constant 0.5) */
+  const char *sheen_rough_image_path;
+  const char *sheen_rough_image_colorspace;
+  int sheen_rough_tex_vector_mode;
+  float sheen_rough_map_location[3];
+  float sheen_rough_map_rotation[3];
+  float sheen_rough_map_scale[3];
+  int sheen_rough_map_type;
+  /* Slice 2s: Sheen Tint TEX_IMAGE (NULL/empty = Cycles default 1,1,1) */
+  const char *sheen_tint_image_path;
+  const char *sheen_tint_image_colorspace;
+  int sheen_tint_tex_vector_mode;
+  float sheen_tint_map_location[3];
+  float sheen_tint_map_rotation[3];
+  float sheen_tint_map_scale[3];
+  int sheen_tint_map_type;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
