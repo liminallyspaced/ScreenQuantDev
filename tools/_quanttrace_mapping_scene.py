@@ -16,12 +16,14 @@ def build_mapping_scene(
     scale=(2.0, 2.0, 2.0),
     location=(0.1, 0.2, 0.0),
     rotation_z=0.15,
+    coord="UV",
 ):
-    """Build tex scene; optionally wire TEX_COORD UV [→ Mapping] → TEX_IMAGE Vector.
+    """Build tex scene; optionally wire TEX_COORD UV/Generated [→ Mapping] → TEX_IMAGE.
 
     use_texcoord=False + use_mapping=False → Slice 2f unlinked Vector regression.
-    use_texcoord=True + use_mapping=False → TEX_COORD UV only.
-    use_texcoord=True + use_mapping=True → TEX_COORD UV → Mapping (VECTOR) → TEX_IMAGE.
+    use_texcoord=True + use_mapping=False → TEX_COORD only.
+    use_texcoord=True + use_mapping=True → TEX_COORD → Mapping (VECTOR) → TEX_IMAGE.
+    coord: "UV" (Slice 2h) or "Generated" (Slice 2k).
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -42,7 +44,8 @@ def build_mapping_scene(
     if use_texcoord:
         tc = nt.nodes.new("ShaderNodeTexCoord")
         tc.location = (-600, 200)
-        uv_out = tc.outputs["UV"]
+        coord_name = "Generated" if str(coord).strip().lower() == "generated" else "UV"
+        coord_out = tc.outputs[coord_name]
         if use_mapping:
             mapping = nt.nodes.new("ShaderNodeMapping")
             mapping.location = (-400, 200)
@@ -56,15 +59,15 @@ def build_mapping_scene(
                 float(scale[0]), float(scale[1]), float(scale[2]),
             )
             mapping.vector_type = "VECTOR"
-            nt.links.new(uv_out, mapping.inputs["Vector"])
+            nt.links.new(coord_out, mapping.inputs["Vector"])
             nt.links.new(mapping.outputs["Vector"], vec_in)
             print(
-                "QUANTTRACE_MAP graph TEX_COORD UV → Mapping VECTOR "
+                f"QUANTTRACE_MAP graph TEX_COORD {coord_name} → Mapping VECTOR "
                 f"loc={tuple(location)} rot_z={rotation_z} scale={tuple(scale)}"
             )
         else:
-            nt.links.new(uv_out, vec_in)
-            print("QUANTTRACE_MAP graph TEX_COORD UV → TEX_IMAGE Vector")
+            nt.links.new(coord_out, vec_in)
+            print(f"QUANTTRACE_MAP graph TEX_COORD {coord_name} → TEX_IMAGE Vector")
     else:
         print("QUANTTRACE_MAP graph TEX_IMAGE Vector unlinked (2f regression)")
 
@@ -84,6 +87,7 @@ def main():
     p.add_argument("--res", type=int, default=64)
     p.add_argument("--samples", type=int, default=32)
     p.add_argument("--mode", choices=("mapping", "texcoord", "unlinked"), default="mapping")
+    p.add_argument("--coord", choices=("UV", "Generated"), default="UV")
     p.add_argument("--scale", type=float, nargs=3, default=(2.0, 2.0, 2.0))
     p.add_argument("--location", type=float, nargs=3, default=(0.1, 0.2, 0.0))
     p.add_argument("--rotation-z", type=float, default=0.15)
@@ -97,6 +101,7 @@ def main():
         scale=tuple(args.scale),
         location=tuple(args.location),
         rotation_z=args.rotation_z,
+        coord=args.coord,
     )
     print(
         "QUANTTRACE_MAP", cube_obj.name, "mode", args.mode,

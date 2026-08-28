@@ -1,10 +1,10 @@
-<!-- Slice 2j: Normal Map TEX_IMAGE; version 0.0.11-slice2j -->
+<!-- Slice 2k: TEX_COORD Generated; version 0.0.12-slice2k -->
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.11-slice2j`.
+`-DQT_WITH_CYCLES=ON`. Native `0.0.12-slice2k`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -25,8 +25,9 @@ this tree never feeds Auto clocks.
 | **2h — Mapping/TEX_COORD** | **PASS** | Mapping VECTOR 256²/128 Δmax **1.67e-6**. Native `0.0.9-slice2h`. |
 | **2i — Roughness/Metallic TEX_IMAGE** | **PASS** | Roughness 256²/128 Δmax **4.77e-7**; Metallic 256²/128 Δmax **5.36e-7**. Native `0.0.10-slice2i`. |
 | **2j — Normal Map TEX_IMAGE** | **PASS** | Tangent Normal Map ← TEX_IMAGE. 16×16 Non-Color bump 32²/4 Δmax **3.58e-7**; 256²/128 Δmax **5.96e-7**. Native `0.0.11-slice2j`. |
+| **2k — TEX_COORD Generated** | **PASS** | Generated 32²/4 Δmax **2.15e-6**; 256²/128 Δmax **2.56e-6**. Generated+Mapping 256²/128 Δmax **3.93e-6**. Native `0.0.12-slice2k`. |
 
-Kitchens / HDR worlds / IOR·Alpha links / Object·World Normal space / Bump / non-UV TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
+Kitchens / HDR worlds / IOR·Alpha links / Object·World Normal space / Bump / Object·Camera·Window·Reflection TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
 
 ## Build (Linux) — hello stub (default)
 
@@ -46,7 +47,7 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=1, session_probe=1, version 0.0.11-slice2j
+# ABI: is_tracer=1, session_probe=1, version 0.0.12-slice2k
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 blender --background --python tools/_quanttrace_f12_smoke.py -- \
@@ -64,7 +65,7 @@ See `SLICE2.md`. Working CPU binary after `make update` + cmake:
 ## ABI
 
 ```c
-const char *quanttrace_version(void);   /* "0.0.11-slice2j" */
+const char *quanttrace_version(void);   /* "0.0.12-slice2k" */
 int quanttrace_is_tracer(void);         /* 1 when QT_WITH_CYCLES */
 int quanttrace_render_scene_rgba(...);  /* depsgraph-fed QT_SimpleScene (1+1) */
 int quanttrace_render_qt_scene_rgba(...); /* N mesh + N AREA QT_Scene */
@@ -76,5 +77,5 @@ int quanttrace_render_cube_rgba(float *out, int cap, int *w, int *h);
 
 ## Out of scope until shader / light-type expand
 
-- Kitchen F12 / HDR world / Object·World Normal / Bump / other Principled sockets
+- Kitchen F12 / HDR world / Object·World Normal / Bump / IOR·Alpha / Object·Camera TEX_COORD
 - ReSTIR / OptiX / Make it Fast / zip / store % claims

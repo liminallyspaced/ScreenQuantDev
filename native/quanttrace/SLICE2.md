@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2j landed** (2026-08-27 10pm PlugWalk ET). Principled Normal Map (Tangent) + TEX_IMAGE PASS. Normal 32²/4 Δmax=3.58e-7; 256²/128 Δmax=5.96e-7. Roughness 32²/4 regression Δmax=3.58e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.11-slice2j`.
+Status: **Slice 2k landed** (2026-08-27 11pm PlugWalk ET). TEX_COORD Generated (+ Mapping) PASS. Generated 32²/4 Δmax=2.15e-6; 256²/128 Δmax=2.56e-6. Generated+Mapping 256²/128 Δmax=3.93e-6. UV Mapping 32²/4 regression Δmax=2.26e-6 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.12-slice2k`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -976,4 +976,55 @@ Proof plate: `docs/proof/quanttrace-normal-32-pair.png` (+ `/workspace/quanttrac
 
 ### Next
 
-More Principled sockets / close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 11pm: Generated TEX_COORD. See 11pm section.
+
+---
+
+## 11pm PlugWalk (2026-08-27) — Slice 2k: TEX_COORD Generated
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `QT_TEX_VECTOR_TEXCOORD_GENERATED=3`, `QT_TEX_VECTOR_MAPPING_GENERATED=4` (existing `tex_vector_mode` int; no new struct fields) |
+| Packer | TEX_COORD Generated as well as UV; Mapping.Vector may come from either. Object/Camera/Window/Reflection still refuse. |
+| Native | `TextureCoordinateNode` output `"Generated"`; `ATTR_STD_GENERATED` filled from object-local bbox orco `[0,1]`. Do **not** rely on `Mesh::update_generated` (copies raw verts). |
+| Version | `0.0.12-slice2k` |
+| Tools | `_quanttrace_generated_scene/smoke.py` (8×8 sRGB checker, Generated / Generated+Mapping) |
+
+### Measured — TEX_COORD Generated (8×8 sRGB checker, unlinked Mapping)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Generated Session | 32² / 4 | **2.15e-6** | 1.14e-8 | 0 / 1024 | **PASS** |
+| Generated Session | 256² / 128 | **2.56e-6** | 7.10e-9 | 0 / 65536 | **PASS** |
+
+### Measured — TEX_COORD Generated → Mapping VECTOR (scale 2, loc 0.1/0.2, rot_z 0.15)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Generated+Mapping Session | 32² / 4 | **7.87e-6** | 4.41e-8 | 0 / 1024 | **PASS** |
+| Generated+Mapping Session | 256² / 128 | **3.93e-6** | 1.70e-8 | 0 / 65536 | **PASS** |
+
+### Measured — regressions (32² / 4)
+
+| Path | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| 2h Mapping VECTOR (UV) | 32² / 4 | **2.26e-6** | 1.29e-8 | **PASS** |
+
+Proof plate: `docs/proof/quanttrace-generated-32-pair.png` (+ `/workspace/quanttrace-generated-32-pair.png`).
+
+### Honesty / still refuses
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented (not claimed fixed).
+- HDR worlds, kitchens, Object/Camera/Window/Reflection TEX_COORD, linked Mapping L/R/S, packed-only images, IOR/Alpha still raise `QuantTraceSyncError`.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+More Principled sockets (IOR/Alpha) / close still-life 1px. Not ReSTIR. Not Classroom time %.
+

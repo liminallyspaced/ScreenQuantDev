@@ -13,6 +13,7 @@
  * Slice 2h: TEX_COORD UV + Mapping → TEX_IMAGE Vector.
  * Slice 2i: TEX_IMAGE → Principled Roughness / Metallic.
  * Slice 2j: Normal Map (Tangent) + TEX_IMAGE → Principled Normal.
+ * Slice 2k: TEX_COORD Generated (+ optional Mapping) → TEX_IMAGE Vector.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -305,7 +306,70 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->exr_path = s->exr_path;
 }
 
-/* Wire ImageTexture (+ optional TEX_COORD/Mapping) → destination socket.
+static bool tex_mode_is_generated(int mode)
+{
+    return mode == QT_TEX_VECTOR_TEXCOORD_GENERATED ||
+           mode == QT_TEX_VECTOR_MAPPING_GENERATED;
+}
+
+static bool tex_mode_has_texcoord(int mode)
+{
+    return mode == QT_TEX_VECTOR_TEXCOORD ||
+           mode == QT_TEX_VECTOR_MAPPING ||
+           tex_mode_is_generated(mode);
+}
+
+static bool tex_mode_has_mapping(int mode)
+{
+    return mode == QT_TEX_VECTOR_MAPPING ||
+           mode == QT_TEX_VECTOR_MAPPING_GENERATED;
+}
+
+static bool mesh_uses_generated(const QT_Mesh *m)
+{
+    return tex_mode_is_generated(m->tex_vector_mode) ||
+           tex_mode_is_generated(m->rough_tex_vector_mode) ||
+           tex_mode_is_generated(m->metal_tex_vector_mode) ||
+           tex_mode_is_generated(m->normal_tex_vector_mode);
+}
+
+/* Blender Generated / orco: map object-local verts through the auto texspace
+ * bounding box onto [0,1]. Default cube (±1) → (P+1)/2. Matches
+ * BKE_mesh_texspace_get auto: loc=center, size=half-extent,
+ * generated = (P - (loc - size)) / (2*size). Fill ATTR_STD_GENERATED
+ * ourselves — Mesh::update_generated copies raw verts if missing, which
+ * is NOT Blender Generated. */
+static void fill_generated_orco(Mesh *mesh, const QT_Mesh *m)
+{
+    if (m->nverts <= 0 || !m->verts) {
+        return;
+    }
+    float bmin[3] = {1e30f, 1e30f, 1e30f};
+    float bmax[3] = {-1e30f, -1e30f, -1e30f};
+    for (int i = 0; i < m->nverts; i++) {
+        for (int c = 0; c < 3; c++) {
+            const float v = m->verts[i * 3 + c];
+            if (v < bmin[c]) {
+                bmin[c] = v;
+            }
+            if (v > bmax[c]) {
+                bmax[c] = v;
+            }
+        }
+    }
+    Attribute *attr = mesh->attributes.add(ATTR_STD_GENERATED);
+    packed_float3 *g = attr->data_for_write<packed_float3>();
+    for (int i = 0; i < m->nverts; i++) {
+        float t[3];
+        for (int c = 0; c < 3; c++) {
+            const float span = bmax[c] - bmin[c];
+            t[c] = (span > 1e-8f) ? (m->verts[i * 3 + c] - bmin[c]) / span : 0.5f;
+        }
+        g[i] = make_float3(t[0], t[1], t[2]);
+    }
+}
+
+/* Wire ImageTexture (+ optional TEX_COORD UV/Generated + Mapping).
  * Color→float (Roughness/Metallic) gets ConvertNode via ShaderGraph::connect. */
 static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
                                         const char *path,
@@ -325,11 +389,12 @@ static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
     img->set_extension(EXTENSION_REPEAT);
     img->set_projection(NODE_IMAGE_PROJ_FLAT);
     img->set_alpha_type(IMAGE_ALPHA_AUTO);
-    if (tex_vector_mode == QT_TEX_VECTOR_TEXCOORD ||
-        tex_vector_mode == QT_TEX_VECTOR_MAPPING) {
+    if (tex_mode_has_texcoord(tex_vector_mode)) {
         TextureCoordinateNode *texcoord =
             graph->create_node<TextureCoordinateNode>();
-        if (tex_vector_mode == QT_TEX_VECTOR_MAPPING) {
+        const char *coord_sock =
+            tex_mode_is_generated(tex_vector_mode) ? "Generated" : "UV";
+        if (tex_mode_has_mapping(tex_vector_mode)) {
             MappingNode *mapping = graph->create_node<MappingNode>();
             mapping->set_mapping_type(static_cast<NodeMappingType>(map_type));
             mapping->set_location(make_float3(
@@ -338,11 +403,11 @@ static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
                 map_rotation[0], map_rotation[1], map_rotation[2]));
             mapping->set_scale(make_float3(
                 map_scale[0], map_scale[1], map_scale[2]));
-            graph->connect(texcoord->output("UV"), mapping->input("Vector"));
+            graph->connect(texcoord->output(coord_sock), mapping->input("Vector"));
             graph->connect(mapping->output("Vector"), img->input("Vector"));
         }
         else {
-            graph->connect(texcoord->output("UV"), img->input("Vector"));
+            graph->connect(texcoord->output(coord_sock), img->input("Vector"));
         }
     }
     return img;
@@ -359,10 +424,12 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h/2i/2j: TEX_IMAGE → Base Color / Roughness / Metallic / Normal Map.
+    /* Slice 2f/2h/2i/2j/2k: TEX_IMAGE → Base / Rough / Metal / Normal Map.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
-     * mode 2: TextureCoordinate UV → Mapping → Image Vector. */
+     * mode 2: TextureCoordinate UV → Mapping → Image Vector.
+     * mode 3: TextureCoordinate Generated → Image Vector.
+     * mode 4: TextureCoordinate Generated → Mapping → Image Vector. */
     if (m->image_path && m->image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
             graph.get(), m->image_path, m->image_colorspace, m->tex_vector_mode,
@@ -463,6 +530,9 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         for (int c = 0; c < m->ntris * 3; c++) {
             fdata[c] = make_float2(m->uvs[c * 2 + 0], m->uvs[c * 2 + 1]);
         }
+    }
+    if (mesh_uses_generated(m)) {
+        fill_generated_orco(mesh, m);
     }
 
     Object *mesh_obj = scene->create_node<Object>();

@@ -8,6 +8,7 @@
 # Slice 2h: TEX_COORD UV (+ optional Mapping Vector-type constants) → TEX_IMAGE Vector.
 # Slice 2i: TEX_IMAGE → Principled Roughness / Metallic (same Vector rules as Base Color).
 # Slice 2j: Principled.Normal ← Normal Map (Tangent) ← TEX_IMAGE Color (same Vector rules).
+# Slice 2k: TEX_COORD Generated (+ optional Mapping Vector-type) → TEX_IMAGE Vector.
 # Other linked sockets / HDR worlds still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
@@ -90,25 +91,38 @@ def _sock_default_float3(sock) -> Tuple[float, float, float]:
     return (float(dv[0]), float(dv[1]), float(dv[2]))
 
 
-def _tex_coord_uv_from_vector_link(vec_sock) -> None:
-    """Require Vector linked from TEX_COORD UV only (refuse other sockets)."""
+def _tex_coord_space_from_vector_link(vec_sock) -> str:
+    """Return 'UV' or 'Generated'. Refuse Object/Camera/Window/Reflection."""
     links = list(getattr(vec_sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
-            "Image/Mapping Vector must have exactly one link (Slice 2h)"
+            "Image/Mapping Vector must have exactly one link (Slice 2h/2k)"
         )
     src = links[0]
     from_node = getattr(src, "from_node", None)
     from_sock = getattr(src, "from_socket", None)
     if from_node is None or getattr(from_node, "type", None) != "TEX_COORD":
         raise QuantTraceSyncError(
-            "TEX_IMAGE/Mapping Vector must come from TEX_COORD (Slice 2h)"
+            "TEX_IMAGE/Mapping Vector must come from TEX_COORD (Slice 2h/2k)"
         )
     sock_name = getattr(from_sock, "name", "") if from_sock is not None else ""
-    if sock_name not in ("UV", "uv"):
+    key = str(sock_name).strip().lower()
+    if key == "uv":
+        return "UV"
+    if key == "generated":
+        return "Generated"
+    raise QuantTraceSyncError(
+        f"TEX_COORD output {sock_name!r} refused "
+        "(Slice 2k accepts UV or Generated; Object/Camera/Window/Reflection refuse)"
+    )
+
+
+def _tex_coord_uv_from_vector_link(vec_sock) -> None:
+    """Require Vector linked from TEX_COORD UV (compat wrapper)."""
+    space = _tex_coord_space_from_vector_link(vec_sock)
+    if space != "UV":
         raise QuantTraceSyncError(
-            f"TEX_COORD output {sock_name!r} refused "
-            "(Slice 2h accepts UV only; Generated/Object/Camera/Window/Reflection refuse)"
+            f"TEX_COORD output {space!r} refused (expected UV)"
         )
 
 
@@ -130,8 +144,9 @@ def _mapping_input_by_name(map_node, name: str):
 def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
                                             Tuple[float, float, float],
                                             Tuple[float, float, float],
-                                            int]:
-    """Validate MAPPING: Vector-type, Vector←TEX_COORD UV, unlinked L/R/S."""
+                                            int,
+                                            str]:
+    """Validate MAPPING: Vector-type, Vector←TEX_COORD UV/Generated, unlinked L/R/S."""
     vtype = str(getattr(map_node, "vector_type", "POINT") or "POINT").upper()
     if vtype != "VECTOR":
         raise QuantTraceSyncError(
@@ -140,9 +155,9 @@ def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
     vec_in = _mapping_input_by_name(map_node, "Vector")
     if vec_in is None or not getattr(vec_in, "is_linked", False):
         raise QuantTraceSyncError(
-            "Mapping.Vector must be linked from TEX_COORD UV (Slice 2h)"
+            "Mapping.Vector must be linked from TEX_COORD UV/Generated (Slice 2h/2k)"
         )
-    _tex_coord_uv_from_vector_link(vec_in)
+    space = _tex_coord_space_from_vector_link(vec_in)
     loc_s = _mapping_input_by_name(map_node, "Location")
     rot_s = _mapping_input_by_name(map_node, "Rotation")
     scl_s = _mapping_input_by_name(map_node, "Scale")
@@ -160,6 +175,7 @@ def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
         _sock_default_float3(rot_s),
         _sock_default_float3(scl_s),
         2,
+        space,
     )
 
 
@@ -219,25 +235,30 @@ def _tex_image_from_sock(sock, sock_label: str) -> dict:
         vtype = getattr(vnode, "type", None) if vnode is not None else None
         vname = getattr(vsock, "name", "") if vsock is not None else ""
         if vtype == "TEX_COORD":
-            if vname not in ("UV", "uv"):
+            key = str(vname).strip().lower()
+            if key == "uv":
+                tex_vector_mode = 1  # QT_TEX_VECTOR_TEXCOORD
+            elif key == "generated":
+                tex_vector_mode = 3  # QT_TEX_VECTOR_TEXCOORD_GENERATED
+            else:
                 raise QuantTraceSyncError(
                     f"TEX_COORD output {vname!r} refused "
-                    "(Slice 2h accepts UV only)"
+                    "(Slice 2k accepts UV or Generated; "
+                    "Object/Camera/Window/Reflection refuse)"
                 )
-            tex_vector_mode = 1  # QT_TEX_VECTOR_TEXCOORD
         elif vtype == "MAPPING":
             if vname not in ("Vector", "vector"):
                 raise QuantTraceSyncError(
                     "Image Texture Vector must come from Mapping Vector"
                 )
-            map_location, map_rotation, map_scale, map_type = _mapping_constants(
+            map_location, map_rotation, map_scale, map_type, space = _mapping_constants(
                 vnode
             )
-            tex_vector_mode = 2  # QT_TEX_VECTOR_MAPPING
+            tex_vector_mode = 4 if space == "Generated" else 2
         else:
             raise QuantTraceSyncError(
                 f"Image Texture Vector from {vtype!r} refused "
-                "(Slice 2h: TEX_COORD UV or Mapping only)"
+                "(Slice 2h/2k: TEX_COORD UV/Generated or Mapping only)"
             )
 
     img = getattr(from_node, "image", None)

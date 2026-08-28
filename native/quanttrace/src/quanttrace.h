@@ -9,6 +9,7 @@
  * Slice 2h: TEX_COORD UV + Mapping → TEX_IMAGE Vector.
  * Slice 2i: TEX_IMAGE → Principled Roughness / Metallic (same Vector rules).
  * Slice 2j: Normal Map (Tangent) + TEX_IMAGE → Principled Normal.
+ * Slice 2k: TEX_COORD Generated (+ optional Mapping) → TEX_IMAGE Vector.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -191,9 +192,11 @@ typedef struct QT_Mesh {
 #define QT_LIGHT_SPOT  3
 
 /* TEX_IMAGE Vector graph (Slice 2h) */
-#define QT_TEX_VECTOR_UNLINKED  0 /* default UV via unlinked Vector */
-#define QT_TEX_VECTOR_TEXCOORD  1 /* TEX_COORD UV → TEX_IMAGE Vector */
-#define QT_TEX_VECTOR_MAPPING   2 /* TEX_COORD UV → Mapping → TEX_IMAGE */
+#define QT_TEX_VECTOR_UNLINKED              0 /* default UV via unlinked Vector */
+#define QT_TEX_VECTOR_TEXCOORD              1 /* TEX_COORD UV → TEX_IMAGE Vector */
+#define QT_TEX_VECTOR_MAPPING               2 /* TEX_COORD UV → Mapping → TEX_IMAGE */
+#define QT_TEX_VECTOR_TEXCOORD_GENERATED    3 /* TEX_COORD Generated → TEX_IMAGE */
+#define QT_TEX_VECTOR_MAPPING_GENERATED     4 /* TEX_COORD Generated → Mapping → TEX_IMAGE */
 
 
 typedef struct QT_Light {
