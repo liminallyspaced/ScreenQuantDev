@@ -968,21 +968,32 @@ def _mesh_arrays(obj) -> Tuple[List[float], List[int]]:
 
 
 def _world_info(scene) -> dict:
-    """Pack world Background + optional Environment Texture (Slice 2aa).
+    """Pack world Background + optional Environment Texture (Slice 2aa/2ac).
 
     Returns dict:
       world_strength: float
       world_image_path: str (empty = black Background Color, Slice 2b)
       world_image_colorspace: str
       world_projection: int (0=EQUIRECTANGULAR, 1=MIRROR_BALL)
+      world_tex_vector_mode: int (QT_TEX_VECTOR_*; 0 = unlinked LINK_POSITION)
+      world_map_location / rotation / scale / type: Mapping constants (Slice 2ac)
 
     Empty path keeps locked-cube black worlds bit-identical.
+    Slice 2ac: Vector may be TEX_COORD Generated/Object/Camera/Window/Reflection
+    or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
+    TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
+    refuse with Slice 2ac in the error.
     """
     empty = {
         "world_strength": 0.0,
         "world_image_path": "",
         "world_image_colorspace": "",
         "world_projection": 0,
+        "world_tex_vector_mode": 0,
+        "world_map_location": (0.0, 0.0, 0.0),
+        "world_map_rotation": (0.0, 0.0, 0.0),
+        "world_map_scale": (1.0, 1.0, 1.0),
+        "world_map_type": 2,
     }
     world = getattr(scene, "world", None)
     if world is None:
@@ -1002,7 +1013,7 @@ def _world_info(scene) -> dict:
         return empty
     strength_sock = bg.inputs.get("Strength")
     if strength_sock is not None and getattr(strength_sock, "is_linked", False):
-        raise QuantTraceSyncError("world Background Strength linked (Slice 2aa)")
+        raise QuantTraceSyncError("world Background Strength linked (Slice 2ac)")
     strength = float(strength_sock.default_value) if strength_sock is not None else 0.0
     color_sock = bg.inputs.get("Color")
     if color_sock is None or not getattr(color_sock, "is_linked", False):
@@ -1013,12 +1024,10 @@ def _world_info(scene) -> dict:
                     "world Background Color not black (Slice 2b/2aa)"
                 )
         return {
+            **empty,
             "world_strength": strength,
-            "world_image_path": "",
-            "world_image_colorspace": "",
-            "world_projection": 0,
         }
-    # Color linked — only TEX_ENVIRONMENT with disk filepath this hour.
+    # Color linked — only TEX_ENVIRONMENT with disk filepath.
     links = list(getattr(color_sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
@@ -1029,19 +1038,15 @@ def _world_info(scene) -> dict:
     if ntype != "TEX_ENVIRONMENT":
         raise QuantTraceSyncError(
             f"world Background Color linked from {ntype!r} "
-            "(Slice 2aa: TEX_ENVIRONMENT only)"
-        )
-    vec_sock = from_node.inputs.get("Vector") if from_node is not None else None
-    if vec_sock is not None and getattr(vec_sock, "is_linked", False):
-        raise QuantTraceSyncError(
-            "Environment Texture Vector linked (Slice 2aa: unlinked LINK_POSITION only)"
+            "(Slice 2aa: TEX_ENVIRONMENT only; Slice 2ac refuses "
+            "Sky/Nishita/TEX_IMAGE/RGB/Mix)"
         )
     img = getattr(from_node, "image", None)
     path = _abspath_image(img)
     if not path:
         raise QuantTraceSyncError(
             "Environment Texture filepath missing on disk "
-            "(Slice 2aa; packed-only refused)"
+            "(Slice 2ac; packed-only refused)"
         )
     proj_rna = str(getattr(from_node, "projection", "EQUIRECTANGULAR") or "").upper()
     if proj_rna == "EQUIRECTANGULAR":
@@ -1057,12 +1062,109 @@ def _world_info(scene) -> dict:
         cs_settings = getattr(img, "colorspace_settings", None)
         if cs_settings is not None:
             cs = str(getattr(cs_settings, "name", "") or "")
+
+    # Slice 2ac: parse Vector like mesh TEX_IMAGE (2h/2k/2l/2m/2n).
+    tex_vector_mode = 0  # QT_TEX_VECTOR_UNLINKED → LINK_POSITION
+    map_location = (0.0, 0.0, 0.0)
+    map_rotation = (0.0, 0.0, 0.0)
+    map_scale = (1.0, 1.0, 1.0)
+    map_type = 2
+    vec_sock = from_node.inputs.get("Vector") if from_node is not None else None
+    if vec_sock is not None and getattr(vec_sock, "is_linked", False):
+        vlinks = list(getattr(vec_sock, "links", None) or [])
+        if len(vlinks) != 1:
+            raise QuantTraceSyncError(
+                "Environment Texture Vector has multiple links (Slice 2ac)"
+            )
+        vsrc = vlinks[0]
+        vnode = getattr(vsrc, "from_node", None)
+        vsock = getattr(vsrc, "from_socket", None)
+        vtype = getattr(vnode, "type", None) if vnode is not None else None
+        vname = getattr(vsock, "name", "") if vsock is not None else ""
+        if vtype == "TEX_COORD":
+            key = str(vname).strip().lower()
+            if key == "uv":
+                tex_vector_mode = 1
+            elif key == "generated":
+                tex_vector_mode = 3  # QT_TEX_VECTOR_TEXCOORD_GENERATED
+            elif key == "object":
+                # Empty-ref Object only this hour (no world_ob_tfm ABI yet).
+                if getattr(vnode, "object", None) is not None:
+                    raise QuantTraceSyncError(
+                        "Environment Texture Vector Object-with-pointer "
+                        "refused (Slice 2ac: empty-ref Object or Generated; "
+                        "pointer is a later slice)"
+                    )
+                tex_vector_mode = 5
+            elif key == "camera":
+                tex_vector_mode = 7
+            elif key == "window":
+                tex_vector_mode = 9
+            elif key == "reflection":
+                tex_vector_mode = 11
+            else:
+                raise QuantTraceSyncError(
+                    f"Environment Texture Vector TEX_COORD output {vname!r} "
+                    "refused (Slice 2ac)"
+                )
+        elif vtype == "MAPPING":
+            if vname not in ("Vector", "vector"):
+                raise QuantTraceSyncError(
+                    "Environment Texture Vector must come from Mapping Vector "
+                    "(Slice 2ac)"
+                )
+            # Re-wrap Mapping L/R/S linked errors with Slice 2ac name.
+            try:
+                map_location, map_rotation, map_scale, map_type, space = (
+                    _mapping_constants(vnode)
+                )
+            except QuantTraceSyncError as e:
+                msg = str(e)
+                if "Slice 2h" in msg or "Slice 2" in msg:
+                    raise QuantTraceSyncError(
+                        msg.replace("Slice 2h", "Slice 2ac")
+                        .replace("Slice 2k", "Slice 2ac")
+                        .replace("Slice 2l", "Slice 2ac")
+                        .replace("Slice 2m", "Slice 2ac")
+                        .replace("Slice 2n", "Slice 2ac")
+                    ) from e
+                raise QuantTraceSyncError(f"{msg} (Slice 2ac)") from e
+            if space == "Generated":
+                tex_vector_mode = 4
+            elif space == "Object":
+                vec_in = _mapping_input_by_name(vnode, "Vector")
+                if _tex_coord_object_from_vec_sock(vec_in) is not None:
+                    raise QuantTraceSyncError(
+                        "Environment Texture Mapping←Object-with-pointer "
+                        "refused (Slice 2ac)"
+                    )
+                tex_vector_mode = 6
+            elif space == "Camera":
+                tex_vector_mode = 8
+            elif space == "Window":
+                tex_vector_mode = 10
+            elif space == "Reflection":
+                tex_vector_mode = 12
+            else:
+                tex_vector_mode = 2  # UV Mapping
+        else:
+            raise QuantTraceSyncError(
+                f"Environment Texture Vector from {vtype!r} refused "
+                "(Slice 2ac: TEX_COORD or Mapping←TEX_COORD only)"
+            )
+
     return {
         "world_strength": strength,
         "world_image_path": path,
         "world_image_colorspace": cs,
         "world_projection": proj,
+        "world_tex_vector_mode": tex_vector_mode,
+        "world_map_location": map_location,
+        "world_map_rotation": map_rotation,
+        "world_map_scale": map_scale,
+        "world_map_type": map_type,
     }
+
 
 
 def _world_strength(scene) -> float:
@@ -2106,6 +2208,11 @@ def make_qt_simple_scene_type():
             ("world_image_path", ctypes.c_char_p),
             ("world_image_colorspace", ctypes.c_char_p),
             ("world_projection", ctypes.c_int),
+            ("world_tex_vector_mode", ctypes.c_int),
+            ("world_map_location", ctypes.c_float * 3),
+            ("world_map_rotation", ctypes.c_float * 3),
+            ("world_map_scale", ctypes.c_float * 3),
+            ("world_map_type", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
@@ -2348,6 +2455,17 @@ def make_qt_simple_scene_type():
     return QT_SimpleScene
 
 
+def _fill_world_vec_ctypes(desc, packed):
+    """Lockstep world_tex_vector_mode + Mapping fields (Slice 2ac)."""
+    desc.world_tex_vector_mode = int(packed.get("world_tex_vector_mode", 0) or 0)
+    for i, v in enumerate(packed.get("world_map_location") or (0.0, 0.0, 0.0)):
+        desc.world_map_location[i] = float(v)
+    for i, v in enumerate(packed.get("world_map_rotation") or (0.0, 0.0, 0.0)):
+        desc.world_map_rotation[i] = float(v)
+    for i, v in enumerate(packed.get("world_map_scale") or (1.0, 1.0, 1.0)):
+        desc.world_map_scale[i] = float(v)
+    desc.world_map_type = int(packed.get("world_map_type", 2) or 2)
+
 def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     """Build a QT_SimpleScene + keep-alive buffers from pack_simple_scene output."""
     verts = (ctypes.c_float * len(packed["verts"]))(*packed["verts"])
@@ -2387,6 +2505,7 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     desc.world_image_path = wip if wip else None
     desc.world_image_colorspace = wics if wics else None
     desc.world_projection = int(packed.get("world_projection", 0) or 0)
+    _fill_world_vec_ctypes(desc, packed)
     if exr_path:
         desc.exr_path = exr_path.encode("utf-8")
     else:
@@ -2691,6 +2810,11 @@ def make_qt_scene_types():
             ("world_image_path", ctypes.c_char_p),
             ("world_image_colorspace", ctypes.c_char_p),
             ("world_projection", ctypes.c_int),
+            ("world_tex_vector_mode", ctypes.c_int),
+            ("world_map_location", ctypes.c_float * 3),
+            ("world_map_rotation", ctypes.c_float * 3),
+            ("world_map_scale", ctypes.c_float * 3),
+            ("world_map_type", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
         ]
 
@@ -2771,6 +2895,7 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
     desc.world_image_path = wip if wip else None
     desc.world_image_colorspace = wics if wics else None
     desc.world_projection = int(packed.get("world_projection", 0) or 0)
+    _fill_world_vec_ctypes(desc, packed)
     if exr_path:
         desc.exr_path = exr_path.encode("utf-8")
     else:

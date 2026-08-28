@@ -529,6 +529,14 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->world_image_path = s->world_image_path;
     out->world_image_colorspace = s->world_image_colorspace;
     out->world_projection = s->world_projection;
+    out->world_tex_vector_mode = s->world_tex_vector_mode;
+    std::memcpy(out->world_map_location, s->world_map_location,
+                sizeof(out->world_map_location));
+    std::memcpy(out->world_map_rotation, s->world_map_rotation,
+                sizeof(out->world_map_rotation));
+    std::memcpy(out->world_map_scale, s->world_map_scale,
+                sizeof(out->world_map_scale));
+    out->world_map_type = s->world_map_type;
     out->exr_path = s->exr_path;
 }
 
@@ -1328,8 +1336,8 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
     cam->need_flags_update = true;
     cam->update(scene);
 
-    /* World Background: black+strength (Slice 2b) or Environment Texture (Slice 2aa).
-     * EnvironmentTextureNode Vector left default LINK_POSITION (Cycles shader_nodes.cpp).
+    /* World Background: black+strength (Slice 2b) or Environment Texture (Slice 2aa/2ac).
+     * Slice 2aa: Vector unlinked LINK_POSITION. Slice 2ac: TEX_COORD (+ Mapping).
      * Empty world_image_path keeps bit-identical black world for locked cubes.
      * With env: add BackgroundLight + MIS (Blender world.cycles sample_map 1024 /
      * sampling AUTOMATIC) so surface lighting matches stock; camera-ray bg alone
@@ -1349,7 +1357,58 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
             const int proj = desc->world_projection;
             env->set_projection(proj == 1 ? NODE_ENVIRONMENT_MIRROR_BALL :
                                            NODE_ENVIRONMENT_EQUIRECTANGULAR);
-            /* Vector: leave unlinked → SOCKET LINK_POSITION default. */
+            /* Slice 2ac: Vector from TEX_COORD (+ optional Mapping), same modes
+             * as mesh TEX_IMAGE. Mode 0 leaves LINK_POSITION (Slice 2aa).
+             * World/background Generated compiles to NODE_GEOM_P (Cycles
+             * TextureCoordinateNode::compile when compiler.background).
+             * Cite shader_nodes.cpp EnvironmentTextureNode Vector LINK_POSITION. */
+            const int wmode = desc->world_tex_vector_mode;
+            if (tex_mode_has_texcoord(wmode)) {
+                TextureCoordinateNode *texcoord =
+                    graph->create_node<TextureCoordinateNode>();
+                const char *coord_sock = "UV";
+                if (tex_mode_is_reflection(wmode)) {
+                    coord_sock = "Reflection";
+                }
+                else if (tex_mode_is_window(wmode)) {
+                    coord_sock = "Window";
+                }
+                else if (tex_mode_is_camera(wmode)) {
+                    coord_sock = "Camera";
+                }
+                else if (tex_mode_is_object(wmode)) {
+                    coord_sock = "Object";
+                }
+                else if (tex_mode_is_generated(wmode)) {
+                    coord_sock = "Generated";
+                }
+                if (tex_mode_has_mapping(wmode)) {
+                    MappingNode *mapping = graph->create_node<MappingNode>();
+                    mapping->set_mapping_type(
+                        static_cast<NodeMappingType>(desc->world_map_type));
+                    mapping->set_location(make_float3(
+                        desc->world_map_location[0],
+                        desc->world_map_location[1],
+                        desc->world_map_location[2]));
+                    mapping->set_rotation(make_float3(
+                        desc->world_map_rotation[0],
+                        desc->world_map_rotation[1],
+                        desc->world_map_rotation[2]));
+                    mapping->set_scale(make_float3(
+                        desc->world_map_scale[0],
+                        desc->world_map_scale[1],
+                        desc->world_map_scale[2]));
+                    graph->connect(texcoord->output(coord_sock),
+                                   mapping->input("Vector"));
+                    graph->connect(mapping->output("Vector"),
+                                   env->input("Vector"));
+                }
+                else {
+                    graph->connect(texcoord->output(coord_sock),
+                                   env->input("Vector"));
+                }
+            }
+            /* else mode 0: leave Vector unlinked → LINK_POSITION. */
             graph->connect(env->output("Color"), bg->input("Color"));
         }
         graph->connect(bg->output("Background"), graph->output()->input("Surface"));

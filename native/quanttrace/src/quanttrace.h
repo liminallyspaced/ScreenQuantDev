@@ -122,6 +122,12 @@ typedef struct QT_SimpleScene {
   const char *world_image_path;
   const char *world_image_colorspace;
   int world_projection; /* 0=EQUIRECTANGULAR, 1=MIRROR_BALL */
+  /* Slice 2ac: Environment Texture Vector (0=unlinked LINK_POSITION) */
+  int world_tex_vector_mode; /* QT_TEX_VECTOR_* (Generated/Mapping focus) */
+  float world_map_location[3];
+  float world_map_rotation[3];
+  float world_map_scale[3];
+  int world_map_type;
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -755,6 +761,12 @@ typedef struct QT_Scene {
   const char *world_image_path;
   const char *world_image_colorspace;
   int world_projection; /* 0=EQUIRECTANGULAR, 1=MIRROR_BALL */
+  /* Slice 2ac: Environment Texture Vector (0=unlinked LINK_POSITION) */
+  int world_tex_vector_mode; /* QT_TEX_VECTOR_* */
+  float world_map_location[3];
+  float world_map_rotation[3];
+  float world_map_scale[3];
+  int world_map_type;
   const char *exr_path;
 } QT_Scene;
 

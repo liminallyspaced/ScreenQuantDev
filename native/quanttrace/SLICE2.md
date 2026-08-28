@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ab landed** (2026-08-28 4pm PlugWalk ET). TEX_COORD Object-with-pointer (`use_transform` + `ob_tfm`). Pointer 32²/4 Δmax=1.08e-5; 256²/128 Δmax=4.41e-6 PASS (0 px ≥1e-3). Pointer+Mapping 32²/4 Δmax=2.24e-5 PASS. 2l empty-ref 32²/4 Δmax=7.99e-6 PASS (`use_transform=0`). Stock pointer vs empty-ref Δmax=0.684 (graph live). Packed `tex_ob_use_transform=1`, tfm non-identity (Empty loc=(0.5,0.25,0) rot_z=0.4). `is_tracer=1`. Native `0.0.29-slice2ab`.
+Status: **Slice 2ac landed** (2026-08-28 5pm PlugWalk ET). Linked Environment Texture Vector / Mapping (TEX_COORD Generated ± Mapping VECTOR). Generated 32²/4 Δmax=6.13e-4; 256²/128 Δmax=2.01e-4 PASS (0 px ≥1e-3). Mapping rot_z=0.7 32²/4 Δmax=6.75e-4; 256²/128 Δmax=2.04e-4 PASS. 2aa unlinked 32²/4 Δmax=6.13e-4 PASS. Stock Mapping vs unlinked Δmax=0.821 (graph live). Stock Generated vs unlinked Δmax=0 (Cycles background Generated=NODE_GEOM_P ≡ LINK_POSITION). Packed `world_tex_vector_mode` 3/4/0 + Mapping L/R/S. `is_tracer=1`. Native `0.0.30-slice2ac`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -13,6 +13,51 @@ addon zip or public commit tree.
 
 
 ---
+
+
+
+---
+
+## 5pm PlugWalk (2026-08-28) — Linked env Vector / Mapping (Slice 2ac)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `world_tex_vector_mode` + `world_map_location/rotation/scale` + `world_map_type` after `world_projection` on `QT_Scene` + `QT_SimpleScene`. Mode 0 = Slice 2aa unlinked LINK_POSITION (bit-identical). Reuses `QT_TEX_VECTOR_*` enums (Generated=3, Mapping-Generated=4). |
+| Python | `_world_info` accepts Env Vector ← TEX_COORD (Generated/Object empty-ref/Camera/Window/Reflection/UV) or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD. Object-with-pointer on world refused (no world_ob_tfm ABI). Linked Strength / packed-only / non-TEX_ENVIRONMENT Color still refuse (Slice 2ac). ctypes + `simple_to_qt` / `_fill_world_vec_ctypes` lockstep. |
+| Native | `EnvironmentTextureNode` Vector wired from `TextureCoordinateNode` (+ optional `MappingNode`) matching mesh `wire_tex_image` path. Mode 0 leaves LINK_POSITION. Cite `shader_nodes.cpp` EnvironmentTextureNode Vector + TextureCoordinateNode::compile background Generated → NODE_GEOM_P. |
+| Version | `0.0.30-slice2ac` |
+| Tools | `tools/_quanttrace_slice2ac_scene.py`, `tools/_quanttrace_slice2ac_smoke.py`. Modes: `generated`, `mapping`, `unlinked`. Mapping defaults rot_z=0.7. |
+| Visibility | Combined chromatic + non-constant. Stock Mapping vs unlinked Δmax=0.821 proves graph live. Generated ≡ unlinked on world (honest Cycles background NODE_GEOM_P). |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| Generated | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+| Generated | 256² / 128 | **2.01e-4** | 9.02e-7 | 0 | **PASS** |
+| Mapping (rot_z=0.7) | 32² / 4 | **6.75e-4** | 4.24e-6 | 0 | **PASS** |
+| Mapping (rot_z=0.7) | 256² / 128 | **2.04e-4** | 8.24e-7 | 0 | **PASS** |
+| 2aa unlinked (regression) | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+
+Live graph (stock Mapping vs stock unlinked) 32²/4: Δmax=**0.821** (1024 px ≥1e-3, MAE 0.349). Stock Generated vs unlinked Δmax=**0** (background Generated ≡ LINK_POSITION). Packed `world_tex_vector_mode=3/4/0`, Mapping rot z≈0.7. Proof plate `docs/proof/quanttrace-env-vector-32-pair.png` (Mapping stock|session). F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- Object-with-pointer on env Vector, packed-only images, linked Mapping L/R/S, linked world Strength, Sky/Nishita/TEX_IMAGE/RGB/Mix → Background Color, `BLENDER_OBJECT` / `BLENDER_WORLD` Normal space, kitchens still refuse.
+- HDR Δmax remains ~1e-4 class (BackgroundLight MIS map), under the 1e-3 gate with 0 px ≥1e-3.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+`BLENDER_OBJECT`/`BLENDER_WORLD` Normal space, or env Object-with-pointer (`world_ob_tfm`), or packed-only images. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
+
+
 
 ## 4pm PlugWalk (2026-08-28) — TEX_COORD Object-with-pointer (Slice 2ab)
 
@@ -42,14 +87,14 @@ Live graph (stock Object-pointer vs stock empty-ref) 32²/4: Δmax=**0.684** (81
 
 ### Honesty
 
-- Linked env Vector / Mapping, `BLENDER_OBJECT` / `BLENDER_WORLD` Normal space, packed-only images, linked Mapping L/R/S, kitchens still refuse.
+- `BLENDER_OBJECT` / `BLENDER_WORLD` Normal space, packed-only images, linked Mapping L/R/S, env Object-with-pointer, kitchens still refuse. (Linked env Vector/Mapping: Slice 2ac.)
 - SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
 - Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
 - Store Classroom **41%** / loft **52%** unchanged.
 
 ### Next
 
-Linked env Vector/Mapping, or `BLENDER_OBJECT`/`BLENDER_WORLD` Normal space. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
+`BLENDER_OBJECT`/`BLENDER_WORLD` Normal space, or env Object-with-pointer. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
 
 
 

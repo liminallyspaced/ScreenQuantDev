@@ -1,10 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
+**Current native:** `0.0.30-slice2ac` — linked env Vector/Mapping (Generated ± Mapping). Addon still `0.3.3`.
+
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.26-slice2y`.
+`-DQT_WITH_CYCLES=ON`. Native `0.0.30-slice2ac`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -40,8 +42,12 @@ this tree never feeds Auto clocks.
 | **2w — Anisotropic / Rotation / Tangent TEX_IMAGE** | **PASS** | Aniso 256²/128 Δmax **1.09e-7**; AnisoRot 256²/128 Δmax **9.35e-6**; Tangent 256²/128 Δmax **5.09e-11**. Native `0.0.24-slice2w`. |
 | **2x — Principled Bump TEX_IMAGE Height** | **PASS** | Bump 32²/4 Δmax **2.38e-7**; 256²/128 Δmax **4.77e-7**. Native `0.0.25-slice2x`. |
 | **2y — Principled Thin Wall BOOLEAN** | **PASS** | Unlinked Thin Wall 0/1 + unlinked Transmission Weight. ThinWall 32²/4 Δmax **3.18e-12**; 256²/128 Δmax **2.32e-8**. True vs False 32²/4 Δmax **6.83e-5** (below 1e-3; glass vs black world). Linked Thin Wall still refuses. Native `0.0.26-slice2y`. |
+| **2z — Normal Map Object/World space** | **PASS** | Object/World Normal space. Object 256²/128 Δmax **5.96e-7**. Native `0.0.27-slice2z`. |
+| **2aa — HDR Environment Texture world** | **PASS** | Equirect HDR 32²/4 Δmax **6.13e-4**; 256²/128 Δmax **2.01e-4**. Native `0.0.28-slice2aa`. |
+| **2ab — TEX_COORD Object-with-pointer** | **PASS** | Pointer 32²/4 Δmax **1.08e-5**; 256²/128 Δmax **4.41e-6**. Native `0.0.29-slice2ab`. |
+| **2ac — Env Vector / Mapping** | **PASS** | Generated 32²/4 Δmax **6.13e-4**; Mapping rot_z=0.7 32²/4 Δmax **6.75e-4**; 256²/128 Δmax **2.04e-4**. 2aa unlinked regression PASS. Native `0.0.30-slice2ac`. |
 
-Kitchens / HDR worlds / linked Thin Wall (BOOLEAN) / Object·World Normal space / linked Strength / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`. Unlinked Thin Wall BOOLEAN is Slice 2y.
+Kitchens / linked Thin Wall (BOOLEAN) / BLENDER_OBJECT·BLENDER_WORLD Normal space / linked Strength / env Object-with-pointer / packed-only images still refuse with a named `QuantTraceSyncError`. Unlinked Thin Wall BOOLEAN is Slice 2y.
 
 ## Build (Linux) — hello stub (default)
 
@@ -91,5 +97,5 @@ int quanttrace_render_cube_rgba(float *out, int cap, int *w, int *h);
 
 ## Out of scope until shader / light-type expand
 
-- Kitchen F12 / HDR world / Object·World Normal / linked Thin Wall BOOLEAN / linked Strength / packed-only
+- Kitchen F12 / BLENDER_OBJECT·BLENDER_WORLD Normal / linked Thin Wall BOOLEAN / linked Strength / env Object-with-pointer / packed-only
 - ReSTIR / OptiX / Make it Fast / zip / store % claims
