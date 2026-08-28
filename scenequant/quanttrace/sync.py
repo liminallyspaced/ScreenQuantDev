@@ -31,7 +31,10 @@
 #   Coat Normal stays Normal-Map-only (Bump on Coat Normal refuses).
 # Slice 2y: Principled Thin Wall unlinked BOOLEAN + unlinked Transmission Weight
 #   constant. Linked Thin Wall still refuses (BOOLEAN, not TEX_IMAGE).
-#   Other linked sockets / HDR worlds refuse.
+# Slice 2aa: Environment Texture world (empty path = Slice 2b black).
+# Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
+#   Empty Object ref stays Slice 2l (use_transform=0). Mesh-level one pointer.
+#   Other linked sockets / packed-only / linked Mapping L/R/S still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -116,10 +119,11 @@ def _sock_default_float3(sock) -> Tuple[float, float, float]:
 def _tex_coord_space_from_vector_link(vec_sock) -> str:
     """Return 'UV', 'Generated', 'Object', 'Camera', 'Window', or 'Reflection'.
 
-    Object requires empty Object reference (no Blender object pointer /
-    use_transform / object_itfm) — Cycles NODE_TEXCO_OBJECT only.
-    Camera uses scene Camera::worldtocamera (NODE_TEXCO_CAMERA); no extra
-    inverse-matrix ABI. from_instancer/from_dupli unused on Camera.
+    Object may have an empty reference (Slice 2l / NODE_TEXCO_OBJECT) or a
+    bpy object pointer (Slice 2ab / NODE_TEXCO_OBJECT_WITH_TRANSFORM).
+    The pointer itself is collected by _tex_image_from_sock / packer, not
+    returned here. Camera uses scene Camera::worldtocamera (NODE_TEXCO_CAMERA);
+    no extra inverse-matrix ABI. from_instancer/from_dupli unused.
     Window uses camera_world_to_ndc (NODE_TEXCO_WINDOW); Reflection uses
     svm_texco_reflection (NODE_TEXCO_REFLECTION) — both from existing
     Camera::update data. Mesh objects only for Reflection tests (bg uses
@@ -144,13 +148,8 @@ def _tex_coord_space_from_vector_link(vec_sock) -> str:
     if key == "generated":
         return "Generated"
     if key == "object":
-        # Empty Object only: ShaderNodeTexCoord.object set → use_transform.
-        obj_ref = getattr(from_node, "object", None)
-        if obj_ref is not None:
-            raise QuantTraceSyncError(
-                "TEX_COORD Object with Object reference refused "
-                "(Slice 2l: empty Object / no object_itfm only)"
-            )
+        # Slice 2ab: pointer is collected at pack time (mesh-level).
+        # Empty ref stays Slice 2l (use_transform=0).
         return "Object"
     if key == "camera":
         # Camera output; from_instancer is unused on NODE_TEXCO_CAMERA.
@@ -163,6 +162,83 @@ def _tex_coord_space_from_vector_link(vec_sock) -> str:
         f"TEX_COORD output {sock_name!r} refused "
         "(Slice 2n accepts UV, Generated, Object, Camera, Window, or Reflection)"
     )
+
+
+def _tex_coord_object_from_vec_sock(vec_sock):
+    """bpy object on TEX_COORD.object when Vector is Object; else None.
+
+    Slice 2ab: pointer set → pack use_transform. Empty ref stays 2l.
+    from_instancer / from_dupli unused.
+    """
+    if vec_sock is None:
+        return None
+    links = list(getattr(vec_sock, "links", None) or [])
+    if len(links) != 1:
+        return None
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    if from_node is None or getattr(from_node, "type", None) != "TEX_COORD":
+        return None
+    key = str(getattr(from_sock, "name", "") if from_sock is not None else "").strip().lower()
+    if key != "object":
+        return None
+    return getattr(from_node, "object", None)
+
+
+def _tex_ob_key(obj):
+    return getattr(obj, "name_full", None) or getattr(obj, "name", None) or id(obj)
+
+
+def _resolve_tex_ob_ref(*infos):
+    """One Object pointer per mesh. Same object (or pointer + empties) OK."""
+    found = []
+    keys = []
+    for info in infos:
+        if not info:
+            continue
+        ref = info.get("tex_ob_ref") if isinstance(info, dict) else None
+        if ref is None:
+            continue
+        key = _tex_ob_key(ref)
+        if key not in keys:
+            keys.append(key)
+            found.append(ref)
+    if len(found) > 1:
+        names = [getattr(o, "name", "?") for o in found]
+        raise QuantTraceSyncError(
+            "TEX_COORD Object sockets on the same mesh point at different "
+            f"objects {names} (Slice 2ab: one Object reference per mesh)"
+        )
+    return found[0] if found else None
+
+
+def _pack_tex_ob_fields(pr: dict, depsgraph=None) -> dict:
+    """Mesh-level use_transform + matrix_world 3x4 (Slice 2ab)."""
+    obj = pr.get("tex_ob_ref") if pr else None
+    if obj is None:
+        return {
+            "tex_ob_use_transform": 0,
+            "tex_ob_tfm": list(_identity_3x4()),
+        }
+    eval_obj = obj
+    if depsgraph is not None:
+        getter = getattr(obj, "evaluated_get", None)
+        if callable(getter):
+            try:
+                eval_obj = getter(depsgraph)
+            except Exception:
+                eval_obj = obj
+    mw = getattr(eval_obj, "matrix_world", None)
+    if mw is None:
+        mw = getattr(obj, "matrix_world", None)
+    if mw is None:
+        raise QuantTraceSyncError(
+            "TEX_COORD Object pointer has no matrix_world (Slice 2ab)"
+        )
+    return {
+        "tex_ob_use_transform": 1,
+        "tex_ob_tfm": _matrix_3x4(mw),
+    }
 
 
 def _tex_coord_uv_from_vector_link(vec_sock) -> None:
@@ -236,6 +312,7 @@ def _empty_tex_info() -> dict:
         "map_rotation": (0.0, 0.0, 0.0),
         "map_scale": (1.0, 1.0, 1.0),
         "map_type": 2,
+        "tex_ob_ref": None,  # bpy object; mesh-level resolve in packer
     }
 
 
@@ -270,6 +347,7 @@ def _tex_image_from_sock(sock, sock_label: str) -> dict:
     map_rotation = (0.0, 0.0, 0.0)
     map_scale = (1.0, 1.0, 1.0)
     map_type = 2
+    tex_ob_ref = None
 
     if vec is not None and getattr(vec, "is_linked", False):
         vlinks = list(getattr(vec, "links", None) or [])
@@ -289,13 +367,8 @@ def _tex_image_from_sock(sock, sock_label: str) -> dict:
             elif key == "generated":
                 tex_vector_mode = 3  # QT_TEX_VECTOR_TEXCOORD_GENERATED
             elif key == "object":
-                obj_ref = getattr(vnode, "object", None)
-                if obj_ref is not None:
-                    raise QuantTraceSyncError(
-                        "TEX_COORD Object with Object reference refused "
-                        "(Slice 2l: empty Object / no object_itfm only)"
-                    )
                 tex_vector_mode = 5  # QT_TEX_VECTOR_TEXCOORD_OBJECT
+                tex_ob_ref = getattr(vnode, "object", None)
             elif key == "camera":
                 tex_vector_mode = 7  # QT_TEX_VECTOR_TEXCOORD_CAMERA
             elif key == "window":
@@ -319,6 +392,8 @@ def _tex_image_from_sock(sock, sock_label: str) -> dict:
                 tex_vector_mode = 4  # QT_TEX_VECTOR_MAPPING_GENERATED
             elif space == "Object":
                 tex_vector_mode = 6  # QT_TEX_VECTOR_MAPPING_OBJECT
+                vec_in = _mapping_input_by_name(vnode, "Vector")
+                tex_ob_ref = _tex_coord_object_from_vec_sock(vec_in)
             elif space == "Camera":
                 tex_vector_mode = 8  # QT_TEX_VECTOR_MAPPING_CAMERA
             elif space == "Window":
@@ -353,6 +428,7 @@ def _tex_image_from_sock(sock, sock_label: str) -> dict:
         "map_rotation": map_rotation,
         "map_scale": map_scale,
         "map_type": map_type,
+        "tex_ob_ref": tex_ob_ref,
     }
 
 
@@ -366,7 +442,7 @@ def _prefix_tex(info: dict, prefix: str) -> dict:
     """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_/coat_rough_/coat_ior_/coat_tint_/sheen_rough_/sheen_tint_/coat_normal_/spec_tint_/film_thick_/film_ior_/sss_weight_/sss_radius_/sss_scale_/sss_ior_/sss_aniso_/thin_wall_/diffuse_rough_/aniso_/aniso_rot_/tangent_/bump_ (or keep for base)."""
     if not prefix:
         return dict(info)
-    return {
+    out = {
         f"{prefix}image_path": info.get("image_path") or "",
         f"{prefix}image_colorspace": info.get("image_colorspace") or "",
         f"{prefix}tex_vector_mode": int(info.get("tex_vector_mode", 0) or 0),
@@ -375,6 +451,10 @@ def _prefix_tex(info: dict, prefix: str) -> dict:
         f"{prefix}map_scale": info.get("map_scale") or (1.0, 1.0, 1.0),
         f"{prefix}map_type": int(info.get("map_type", 2) if info.get("map_type") is not None else 2),
     }
+    # Mesh-level Object pointer (Slice 2ab) — do not prefix.
+    if "tex_ob_ref" in info:
+        out["tex_ob_ref"] = info.get("tex_ob_ref")
+    return out
 
 
 
@@ -621,6 +701,7 @@ def _principled_from_material(mat) -> dict:
         **_empty_bump_info(),
         "thin_wall": 0,
         "transmission_weight": 0.0,
+        "tex_ob_ref": None,
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -821,6 +902,15 @@ def _principled_from_material(mat) -> dict:
         **{k: v for k, v in normal_info.items() if str(k).startswith("bump_")},
         "thin_wall": int(thin_wall),
         "transmission_weight": float(transmission_weight),
+        "tex_ob_ref": _resolve_tex_ob_ref(
+            base_tex, rough_tex, metal_tex, ior_tex, alpha_tex, trans_tex,
+            spec_tex, coat_tex, sheen_tex, emit_str_tex, emit_color_tex,
+            coat_rough_tex, coat_ior_tex, coat_tint_tex, sheen_rough_tex,
+            sheen_tint_tex, spec_tint_tex, film_thick_tex, film_ior_tex,
+            sss_weight_tex, sss_radius_tex, sss_scale_tex, sss_ior_tex,
+            sss_aniso_tex, diffuse_rough_tex, aniso_tex, aniso_rot_tex,
+            tangent_tex, normal_info, coat_normal_info,
+        ),
     }
 
 
@@ -1051,7 +1141,7 @@ def classify_simple(scene) -> dict:
 
 
 
-def _pack_tex_fields(pr: dict) -> dict:
+def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
     """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color/coat_rough/coat_ior/coat_tint/sheen_rough/sheen_tint/coat_normal/spec_tint/film_thick/film_ior/sss_weight/sss_radius/sss_scale/sss_ior/sss_aniso/thin_wall/diffuse_rough/aniso/aniso_rot/tangent/bump TEX_IMAGE fields."""
     def loc(key, default):
         return list(pr.get(key) or default)
@@ -1292,6 +1382,7 @@ def _pack_tex_fields(pr: dict) -> dict:
             pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
         ),
     }
+    out.update(_pack_tex_ob_fields(pr, depsgraph=depsgraph))
     return out
 
 
@@ -1365,7 +1456,7 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
         pr["base_color"], pr["roughness"], pr["metallic"], pr["ior"], pr["alpha"]
     )
     ntris = len(tris) // 3
-    tex_fields = _pack_tex_fields(pr)
+    tex_fields = _pack_tex_fields(pr, depsgraph=depsgraph)
     uvs: List[float] = []
     if _any_tex_path(pr):
         uvs = _mesh_corner_uvs(mesh_obj, ntris)
@@ -1536,7 +1627,7 @@ def pack_scene(scene, depsgraph=None) -> dict:
         base, rough, metal, ior, alpha = (
             pr["base_color"], pr["roughness"], pr["metallic"], pr["ior"], pr["alpha"]
         )
-        tex_fields = _pack_tex_fields(pr)
+        tex_fields = _pack_tex_fields(pr, depsgraph=depsgraph)
         uvs: List[float] = []
         if _any_tex_path(pr):
             uvs = _mesh_corner_uvs(eval_obj, len(tris) // 3)
@@ -1977,6 +2068,10 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.transmission_weight = float(
         packed.get("transmission_weight", 0.0) if packed.get("transmission_weight") is not None else 0.0
     )
+    desc.tex_ob_use_transform = int(packed.get("tex_ob_use_transform", 0) or 0)
+    tfm = packed.get("tex_ob_tfm") or _identity_3x4()
+    for i, v in enumerate(tfm):
+        desc.tex_ob_tfm[i] = float(v)
 
 
 def make_qt_simple_scene_type():
@@ -2246,6 +2341,8 @@ def make_qt_simple_scene_type():
             ("bump_invert", ctypes.c_int),
             ("thin_wall", ctypes.c_int),
             ("transmission_weight", ctypes.c_float),
+            ("tex_ob_use_transform", ctypes.c_int),
+            ("tex_ob_tfm", ctypes.c_float * 12),
         ]
 
     return QT_SimpleScene
@@ -2557,6 +2654,8 @@ def make_qt_scene_types():
             ("bump_invert", ctypes.c_int),
             ("thin_wall", ctypes.c_int),
             ("transmission_weight", ctypes.c_float),
+            ("tex_ob_use_transform", ctypes.c_int),
+            ("tex_ob_tfm", ctypes.c_float * 12),
         ]
 
     class QT_Light(ctypes.Structure):

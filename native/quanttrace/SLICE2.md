@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2aa landed** (2026-08-28 3pm PlugWalk ET). HDR / Environment Texture world (TEX_ENVIRONMENT → Background Color). Equirect 32²/4 Δmax=6.13e-4; 256²/128 Δmax=2.01e-4 PASS (0 px ≥1e-3). Black-world empty-path regression 32²/4 Δmax=3.58e-7 PASS. Object Normal 2z regression 32²/4 Δmax=3.58e-7 PASS. Optional MIRROR_BALL 32²/4 Δmax=6.90e-4 PASS. Stock HDR vs black Δmax=0.857 (graph live). Packed path/projection=0/strength=1.0. `is_tracer=1`. Native `0.0.28-slice2aa`.
+Status: **Slice 2ab landed** (2026-08-28 4pm PlugWalk ET). TEX_COORD Object-with-pointer (`use_transform` + `ob_tfm`). Pointer 32²/4 Δmax=1.08e-5; 256²/128 Δmax=4.41e-6 PASS (0 px ≥1e-3). Pointer+Mapping 32²/4 Δmax=2.24e-5 PASS. 2l empty-ref 32²/4 Δmax=7.99e-6 PASS (`use_transform=0`). Stock pointer vs empty-ref Δmax=0.684 (graph live). Packed `tex_ob_use_transform=1`, tfm non-identity (Empty loc=(0.5,0.25,0) rot_z=0.4). `is_tracer=1`. Native `0.0.29-slice2ab`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -9,6 +9,47 @@ Design: `docs/research/SIDECAR-INTEGRATOR.md`.
 `is_tracer=1` when QT_WITH_CYCLES (F12 wired for locked cube). Do **not** claim arbitrary-scene sync.
 **Do not** touch Make it Fast / Auto. **Do not** vendor Cycles into the
 addon zip or public commit tree.
+
+
+
+---
+
+## 4pm PlugWalk (2026-08-28) — TEX_COORD Object-with-pointer (Slice 2ab)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `tex_ob_use_transform` / `tex_ob_tfm[12]` after `transmission_weight` on `QT_Mesh` + `QT_SimpleScene`. 0 = Slice 2l empty-ref (bit-identical; native ignores tfm). 1 = Object pointer. Mesh-level: one Object reference per mesh. Two different objects → `QuantTraceSyncError` Slice 2ab. |
+| Python | Stop refusing `ShaderNodeTexCoord.object`. Collect pointer (direct TEX_COORD or Mapping's TEX_COORD source). Pack `use_transform=1` + `_matrix_3x4(evaluated.matrix_world)` via the pack_scene depsgraph. Empty-ref stays 0. `from_instancer` / `from_dupli` unused. Mapping scene `object_ref=` optional. |
+| Native | `wire_tex_image`: if Object mode AND `ob_use_transform`: `set_use_transform(true)` + `set_ob_tfm(tfm_from_12(ob_tfm))`. Cycles compile packs `transform_inverse(ob_tfm)` — do not invert twice. use_transform==0 leaves default false (2l bit-identical). `simple_to_qt` copies both fields. Cite `shader_nodes.cpp` TextureCoordinateNode SOCKET_BOOLEAN use_transform + SOCKET_TRANSFORM ob_tfm. |
+| Version | `0.0.29-slice2ab` |
+| Tools | `tools/_quanttrace_slice2ab_scene.py`, `tools/_quanttrace_slice2ab_smoke.py`. Empty `QT_TexEmpty` loc=(0.5, 0.25, 0.0) rot_z=0.4 (not a mesh). `--empty-ref` is 2l. `--mode mapping` uses 2l mapping constants. |
+| Visibility | 8×8 sRGB checker on Object coords; Combined chromatic + non-constant. Empty transform non-identity (identity Empty is a false pass). |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| Object-pointer | 32² / 4 | **1.08e-5** | 3.41e-8 | 0 | **PASS** |
+| Object-pointer | 256² / 128 | **4.41e-6** | 1.75e-8 | 0 | **PASS** |
+| Object-pointer + Mapping | 32² / 4 | **2.24e-5** | 8.45e-8 | 0 | **PASS** |
+| 2l empty-ref Object (regression) | 32² / 4 | **7.99e-6** | 2.56e-8 | 0 | **PASS** |
+
+Live graph (stock Object-pointer vs stock empty-ref) 32²/4: Δmax=**0.684** (81 px ≥1e-3, MAE 0.00811). Not claimed PASS against empty-ref. Packed `tex_ob_use_transform=1` / tfm `[0.921, -0.389, 0, 0.5, 0.389, 0.921, 0, 0.25, 0, 0, 1, 0]` (cos/sin 0.4 + translate). Empty-ref packed `use_transform=0` identity tfm. Proof plate `docs/proof/quanttrace-object-ptr-32-pair.png`. F12 32² not run this hour; Session is the claim. Optional 2aa HDR / 2z Object Normal 32² not re-run this hour.
+
+### Honesty
+
+- Linked env Vector / Mapping, `BLENDER_OBJECT` / `BLENDER_WORLD` Normal space, packed-only images, linked Mapping L/R/S, kitchens still refuse.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Linked env Vector/Mapping, or `BLENDER_OBJECT`/`BLENDER_WORLD` Normal space. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
 
 
 

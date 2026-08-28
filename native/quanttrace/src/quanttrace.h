@@ -32,6 +32,11 @@
  * Slice 2z: Principled Normal Map space OBJECT + WORLD (plus Coat Normal space).
  *   0=TANGENT (default, 2j/2t bit-identical), 1=OBJECT, 2=WORLD.
  *   BLENDER_OBJECT / BLENDER_WORLD still refuse.
+ * Slice 2aa: Environment Texture world (empty path = Slice 2b black).
+ * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
+ *   Empty Object ref (2l) stays use_transform=false / NODE_TEXCO_OBJECT.
+ *   Pointer set → NODE_TEXCO_OBJECT_WITH_TRANSFORM + packed inverse of ob_tfm.
+ *   Mesh-level: one Object reference per mesh. Do not invert twice.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -390,6 +395,9 @@ typedef struct QT_SimpleScene {
    * trans_image_path still wins when set (Slice 2p); do not also set the constant. */
   int thin_wall;
   float transmission_weight;
+  /* Slice 2ab: TEX_COORD Object pointer (mesh-level). 0 = 2l empty-ref. */
+  int tex_ob_use_transform; /* 0 = empty Object (bit-identical 2l). 1 = pointer */
+  float tex_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -683,6 +691,9 @@ typedef struct QT_Mesh {
   /* Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight. */
   int thin_wall;
   float transmission_weight;
+  /* Slice 2ab: TEX_COORD Object pointer (mesh-level). 0 = 2l empty-ref. */
+  int tex_ob_use_transform; /* 0 = empty Object (bit-identical 2l). 1 = pointer */
+  float tex_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

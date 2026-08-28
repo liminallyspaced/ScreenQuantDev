@@ -29,6 +29,8 @@
  * Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (bump_* ABI).
  * Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight.
  * Slice 2z: Normal Map space OBJECT/WORLD (plus Coat Normal space).
+ * Slice 2aa: Environment Texture world.
+ * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -496,6 +498,8 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->bump_invert = s->bump_invert;
     mesh->thin_wall = s->thin_wall;
     mesh->transmission_weight = s->transmission_weight;
+    mesh->tex_ob_use_transform = s->tex_ob_use_transform;
+    std::memcpy(mesh->tex_ob_tfm, s->tex_ob_tfm, sizeof(mesh->tex_ob_tfm));
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -664,6 +668,7 @@ static void fill_generated_orco(Mesh *mesh, const QT_Mesh *m)
  * Color→float (Roughness/Metallic/IOR/Alpha/Transmission/Specular/Coat/Sheen/Emission Strength) gets ConvertNode via ShaderGraph::connect.
  * Emission Color is a color socket (like Base Color) — Color→Color, no convert. */
 static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
+                                        const QT_Mesh *m,
                                         const char *path,
                                         const char *colorspace,
                                         int tex_vector_mode,
@@ -684,10 +689,16 @@ static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
     if (tex_mode_has_texcoord(tex_vector_mode)) {
         TextureCoordinateNode *texcoord =
             graph->create_node<TextureCoordinateNode>();
-        /* Object: use_transform stays false (default) → NODE_TEXCO_OBJECT
-         * (shading_position + object_inverse_position_transform). No
-         * ATTR_STD_GENERATED. Object pointer / ob_itfm refused in packer.
-         * Camera: TextureCoordinateNode "Camera" → NODE_TEXCO_CAMERA
+        /* Object empty-ref (2l): use_transform stays false (default) →
+         * NODE_TEXCO_OBJECT (shading_position + object_inverse_position_transform).
+         * Object pointer (2ab): set_use_transform(true) + set_ob_tfm(matrix_world).
+         * Cycles compile packs transform_inverse(ob_tfm) — do not invert twice.
+         * from_dupli unused. Cite shader_nodes.cpp TextureCoordinateNode. */
+        if (tex_mode_is_object(tex_vector_mode) && m && m->tex_ob_use_transform) {
+            texcoord->set_use_transform(true);
+            texcoord->set_ob_tfm(tfm_from_12(m->tex_ob_tfm));
+        }
+        /* Camera: TextureCoordinateNode "Camera" → NODE_TEXCO_CAMERA
          * (kernel_data.cam.worldtocamera; already set by Camera::update).
          * Window: "Window" → NODE_TEXCO_WINDOW (camera_world_to_ndc).
          * Reflection: "Reflection" → NODE_TEXCO_REFLECTION
@@ -755,13 +766,13 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * mode 8: TextureCoordinate Camera → Mapping → Image Vector. */
     if (m->image_path && m->image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->image_path, m->image_colorspace, m->tex_vector_mode,
+            graph.get(), m, m->image_path, m->image_colorspace, m->tex_vector_mode,
             m->map_location, m->map_rotation, m->map_scale, m->map_type);
         graph->connect(img->output("Color"), bsdf->input("Base Color"));
     }
     if (m->rough_image_path && m->rough_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->rough_image_path, m->rough_image_colorspace,
+            graph.get(), m, m->rough_image_path, m->rough_image_colorspace,
             m->rough_tex_vector_mode, m->rough_map_location, m->rough_map_rotation,
             m->rough_map_scale, m->rough_map_type);
         /* Color → float: ShaderGraph::connect inserts NODE_CONVERT_CF (average). */
@@ -769,7 +780,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     }
     if (m->metal_image_path && m->metal_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->metal_image_path, m->metal_image_colorspace,
+            graph.get(), m, m->metal_image_path, m->metal_image_colorspace,
             m->metal_tex_vector_mode, m->metal_map_location, m->metal_map_rotation,
             m->metal_map_scale, m->metal_map_type);
         graph->connect(img->output("Color"), bsdf->input("Metallic"));
@@ -785,7 +796,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * If both bump_* and normal_* paths are set, Bump wins (packer fills one). */
     if (m->bump_image_path && m->bump_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->bump_image_path, m->bump_image_colorspace,
+            graph.get(), m, m->bump_image_path, m->bump_image_colorspace,
             m->bump_tex_vector_mode, m->bump_map_location, m->bump_map_rotation,
             m->bump_map_scale, m->bump_map_type);
         BumpNode *bump = graph->create_node<BumpNode>();
@@ -805,7 +816,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      *   (Mesh::update_tangents during geometry update). */
     else if (m->normal_image_path && m->normal_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->normal_image_path, m->normal_image_colorspace,
+            graph.get(), m, m->normal_image_path, m->normal_image_colorspace,
             m->normal_tex_vector_mode, m->normal_map_location, m->normal_map_rotation,
             m->normal_map_scale, m->normal_map_type);
         NormalMapNode *nmap = graph->create_node<NormalMapNode>();
@@ -823,14 +834,14 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     }
     if (m->ior_image_path && m->ior_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->ior_image_path, m->ior_image_colorspace,
+            graph.get(), m, m->ior_image_path, m->ior_image_colorspace,
             m->ior_tex_vector_mode, m->ior_map_location, m->ior_map_rotation,
             m->ior_map_scale, m->ior_map_type);
         graph->connect(img->output("Color"), bsdf->input("IOR"));
     }
     if (m->alpha_image_path && m->alpha_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->alpha_image_path, m->alpha_image_colorspace,
+            graph.get(), m, m->alpha_image_path, m->alpha_image_colorspace,
             m->alpha_tex_vector_mode, m->alpha_map_location, m->alpha_map_rotation,
             m->alpha_map_scale, m->alpha_map_type);
         graph->connect(img->output("Color"), bsdf->input("Alpha"));
@@ -840,7 +851,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * Do not also set the constant when the TEX_IMAGE wire is live. */
     if (m->trans_image_path && m->trans_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->trans_image_path, m->trans_image_colorspace,
+            graph.get(), m, m->trans_image_path, m->trans_image_colorspace,
             m->trans_tex_vector_mode, m->trans_map_location, m->trans_map_rotation,
             m->trans_map_scale, m->trans_map_type);
         ShaderInput *in = bsdf->input("Transmission Weight");
@@ -855,7 +866,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     /* Slice 2p: Color → Specular IOR Level (legacy "Specular") via NODE_CONVERT_CF. */
     if (m->spec_image_path && m->spec_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->spec_image_path, m->spec_image_colorspace,
+            graph.get(), m, m->spec_image_path, m->spec_image_colorspace,
             m->spec_tex_vector_mode, m->spec_map_location, m->spec_map_rotation,
             m->spec_map_scale, m->spec_map_type);
         ShaderInput *in = bsdf->input("Specular IOR Level");
@@ -867,7 +878,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     /* Slice 2q: Color → Coat Weight (legacy Coat / Clearcoat) via NODE_CONVERT_CF. */
     if (m->coat_image_path && m->coat_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->coat_image_path, m->coat_image_colorspace,
+            graph.get(), m, m->coat_image_path, m->coat_image_colorspace,
             m->coat_tex_vector_mode, m->coat_map_location, m->coat_map_rotation,
             m->coat_map_scale, m->coat_map_type);
         ShaderInput *in = bsdf->input("Coat Weight");
@@ -882,7 +893,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     /* Slice 2q: Color → Sheen Weight (legacy Sheen) via NODE_CONVERT_CF. */
     if (m->sheen_image_path && m->sheen_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->sheen_image_path, m->sheen_image_colorspace,
+            graph.get(), m, m->sheen_image_path, m->sheen_image_colorspace,
             m->sheen_tex_vector_mode, m->sheen_map_location, m->sheen_map_rotation,
             m->sheen_map_scale, m->sheen_map_type);
         ShaderInput *in = bsdf->input("Sheen Weight");
@@ -894,7 +905,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     /* Slice 2q: Color → Emission Strength via NODE_CONVERT_CF. */
     if (m->emit_str_image_path && m->emit_str_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->emit_str_image_path, m->emit_str_image_colorspace,
+            graph.get(), m, m->emit_str_image_path, m->emit_str_image_colorspace,
             m->emit_str_tex_vector_mode, m->emit_str_map_location,
             m->emit_str_map_rotation, m->emit_str_map_scale, m->emit_str_map_type);
         ShaderInput *in = bsdf->input("Emission Strength");
@@ -905,7 +916,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * the color map is visible (matches test-scene Strength default_value=1.0). */
     if (m->emit_color_image_path && m->emit_color_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->emit_color_image_path, m->emit_color_image_colorspace,
+            graph.get(), m, m->emit_color_image_path, m->emit_color_image_colorspace,
             m->emit_color_tex_vector_mode, m->emit_color_map_location,
             m->emit_color_map_rotation, m->emit_color_map_scale, m->emit_color_map_type);
         ShaderInput *in = bsdf->input("Emission Color");
@@ -924,35 +935,35 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * and Weight is not itself mapped (matches test-scene Weight=1.0). */
     if (m->coat_rough_image_path && m->coat_rough_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->coat_rough_image_path, m->coat_rough_image_colorspace,
+            graph.get(), m, m->coat_rough_image_path, m->coat_rough_image_colorspace,
             m->coat_rough_tex_vector_mode, m->coat_rough_map_location,
             m->coat_rough_map_rotation, m->coat_rough_map_scale, m->coat_rough_map_type);
         graph->connect(img->output("Color"), bsdf->input("Coat Roughness"));
     }
     if (m->coat_ior_image_path && m->coat_ior_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->coat_ior_image_path, m->coat_ior_image_colorspace,
+            graph.get(), m, m->coat_ior_image_path, m->coat_ior_image_colorspace,
             m->coat_ior_tex_vector_mode, m->coat_ior_map_location,
             m->coat_ior_map_rotation, m->coat_ior_map_scale, m->coat_ior_map_type);
         graph->connect(img->output("Color"), bsdf->input("Coat IOR"));
     }
     if (m->coat_tint_image_path && m->coat_tint_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->coat_tint_image_path, m->coat_tint_image_colorspace,
+            graph.get(), m, m->coat_tint_image_path, m->coat_tint_image_colorspace,
             m->coat_tint_tex_vector_mode, m->coat_tint_map_location,
             m->coat_tint_map_rotation, m->coat_tint_map_scale, m->coat_tint_map_type);
         graph->connect(img->output("Color"), bsdf->input("Coat Tint"));
     }
     if (m->sheen_rough_image_path && m->sheen_rough_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->sheen_rough_image_path, m->sheen_rough_image_colorspace,
+            graph.get(), m, m->sheen_rough_image_path, m->sheen_rough_image_colorspace,
             m->sheen_rough_tex_vector_mode, m->sheen_rough_map_location,
             m->sheen_rough_map_rotation, m->sheen_rough_map_scale, m->sheen_rough_map_type);
         graph->connect(img->output("Color"), bsdf->input("Sheen Roughness"));
     }
     if (m->sheen_tint_image_path && m->sheen_tint_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->sheen_tint_image_path, m->sheen_tint_image_colorspace,
+            graph.get(), m, m->sheen_tint_image_path, m->sheen_tint_image_colorspace,
             m->sheen_tint_tex_vector_mode, m->sheen_tint_map_location,
             m->sheen_tint_map_rotation, m->sheen_tint_map_scale, m->sheen_tint_map_type);
         graph->connect(img->output("Color"), bsdf->input("Sheen Tint"));
@@ -961,7 +972,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * Same Tangent / unlinked Strength rules as Slice 2j. */
     if (m->coat_normal_image_path && m->coat_normal_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->coat_normal_image_path, m->coat_normal_image_colorspace,
+            graph.get(), m, m->coat_normal_image_path, m->coat_normal_image_colorspace,
             m->coat_normal_tex_vector_mode, m->coat_normal_map_location,
             m->coat_normal_map_rotation, m->coat_normal_map_scale, m->coat_normal_map_type);
         NormalMapNode *nmap = graph->create_node<NormalMapNode>();
@@ -982,42 +993,42 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * (Cycles default thickness is 0 = no film). */
     if (m->spec_tint_image_path && m->spec_tint_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->spec_tint_image_path, m->spec_tint_image_colorspace,
+            graph.get(), m, m->spec_tint_image_path, m->spec_tint_image_colorspace,
             m->spec_tint_tex_vector_mode, m->spec_tint_map_location,
             m->spec_tint_map_rotation, m->spec_tint_map_scale, m->spec_tint_map_type);
         graph->connect(img->output("Color"), bsdf->input("Specular Tint"));
     }
     if (m->film_thick_image_path && m->film_thick_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->film_thick_image_path, m->film_thick_image_colorspace,
+            graph.get(), m, m->film_thick_image_path, m->film_thick_image_colorspace,
             m->film_thick_tex_vector_mode, m->film_thick_map_location,
             m->film_thick_map_rotation, m->film_thick_map_scale, m->film_thick_map_type);
         graph->connect(img->output("Color"), bsdf->input("Thin Film Thickness"));
     }
     if (m->film_ior_image_path && m->film_ior_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->film_ior_image_path, m->film_ior_image_colorspace,
+            graph.get(), m, m->film_ior_image_path, m->film_ior_image_colorspace,
             m->film_ior_tex_vector_mode, m->film_ior_map_location,
             m->film_ior_map_rotation, m->film_ior_map_scale, m->film_ior_map_type);
         graph->connect(img->output("Color"), bsdf->input("Thin Film IOR"));
     }
     if (m->sss_weight_image_path && m->sss_weight_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->sss_weight_image_path, m->sss_weight_image_colorspace,
+            graph.get(), m, m->sss_weight_image_path, m->sss_weight_image_colorspace,
             m->sss_weight_tex_vector_mode, m->sss_weight_map_location,
             m->sss_weight_map_rotation, m->sss_weight_map_scale, m->sss_weight_map_type);
         graph->connect(img->output("Color"), bsdf->input("Subsurface Weight"));
     }
     if (m->sss_radius_image_path && m->sss_radius_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->sss_radius_image_path, m->sss_radius_image_colorspace,
+            graph.get(), m, m->sss_radius_image_path, m->sss_radius_image_colorspace,
             m->sss_radius_tex_vector_mode, m->sss_radius_map_location,
             m->sss_radius_map_rotation, m->sss_radius_map_scale, m->sss_radius_map_type);
         graph->connect(img->output("Color"), bsdf->input("Subsurface Radius"));
     }
     if (m->sss_scale_image_path && m->sss_scale_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->sss_scale_image_path, m->sss_scale_image_colorspace,
+            graph.get(), m, m->sss_scale_image_path, m->sss_scale_image_colorspace,
             m->sss_scale_tex_vector_mode, m->sss_scale_map_location,
             m->sss_scale_map_rotation, m->sss_scale_map_scale, m->sss_scale_map_type);
         graph->connect(img->output("Color"), bsdf->input("Subsurface Scale"));
@@ -1029,28 +1040,28 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         /* Blender 5.2 exposes Subsurface IOR only for RANDOM_WALK_SKIN. */
         bsdf->set_subsurface_method(CLOSURE_BSSRDF_RANDOM_WALK_SKIN_ID);
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->sss_ior_image_path, m->sss_ior_image_colorspace,
+            graph.get(), m, m->sss_ior_image_path, m->sss_ior_image_colorspace,
             m->sss_ior_tex_vector_mode, m->sss_ior_map_location,
             m->sss_ior_map_rotation, m->sss_ior_map_scale, m->sss_ior_map_type);
         graph->connect(img->output("Color"), bsdf->input("Subsurface IOR"));
     }
     if (m->sss_aniso_image_path && m->sss_aniso_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->sss_aniso_image_path, m->sss_aniso_image_colorspace,
+            graph.get(), m, m->sss_aniso_image_path, m->sss_aniso_image_colorspace,
             m->sss_aniso_tex_vector_mode, m->sss_aniso_map_location,
             m->sss_aniso_map_rotation, m->sss_aniso_map_scale, m->sss_aniso_map_type);
         graph->connect(img->output("Color"), bsdf->input("Subsurface Anisotropy"));
     }
     if (m->thin_wall_image_path && m->thin_wall_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->thin_wall_image_path, m->thin_wall_image_colorspace,
+            graph.get(), m, m->thin_wall_image_path, m->thin_wall_image_colorspace,
             m->thin_wall_tex_vector_mode, m->thin_wall_map_location,
             m->thin_wall_map_rotation, m->thin_wall_map_scale, m->thin_wall_map_type);
         graph->connect(img->output("Color"), bsdf->input("Thin Wall"));
     }
     if (m->diffuse_rough_image_path && m->diffuse_rough_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->diffuse_rough_image_path, m->diffuse_rough_image_colorspace,
+            graph.get(), m, m->diffuse_rough_image_path, m->diffuse_rough_image_colorspace,
             m->diffuse_rough_tex_vector_mode, m->diffuse_rough_map_location,
             m->diffuse_rough_map_rotation, m->diffuse_rough_map_scale, m->diffuse_rough_map_type);
         graph->connect(img->output("Color"), bsdf->input("Diffuse Roughness"));
@@ -1061,21 +1072,21 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * Rotation when Anisotropic weight is 0). */
     if (m->aniso_image_path && m->aniso_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->aniso_image_path, m->aniso_image_colorspace,
+            graph.get(), m, m->aniso_image_path, m->aniso_image_colorspace,
             m->aniso_tex_vector_mode, m->aniso_map_location,
             m->aniso_map_rotation, m->aniso_map_scale, m->aniso_map_type);
         graph->connect(img->output("Color"), bsdf->input("Anisotropic"));
     }
     if (m->aniso_rot_image_path && m->aniso_rot_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->aniso_rot_image_path, m->aniso_rot_image_colorspace,
+            graph.get(), m, m->aniso_rot_image_path, m->aniso_rot_image_colorspace,
             m->aniso_rot_tex_vector_mode, m->aniso_rot_map_location,
             m->aniso_rot_map_rotation, m->aniso_rot_map_scale, m->aniso_rot_map_type);
         graph->connect(img->output("Color"), bsdf->input("Anisotropic Rotation"));
     }
     if (m->tangent_image_path && m->tangent_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
-            graph.get(), m->tangent_image_path, m->tangent_image_colorspace,
+            graph.get(), m, m->tangent_image_path, m->tangent_image_colorspace,
             m->tangent_tex_vector_mode, m->tangent_map_location,
             m->tangent_map_rotation, m->tangent_map_scale, m->tangent_map_type);
         graph->connect(img->output("Color"), bsdf->input("Tangent"));

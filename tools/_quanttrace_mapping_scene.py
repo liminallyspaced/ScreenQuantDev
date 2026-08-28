@@ -17,6 +17,7 @@ def build_mapping_scene(
     location=(0.1, 0.2, 0.0),
     rotation_z=0.15,
     coord="UV",
+    object_ref=None,
 ):
     """Build tex scene; optionally wire TEX_COORD UV/Generated/Object/Camera/Window/Reflection [→ Mapping] → TEX_IMAGE.
 
@@ -59,9 +60,10 @@ def build_mapping_scene(
         else:
             coord_name = "UV"
         coord_out = tc.outputs[coord_name]
-        # Slice 2l: empty Object reference only (no object_itfm).
-        if coord_name == "Object" and getattr(tc, "object", None) is not None:
-            tc.object = None
+        # Slice 2ab: optional Object pointer (Empty-as-projector).
+        # None keeps Slice 2l empty-ref (use_transform false).
+        if coord_name == "Object":
+            tc.object = object_ref
         if use_mapping:
             mapping = nt.nodes.new("ShaderNodeMapping")
             mapping.location = (-400, 200)
