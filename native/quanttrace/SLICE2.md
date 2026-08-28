@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2q landed** (2026-08-28 5am PlugWalk ET). Principled Coat Weight / Sheen Weight / Emission Strength TEX_IMAGE PASS. Coat 32²/4 Δmax=2.38e-7; 256²/128 Δmax=3.58e-7. Sheen 32²/4 Δmax=2.98e-7; 256²/128 Δmax=3.58e-7. Emission Strength 32²/4 Δmax=8.34e-7; 256²/128 Δmax=9.54e-7. Coat+Sheen 32²/4 Δmax=2.98e-7; All three 32²/4 Δmax=5.96e-7. Roughness 32²/4 regression Δmax=3.58e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.18-slice2q`.
+Status: **Slice 2r landed** (2026-08-28 6am PlugWalk ET). Principled Emission Color TEX_IMAGE PASS. Color 32²/4 Δmax=5.96e-7; 256²/128 Δmax=9.54e-7. Color+Strength 32²/4 Δmax=7.15e-7. Coat Weight 32²/4 regression Δmax=2.38e-7 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.19-slice2r`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -1360,4 +1360,54 @@ Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Re
 
 ### Next
 
-Emission Color TEX_IMAGE, Coat Roughness, or close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 6am: Emission Color TEX_IMAGE. See 6am section.
+
+---
+
+## 6am PlugWalk (2026-08-28) — Slice 2r: Principled Emission Color TEX_IMAGE
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `emit_color_image_path` (+ colorspace, tex_vector_mode, Mapping) on `QT_SimpleScene` and `QT_Mesh` (NULL/empty = Cycles default Emission Color 1,1,1 unlinked) |
+| Packer | Principled Emission Color (legacy Emission) may be TEX_IMAGE Color (same Vector graph as Base Color). Emission Strength stays `emit_str` — not conflated. Coat Roughness/IOR/Tint, Sheen Roughness/Tint still refuse. |
+| Native | Color → Emission Color (legacy Emission) Color→Color, no NODE_CONVERT_CF. When Color is mapped and Strength is not, `set_emission_strength(1.0)` so the color map is visible (test-scene pin; Cycles default Strength is 0). `needs_uv` and `mesh_uses_generated` include emit_color. |
+| Version | `0.0.19-slice2r` |
+| Tools | `_quanttrace_emitcolor_scene/smoke.py` (8×8 sRGB color checker; `--socket Color\|Color+Strength`) |
+
+`libquanttrace.so` still CDLL-loads with empty `LD_LIBRARY_PATH`. `is_tracer=1` unchanged.
+
+### Measured — TEX_IMAGE → Principled Emission Color (Strength unlinked 1.0)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | wall | Gate |
+|---|---|---|---|---|---|---|
+| Color Session | 32² / 4 | **5.96e-7** | 1.16e-8 | 0 / 1024 | 0.007 s | **PASS** |
+| Color Session | 256² / 128 | **9.54e-7** | 6.89e-9 | 0 / 65536 | 0.295 s | **PASS** |
+
+### Measured — Color+Strength (Color sRGB TEX_IMAGE + Strength Non-Color TEX_IMAGE)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | wall | Gate |
+|---|---|---|---|---|---|---|
+| Color+Strength Session | 32² / 4 | **7.15e-7** | 8.67e-9 | 0 / 1024 | 0.007 s | **PASS** |
+
+### Measured — regressions (32² / 4)
+
+| Path | Res / spp | Δmax | MAE | wall | Gate |
+|---|---|---|---|---|---|
+| 2q Coat Weight TEX_IMAGE | 32² / 4 | **2.38e-7** | 4.71e-9 | 0.006 s | **PASS** |
+
+### Honesty / still refuses
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented (not claimed fixed).
+- HDR worlds, kitchens, TEX_COORD Object **with** Object reference (use_transform / object_itfm), linked Mapping L/R/S, packed-only images, Coat Roughness/IOR/Tint, Sheen Roughness/Tint still raise `QuantTraceSyncError`.
+- Film stays opaque (`film_transparent=False`); Combined RGB is over black world. Session Combined A mean stays 1.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Coat Roughness/IOR/Tint, Sheen Roughness/Tint, or close still-life 1px. Not ReSTIR. Not Classroom time %.

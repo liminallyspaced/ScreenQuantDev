@@ -20,6 +20,7 @@
  * Slice 2o: TEX_IMAGE → Principled IOR / Alpha.
  * Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level.
  * Slice 2q: TEX_IMAGE → Principled Coat Weight / Sheen Weight / Emission Strength.
+ * Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -332,6 +333,13 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->emit_str_map_rotation, s->emit_str_map_rotation, sizeof(mesh->emit_str_map_rotation));
     std::memcpy(mesh->emit_str_map_scale, s->emit_str_map_scale, sizeof(mesh->emit_str_map_scale));
     mesh->emit_str_map_type = s->emit_str_map_type;
+    mesh->emit_color_image_path = s->emit_color_image_path;
+    mesh->emit_color_image_colorspace = s->emit_color_image_colorspace;
+    mesh->emit_color_tex_vector_mode = s->emit_color_tex_vector_mode;
+    std::memcpy(mesh->emit_color_map_location, s->emit_color_map_location, sizeof(mesh->emit_color_map_location));
+    std::memcpy(mesh->emit_color_map_rotation, s->emit_color_map_rotation, sizeof(mesh->emit_color_map_rotation));
+    std::memcpy(mesh->emit_color_map_scale, s->emit_color_map_scale, sizeof(mesh->emit_color_map_scale));
+    mesh->emit_color_map_type = s->emit_color_map_type;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -424,7 +432,8 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->spec_tex_vector_mode) ||
            tex_mode_is_generated(m->coat_tex_vector_mode) ||
            tex_mode_is_generated(m->sheen_tex_vector_mode) ||
-           tex_mode_is_generated(m->emit_str_tex_vector_mode);
+           tex_mode_is_generated(m->emit_str_tex_vector_mode) ||
+           tex_mode_is_generated(m->emit_color_tex_vector_mode);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -464,7 +473,8 @@ static void fill_generated_orco(Mesh *mesh, const QT_Mesh *m)
 }
 
 /* Wire ImageTexture (+ optional TEX_COORD UV/Generated/Object/Camera/Window/Reflection + Mapping).
- * Color→float (Roughness/Metallic/IOR/Alpha/Transmission/Specular/Coat/Sheen/Emission Strength) gets ConvertNode via ShaderGraph::connect. */
+ * Color→float (Roughness/Metallic/IOR/Alpha/Transmission/Specular/Coat/Sheen/Emission Strength) gets ConvertNode via ShaderGraph::connect.
+ * Emission Color is a color socket (like Base Color) — Color→Color, no convert. */
 static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
                                         const char *path,
                                         const char *colorspace,
@@ -541,7 +551,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o/2p/2q: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha / Transmission / Specular / Coat / Sheen / Emission Strength.
+    /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o/2p/2q/2r: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha / Transmission / Specular / Coat / Sheen / Emission Strength / Emission Color.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
      * mode 2: TextureCoordinate UV → Mapping → Image Vector.
@@ -664,6 +674,23 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         ShaderInput *in = bsdf->input("Emission Strength");
         graph->connect(img->output("Color"), in);
     }
+    /* Slice 2r: Color → Emission Color (legacy Emission). Color socket, no convert.
+     * Unlinked Strength stays Cycles default 0 unless Color is mapped: pin 1.0 so
+     * the color map is visible (matches test-scene Strength default_value=1.0). */
+    if (m->emit_color_image_path && m->emit_color_image_path[0]) {
+        ImageTextureNode *img = wire_tex_image(
+            graph.get(), m->emit_color_image_path, m->emit_color_image_colorspace,
+            m->emit_color_tex_vector_mode, m->emit_color_map_location,
+            m->emit_color_map_rotation, m->emit_color_map_scale, m->emit_color_map_type);
+        ShaderInput *in = bsdf->input("Emission Color");
+        if (in == nullptr) {
+            in = bsdf->input("Emission");
+        }
+        graph->connect(img->output("Color"), in);
+        if (!(m->emit_str_image_path && m->emit_str_image_path[0])) {
+            bsdf->set_emission_strength(1.0f);
+        }
+    }
     graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
     surf->set_graph(std::move(graph));
     surf->tag_update(scene);
@@ -725,7 +752,8 @@ static void add_mesh_object(Scene *scene, Shader *surf, const QT_Mesh *m)
         (m->spec_image_path && m->spec_image_path[0]) ||
         (m->coat_image_path && m->coat_image_path[0]) ||
         (m->sheen_image_path && m->sheen_image_path[0]) ||
-        (m->emit_str_image_path && m->emit_str_image_path[0]);
+        (m->emit_str_image_path && m->emit_str_image_path[0]) ||
+        (m->emit_color_image_path && m->emit_color_image_path[0]);
     if (needs_uv && m->uvs) {
         Attribute *attr = mesh->attributes.add(ATTR_STD_UV);
         float2 *fdata = attr->data_for_write<float2>();
@@ -989,7 +1017,8 @@ static int run_qt_session(const QT_Scene *desc,
             (m->spec_image_path && m->spec_image_path[0]) ||
             (m->coat_image_path && m->coat_image_path[0]) ||
             (m->sheen_image_path && m->sheen_image_path[0]) ||
-            (m->emit_str_image_path && m->emit_str_image_path[0]);
+            (m->emit_str_image_path && m->emit_str_image_path[0]) ||
+            (m->emit_color_image_path && m->emit_color_image_path[0]);
         if (needs_uv && !m->uvs) {
             fprintf(stderr, "quanttrace: mesh %d textured but uvs NULL\n", i);
             return -1;

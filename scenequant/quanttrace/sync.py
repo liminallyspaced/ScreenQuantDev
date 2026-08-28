@@ -15,8 +15,10 @@
 # Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level
 #   (Blender 5.x names; legacy Transmission / Specular accepted).
 # Slice 2q: TEX_IMAGE → Principled Coat Weight / Sheen Weight / Emission Strength
-#   (legacy Coat/Clearcoat, Sheen; Strength-only Emission). Coat Roughness/IOR/Tint,
-#   Sheen Roughness/Tint, Emission Color still refuse. Other linked sockets / HDR worlds refuse.
+#   (legacy Coat/Clearcoat, Sheen; Strength-only Emission).
+# Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission). Color socket,
+#   not float. Coat Roughness/IOR/Tint, Sheen Roughness/Tint still refuse.
+#   Other linked sockets / HDR worlds refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -348,7 +350,7 @@ def _tex_image_from_base_color(sock) -> dict:
 
 
 def _prefix_tex(info: dict, prefix: str) -> dict:
-    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_ (or keep for base)."""
+    """Remap image_path/… keys to rough_/metal_/normal_/ior_/alpha_/trans_/spec_/coat_/sheen_/emit_str_/emit_color_ (or keep for base)."""
     if not prefix:
         return dict(info)
     return {
@@ -442,7 +444,7 @@ def _input_by_names(bsdf, *names):
 
 
 def _principled_from_material(mat) -> dict:
-    """Return principled dict (constants + optional TEX_IMAGE on Base/Rough/Metal/IOR/Alpha/Trans/Spec/Coat/Sheen/EmitStr)."""
+    """Return principled dict (constants + optional TEX_IMAGE on Base/Rough/Metal/IOR/Alpha/Trans/Spec/Coat/Sheen/EmitStr/EmitColor)."""
     empty = {
         "base_color": (0.8, 0.8, 0.8),
         "roughness": 0.5,
@@ -460,6 +462,7 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(_empty_tex_info(), "coat_"),
         **_prefix_tex(_empty_tex_info(), "sheen_"),
         **_prefix_tex(_empty_tex_info(), "emit_str_"),
+        **_prefix_tex(_empty_tex_info(), "emit_color_"),
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -484,7 +487,8 @@ def _principled_from_material(mat) -> dict:
     coat_tex = _empty_tex_info()
     sheen_tex = _empty_tex_info()
     emit_str_tex = _empty_tex_info()
-    # 5.x names first; legacy Transmission / Specular / Coat / Sheen accepted.
+    emit_color_tex = _empty_tex_info()
+    # 5.x names first; legacy Transmission / Specular / Coat / Sheen / Emission accepted.
     allowed = (
         ("Base Color", ("Base Color",), "base"),
         ("Roughness", ("Roughness",), "rough"),
@@ -496,6 +500,7 @@ def _principled_from_material(mat) -> dict:
         ("Coat Weight", ("Coat Weight", "Coat", "Clearcoat"), "coat"),
         ("Sheen Weight", ("Sheen Weight", "Sheen"), "sheen"),
         ("Emission Strength", ("Emission Strength",), "emit_str"),
+        ("Emission Color", ("Emission Color", "Emission"), "emit_color"),
     )
     for label, names, kind in allowed:
         _name, sock = _input_by_names(bsdf, *names)
@@ -522,17 +527,18 @@ def _principled_from_material(mat) -> dict:
             sheen_tex = tex
         elif kind == "emit_str":
             emit_str_tex = tex
+        elif kind == "emit_color":
+            emit_color_tex = tex
     for rname in (
         "Coat Roughness", "Coat IOR", "Coat Tint",
         "Sheen Roughness", "Sheen Tint",
-        "Emission Color", "Emission",
     ):
         _n, sock = _input_by_names(bsdf, rname)
         if sock is not None and getattr(sock, "is_linked", False):
             raise QuantTraceSyncError(
                 f"Principled.{rname} is linked "
-                "(Slice 2q: Coat Roughness/IOR/Tint, Sheen Roughness/Tint, "
-                "Emission Color refuse; Coat/Sheen Weight + Emission Strength may be TEX_IMAGE)"
+                "(Slice 2r: Coat Roughness/IOR/Tint, Sheen Roughness/Tint refuse; "
+                "Coat/Sheen Weight + Emission Strength/Color may be TEX_IMAGE)"
             )
     normal_info = _normal_map_from_sock(bsdf.inputs.get("Normal"))
     base = bsdf.inputs["Base Color"].default_value
@@ -553,6 +559,7 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(coat_tex, "coat_"),
         **_prefix_tex(sheen_tex, "sheen_"),
         **_prefix_tex(emit_str_tex, "emit_str_"),
+        **_prefix_tex(emit_color_tex, "emit_color_"),
     }
 
 
@@ -712,7 +719,7 @@ def classify_simple(scene) -> dict:
 
 
 def _pack_tex_fields(pr: dict) -> dict:
-    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str TEX_IMAGE fields."""
+    """Flatten base/rough/metal/normal/ior/alpha/trans/spec/coat/sheen/emit_str/emit_color TEX_IMAGE fields."""
     def loc(key, default):
         return list(pr.get(key) or default)
     out = {
@@ -794,6 +801,13 @@ def _pack_tex_fields(pr: dict) -> dict:
         "emit_str_map_rotation": loc("emit_str_map_rotation", (0.0, 0.0, 0.0)),
         "emit_str_map_scale": loc("emit_str_map_scale", (1.0, 1.0, 1.0)),
         "emit_str_map_type": int(pr.get("emit_str_map_type", 2) if pr.get("emit_str_map_type") is not None else 2),
+        "emit_color_image_path": pr.get("emit_color_image_path") or "",
+        "emit_color_image_colorspace": pr.get("emit_color_image_colorspace") or "",
+        "emit_color_tex_vector_mode": int(pr.get("emit_color_tex_vector_mode", 0) or 0),
+        "emit_color_map_location": loc("emit_color_map_location", (0.0, 0.0, 0.0)),
+        "emit_color_map_rotation": loc("emit_color_map_rotation", (0.0, 0.0, 0.0)),
+        "emit_color_map_scale": loc("emit_color_map_scale", (1.0, 1.0, 1.0)),
+        "emit_color_map_type": int(pr.get("emit_color_map_type", 2) if pr.get("emit_color_map_type") is not None else 2),
     }
     return out
 
@@ -811,6 +825,7 @@ def _any_tex_path(pr: dict) -> bool:
         or (pr.get("coat_image_path") or "")
         or (pr.get("sheen_image_path") or "")
         or (pr.get("emit_str_image_path") or "")
+        or (pr.get("emit_color_image_path") or "")
     )
 
 
@@ -1234,6 +1249,16 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("emit_str_map_type", 2) if packed.get("emit_str_map_type") is not None else 2
     )
 
+    desc.emit_color_image_path = enc("emit_color_image_path")
+    desc.emit_color_image_colorspace = enc("emit_color_image_colorspace")
+    desc.emit_color_tex_vector_mode = int(packed.get("emit_color_tex_vector_mode", 0) or 0)
+    vec3("emit_color_map_location", "emit_color_map_location")
+    vec3("emit_color_map_rotation", "emit_color_map_rotation")
+    vec3("emit_color_map_scale", "emit_color_map_scale", (1.0, 1.0, 1.0))
+    desc.emit_color_map_type = int(
+        packed.get("emit_color_map_type", 2) if packed.get("emit_color_map_type") is not None else 2
+    )
+
 
 def make_qt_simple_scene_type():
     """ctypes Structure matching QT_SimpleScene in quanttrace.h."""
@@ -1344,6 +1369,13 @@ def make_qt_simple_scene_type():
             ("emit_str_map_rotation", ctypes.c_float * 3),
             ("emit_str_map_scale", ctypes.c_float * 3),
             ("emit_str_map_type", ctypes.c_int),
+            ("emit_color_image_path", ctypes.c_char_p),
+            ("emit_color_image_colorspace", ctypes.c_char_p),
+            ("emit_color_tex_vector_mode", ctypes.c_int),
+            ("emit_color_map_location", ctypes.c_float * 3),
+            ("emit_color_map_rotation", ctypes.c_float * 3),
+            ("emit_color_map_scale", ctypes.c_float * 3),
+            ("emit_color_map_type", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -1495,6 +1527,13 @@ def make_qt_scene_types():
             ("emit_str_map_rotation", ctypes.c_float * 3),
             ("emit_str_map_scale", ctypes.c_float * 3),
             ("emit_str_map_type", ctypes.c_int),
+            ("emit_color_image_path", ctypes.c_char_p),
+            ("emit_color_image_colorspace", ctypes.c_char_p),
+            ("emit_color_tex_vector_mode", ctypes.c_int),
+            ("emit_color_map_location", ctypes.c_float * 3),
+            ("emit_color_map_rotation", ctypes.c_float * 3),
+            ("emit_color_map_scale", ctypes.c_float * 3),
+            ("emit_color_map_type", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):

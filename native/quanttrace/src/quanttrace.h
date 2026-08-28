@@ -16,6 +16,7 @@
  * Slice 2o: TEX_IMAGE → Principled IOR / Alpha (same Vector rules).
  * Slice 2p: TEX_IMAGE → Principled Transmission Weight / Specular IOR Level.
  * Slice 2q: TEX_IMAGE → Principled Coat Weight / Sheen Weight / Emission Strength.
+ * Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission).
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -187,6 +188,14 @@ typedef struct QT_SimpleScene {
   float emit_str_map_rotation[3];
   float emit_str_map_scale[3];
   int emit_str_map_type;
+  /* Slice 2r: Emission Color TEX_IMAGE (NULL/empty = Cycles default 1,1,1 unlinked) */
+  const char *emit_color_image_path;
+  const char *emit_color_image_colorspace;
+  int emit_color_tex_vector_mode;
+  float emit_color_map_location[3];
+  float emit_color_map_rotation[3];
+  float emit_color_map_scale[3];
+  int emit_color_map_type;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -301,6 +310,14 @@ typedef struct QT_Mesh {
   float emit_str_map_rotation[3];
   float emit_str_map_scale[3];
   int emit_str_map_type;
+  /* Slice 2r: Emission Color TEX_IMAGE */
+  const char *emit_color_image_path;
+  const char *emit_color_image_colorspace;
+  int emit_color_tex_vector_mode;
+  float emit_color_map_location[3];
+  float emit_color_map_rotation[3];
+  float emit_color_map_scale[3];
+  int emit_color_map_type;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
