@@ -1,10 +1,10 @@
-<!-- Slice 2x: Principled Bump TEX_IMAGE Height; version 0.0.25-slice2x -->
+<!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.25-slice2x`.
+`-DQT_WITH_CYCLES=ON`. Native `0.0.26-slice2y`.
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -37,9 +37,11 @@ this tree never feeds Auto clocks.
 | **2t — Coat Normal Map TEX_IMAGE** | **PASS** | Coat Normal 256²/128 Δmax **3.58e-7**. Native `0.0.21-slice2t`. |
 | **2u — Specular Tint / Thin Film / Subsurface TEX_IMAGE** | **32/4 PASS; SSSWeight 256 1-px FAIL** | SpecTint 256²/128 Δmax **4.77e-7**; FilmThick 256²/128 Δmax **4.77e-7**; SSSWeight 32²/4 Δmax **8.34e-7** PASS, 256²/128 Δmax **0.00164** (1 px). Native `0.0.22-slice2u`. |
 | **2v — Subsurface IOR / Anisotropy / Diffuse Roughness TEX_IMAGE** | **32/4 PASS; SSSAniso 256 3-px FAIL** | SSSIOR 256²/128 Δmax **8.78e-4**; DiffuseRough 256²/128 Δmax **4.77e-7**; SSSAniso 32²/4 Δmax **2.74e-5** PASS, 256²/128 Δmax **0.0206** (3 px). Thin Wall BOOLEAN refused. Native `0.0.23-slice2v`. |
-| **2w — Anisotropic / Rotation / Tangent TEX_IMAGE** | **PASS** | Aniso 256²/128 Δmax **1.09e-7**; AnisoRot 256²/128 Δmax **9.35e-6**; Tangent 256²/128 Δmax **5.09e-11**. Native `0.0.25-slice2x`. |
+| **2w — Anisotropic / Rotation / Tangent TEX_IMAGE** | **PASS** | Aniso 256²/128 Δmax **1.09e-7**; AnisoRot 256²/128 Δmax **9.35e-6**; Tangent 256²/128 Δmax **5.09e-11**. Native `0.0.24-slice2w`. |
+| **2x — Principled Bump TEX_IMAGE Height** | **PASS** | Bump 32²/4 Δmax **2.38e-7**; 256²/128 Δmax **4.77e-7**. Native `0.0.25-slice2x`. |
+| **2y — Principled Thin Wall BOOLEAN** | **PASS** | Unlinked Thin Wall 0/1 + unlinked Transmission Weight. ThinWall 32²/4 Δmax **3.18e-12**; 256²/128 Δmax **2.32e-8**. True vs False 32²/4 Δmax **6.83e-5** (below 1e-3; glass vs black world). Linked Thin Wall still refuses. Native `0.0.26-slice2y`. |
 
-Kitchens / HDR worlds / Thin Wall (BOOLEAN) / Object·World Normal space / linked Strength / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`.
+Kitchens / HDR worlds / linked Thin Wall (BOOLEAN) / Object·World Normal space / linked Strength / Object-with-pointer TEX_COORD / packed-only images still refuse with a named `QuantTraceSyncError`. Unlinked Thin Wall BOOLEAN is Slice 2y.
 
 ## Build (Linux) — hello stub (default)
 
@@ -59,7 +61,7 @@ cmake -S native/quanttrace -B native/quanttrace/build \
   -DCMAKE_BUILD_TYPE=Release -DQT_WITH_CYCLES=ON
 cmake --build native/quanttrace/build -j 8
 env -u LD_LIBRARY_PATH python3 tools/_quanttrace_load_probe.py
-# ABI: is_tracer=1, session_probe=1, version 0.0.25-slice2x
+# ABI: is_tracer=1, session_probe=1, version 0.0.26-slice2y
 QUANTTRACE_CUBE_WIDTH=32 QUANTTRACE_CUBE_HEIGHT=32 QUANTTRACE_CUBE_SAMPLES=4 \
   env -u LD_LIBRARY_PATH python3 tools/_quanttrace_session_smoke.py
 blender --background --python tools/_quanttrace_f12_smoke.py -- \
@@ -89,5 +91,5 @@ int quanttrace_render_cube_rgba(float *out, int cap, int *w, int *h);
 
 ## Out of scope until shader / light-type expand
 
-- Kitchen F12 / HDR world / Object·World Normal / Thin Wall BOOLEAN / linked Strength / packed-only
+- Kitchen F12 / HDR world / Object·World Normal / linked Thin Wall BOOLEAN / linked Strength / packed-only
 - ReSTIR / OptiX / Make it Fast / zip / store % claims

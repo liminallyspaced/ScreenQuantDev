@@ -374,6 +374,13 @@ typedef struct QT_SimpleScene {
   float bump_strength;
   float bump_distance;
   int bump_invert;
+  /* Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight.
+   * thin_wall: 0/1 from unlinked BOOLEAN RNA default_value.
+   * transmission_weight: unlinked Transmission Weight RNA default (0 if missing).
+   * Linked Thin Wall still refuses (BOOLEAN, not TEX_IMAGE).
+   * trans_image_path still wins when set (Slice 2p); do not also set the constant. */
+  int thin_wall;
+  float transmission_weight;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -662,6 +669,9 @@ typedef struct QT_Mesh {
   float bump_strength;
   float bump_distance;
   int bump_invert;
+  /* Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight. */
+  int thin_wall;
+  float transmission_weight;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.22-slice2u" in hello_c, "hello.c version string 0.0.22-slice2u")
+    check("0.0.26-slice2y" in hello_c, "hello.c version string 0.0.26-slice2y")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -446,7 +446,7 @@ def main():
     check("NormalMapNode" in bridge, "bridge builds NormalMapNode")
     check("NODE_NORMAL_MAP_TANGENT" in bridge, "bridge pins Tangent space")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("_normal_map_from_sock" in sync_src, "sync parses Normal Map")
     check(callable(sync._normal_map_from_sock), "sync._normal_map_from_sock")
@@ -496,7 +496,7 @@ def main():
     check('output("Generated")' in bridge or "output(coord_sock)" in bridge,
           "bridge connects Generated socket")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("_tex_coord_space_from_vector_link" in sync_src, "sync parses Generated")
     check("Generated" in sync_src, "sync names Generated")
@@ -514,7 +514,7 @@ def main():
     check("tex_mode_is_camera" in bridge, "bridge has camera mode helper")
     check('"Camera"' in bridge, "bridge names Camera socket")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Camera" in sync_src, "sync names Camera")
     ctools = _read("tools/_quanttrace_camera_scene.py")
@@ -535,7 +535,7 @@ def main():
     check('"Window"' in bridge, "bridge names Window socket")
     check('"Reflection"' in bridge, "bridge names Reflection socket")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Window" in sync_src and "Reflection" in sync_src, "sync names Window/Reflection")
     check("tex_vector_mode = 9" in sync_src, "sync assigns Window texcoord mode 9")
@@ -561,7 +561,7 @@ def main():
     check('bsdf->input("IOR")' in bridge, "bridge connects IOR TEX_IMAGE")
     check('bsdf->input("Alpha")' in bridge, "bridge connects Alpha TEX_IMAGE")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check('("IOR", ("IOR",), "ior")' in sync_src, "sync accepts IOR TEX_IMAGE")
     check('("Alpha", ("Alpha",), "alpha")' in sync_src, "sync accepts Alpha TEX_IMAGE")
@@ -584,7 +584,7 @@ def main():
     check('bsdf->input("Specular IOR Level")' in bridge,
           "bridge connects Specular IOR Level TEX_IMAGE")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Transmission Weight" in sync_src, "sync accepts Transmission Weight")
     check("Specular IOR Level" in sync_src, "sync accepts Specular IOR Level")
@@ -631,7 +631,7 @@ def main():
     check('bsdf->input("Emission Strength")' in bridge,
           "bridge connects Emission Strength TEX_IMAGE")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Coat Weight" in sync_src, "sync accepts Coat Weight")
     check("Sheen Weight" in sync_src, "sync accepts Sheen Weight")
@@ -687,7 +687,7 @@ def main():
     check("set_coat_weight(1.0f)" in bridge, "bridge pins coat weight when extras map")
     check("set_sheen_weight(1.0f)" in bridge, "bridge pins sheen weight when extras map")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Coat Roughness" in sync_src, "sync accepts Coat Roughness")
     check("Coat IOR" in sync_src, "sync accepts Coat IOR")
@@ -710,7 +710,7 @@ def main():
     check('bsdf->input("Coat Normal")' in bridge, "bridge connects Coat Normal")
     check("coat_normal_strength" in bridge, "bridge uses coat_normal_strength")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Coat Normal" in sync_src, "sync accepts Coat Normal")
     check("coat_normal_image_path" in sync_src, "sync packs coat_normal_ TEX_IMAGE fields")
@@ -741,7 +741,7 @@ def main():
     check("set_subsurface_weight(1.0f)" in bridge, "bridge pins SSS weight when extras map")
     check("set_thin_film_thickness(400.0f)" in bridge, "bridge pins film thickness when IOR maps")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.22-slice2u" in hello, "hello version is 0.0.22-slice2u")
+    check("QT_VERSION" in hello, "hello defines QT_VERSION")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Specular Tint" in sync_src, "sync accepts Specular Tint")
     check("Thin Film Thickness" in sync_src, "sync accepts Thin Film Thickness")
@@ -756,6 +756,95 @@ def main():
     usmoke = _read("tools/_quanttrace_slice2u_smoke.py")
     check("pack_scene" in usmoke and "render_qt_scene_rgba" in usmoke,
           "slice2u smoke packs QT_Scene")
+
+    section("Slice 2y Thin Wall BOOLEAN ABI")
+    hdr = _read("native/quanttrace/src/quanttrace.h")
+    check("int thin_wall;" in hdr, "QT_Mesh/SimpleScene has int thin_wall")
+    check("float transmission_weight;" in hdr, "QT_Mesh/SimpleScene has transmission_weight")
+    bridge = _read("native/quanttrace/src/session_bridge.cpp")
+    check("set_thin_wall" in bridge, "bridge sets thin_wall")
+    check("set_transmission_weight" in bridge, "bridge sets transmission_weight")
+    hello = _read("native/quanttrace/src/hello.c")
+    check("0.0.26-slice2y" in hello, "hello version is 0.0.26-slice2y")
+    ytools = _read("tools/_quanttrace_slice2y_scene.py")
+    check("ThinWall" in ytools and "Thin Wall" in ytools, "slice2y scene wires Thin Wall")
+    ysmoke = _read("tools/_quanttrace_slice2y_smoke.py")
+    check("pack_scene" in ysmoke and "render_qt_scene_rgba" in ysmoke,
+          "slice2y smoke packs QT_Scene")
+
+    class _BsdfTW:
+        type = "BSDF_PRINCIPLED"
+        inputs = _Inputs({
+            "Base Color": _Sock((0.8, 0.8, 0.8, 1)),
+            "Roughness": _Sock(0.05),
+            "Metallic": _Sock(0.0),
+            "IOR": _Sock(1.45),
+            "Alpha": _Sock(1.0),
+            "Thin Wall": _Sock(True),
+            "Transmission Weight": _Sock(1.0),
+        })
+    class _TreeTW:
+        nodes = [_BsdfTW()]
+    class _MatTW:
+        use_nodes = True
+        node_tree = _TreeTW()
+    pr_tw = sync._principled_from_material(_MatTW())
+    check(int(pr_tw.get("thin_wall", 0)) == 1, "unlinked Thin Wall True packs thin_wall=1")
+    check(abs(float(pr_tw.get("transmission_weight", 0.0)) - 1.0) < 1e-9,
+          "unlinked Transmission Weight RNA packs 1.0")
+    check(not (pr_tw.get("thin_wall_image_path") or ""),
+          "packer never fills reserved thin_wall_image_path")
+    packed_tw = sync._pack_tex_fields(pr_tw)
+    check(int(packed_tw.get("thin_wall", 0)) == 1, "_pack_tex_fields keeps thin_wall=1")
+    check(abs(float(packed_tw.get("transmission_weight", 0.0)) - 1.0) < 1e-9,
+          "_pack_tex_fields keeps transmission_weight")
+
+    class _BsdfTW0:
+        type = "BSDF_PRINCIPLED"
+        inputs = _Inputs({
+            "Base Color": _Sock((0.8, 0.8, 0.8, 1)),
+            "Roughness": _Sock(0.5),
+            "Metallic": _Sock(0.0),
+            "IOR": _Sock(1.45),
+            "Alpha": _Sock(1.0),
+            "Thin Wall": _Sock(False),
+            "Transmission Weight": _Sock(0.0),
+        })
+    class _TreeTW0:
+        nodes = [_BsdfTW0()]
+    class _MatTW0:
+        use_nodes = True
+        node_tree = _TreeTW0()
+    pr0 = sync._principled_from_material(_MatTW0())
+    check(int(pr0.get("thin_wall", -1)) == 0, "unlinked Thin Wall False packs thin_wall=0")
+    check(abs(float(pr0.get("transmission_weight", -1.0))) < 1e-9,
+          "unlinked Transmission Weight 0 packs 0.0")
+
+    class _BsdfTWL:
+        type = "BSDF_PRINCIPLED"
+        inputs = _Inputs({
+            "Base Color": _Sock((0.8, 0.8, 0.8, 1)),
+            "Roughness": _Sock(0.5),
+            "Metallic": _Sock(0.0),
+            "IOR": _Sock(1.45),
+            "Alpha": _Sock(1.0),
+            "Thin Wall": _Sock(True, linked=True, links=["x"]),
+            "Transmission Weight": _Sock(1.0),
+        })
+    class _TreeTWL:
+        nodes = [_BsdfTWL()]
+    class _MatTWL:
+        use_nodes = True
+        node_tree = _TreeTWL()
+    raised_tw = None
+    try:
+        sync._principled_from_material(_MatTWL())
+    except sync.QuantTraceSyncError as exc:
+        raised_tw = exc
+    check(raised_tw is not None, "linked Thin Wall still refuses")
+    msg = str(raised_tw).lower()
+    check("boolean" in msg and "tex_image" in msg,
+          "refuse names BOOLEAN, not TEX_IMAGE")
 
     section("research brief present")
     brief = os.path.join(PROJECT_ROOT, "docs", "research", "SIDECAR-INTEGRATOR.md")

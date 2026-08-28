@@ -490,6 +490,8 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->bump_strength = s->bump_strength;
     mesh->bump_distance = s->bump_distance;
     mesh->bump_invert = s->bump_invert;
+    mesh->thin_wall = s->thin_wall;
+    mesh->transmission_weight = s->transmission_weight;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -730,6 +732,10 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
+    /* Slice 2y: unlinked Thin Wall BOOLEAN (int 0/1). Linked still refused in packer.
+     * is_thin_wall() = (socket unlinked) AND thin_wall; visual no-op unless
+     * Transmission Weight is nonzero. */
+    bsdf->set_thin_wall(m->thin_wall);
     /* Slice 2f/2h/2i/2j/2k/2l/2m/2n/2o/2p/2q/2r/2s: TEX_IMAGE → Base / Rough / Metal / Normal / IOR / Alpha / Transmission / Specular / Coat / Sheen / Emission Strength / Emission Color.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
@@ -815,7 +821,9 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->alpha_map_scale, m->alpha_map_type);
         graph->connect(img->output("Color"), bsdf->input("Alpha"));
     }
-    /* Slice 2p: Color → Transmission Weight (legacy "Transmission") via NODE_CONVERT_CF. */
+    /* Slice 2p: Color → Transmission Weight (legacy "Transmission") via NODE_CONVERT_CF.
+     * Slice 2y: if trans_image_path empty, pin unlinked RNA default (Cycles default 0).
+     * Do not also set the constant when the TEX_IMAGE wire is live. */
     if (m->trans_image_path && m->trans_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
             graph.get(), m->trans_image_path, m->trans_image_colorspace,
@@ -826,6 +834,9 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             in = bsdf->input("Transmission");
         }
         graph->connect(img->output("Color"), in);
+    }
+    else {
+        bsdf->set_transmission_weight(m->transmission_weight);
     }
     /* Slice 2p: Color → Specular IOR Level (legacy "Specular") via NODE_CONVERT_CF. */
     if (m->spec_image_path && m->spec_image_path[0]) {

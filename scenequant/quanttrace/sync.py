@@ -29,6 +29,8 @@
 # Slice 2w: TEX_IMAGE → Principled Anisotropic / Rotation / Tangent.
 # Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (bump_* ABI).
 #   Coat Normal stays Normal-Map-only (Bump on Coat Normal refuses).
+# Slice 2y: Principled Thin Wall unlinked BOOLEAN + unlinked Transmission Weight
+#   constant. Linked Thin Wall still refuses (BOOLEAN, not TEX_IMAGE).
 #   Other linked sockets / HDR worlds refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
@@ -611,6 +613,8 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(_empty_tex_info(), "aniso_rot_"),
         **_prefix_tex(_empty_tex_info(), "tangent_"),
         **_empty_bump_info(),
+        "thin_wall": 0,
+        "transmission_weight": 0.0,
     }
     if mat is None:
         raise QuantTraceSyncError("mesh has no material")
@@ -746,11 +750,24 @@ def _principled_from_material(mat) -> dict:
         elif kind == "tangent":
             tangent_tex = tex
     # Thin Wall is BOOLEAN in Blender 5.2 — not a TEX_IMAGE-mappable float.
+    # Linked still refuses. Unlinked packs 0/1 from RNA default_value.
+    thin_wall = 0
     _tw_name, thin_wall_sock = _input_by_names(bsdf, "Thin Wall")
     if thin_wall_sock is not None and getattr(thin_wall_sock, "is_linked", False):
         raise QuantTraceSyncError(
-            "Principled.Thin Wall is BOOLEAN (Slice 2v refuses TEX_IMAGE; not a float socket)"
+            "Principled.Thin Wall is BOOLEAN, not TEX_IMAGE (linked Thin Wall still refuses)"
         )
+    if thin_wall_sock is not None:
+        thin_wall = 1 if bool(thin_wall_sock.default_value) else 0
+    # Unlinked Transmission Weight RNA default (0.0 if missing / linked).
+    # Linked TEX_IMAGE still wins via trans_ (Slice 2p); native skips the constant.
+    transmission_weight = 0.0
+    _tr_name, trans_w_sock = _input_by_names(bsdf, "Transmission Weight", "Transmission")
+    if trans_w_sock is not None and not getattr(trans_w_sock, "is_linked", False):
+        try:
+            transmission_weight = float(trans_w_sock.default_value)
+        except (TypeError, ValueError):
+            transmission_weight = 0.0
     _cn_name, coat_n_sock = _input_by_names(bsdf, "Coat Normal")
     coat_normal_info = _normal_map_from_sock(
         coat_n_sock, prefix="coat_normal_", label="Coat Normal"
@@ -796,6 +813,8 @@ def _principled_from_material(mat) -> dict:
         **_prefix_tex(aniso_rot_tex, "aniso_rot_"),
         **_prefix_tex(tangent_tex, "tangent_"),
         **{k: v for k, v in normal_info.items() if str(k).startswith("bump_")},
+        "thin_wall": int(thin_wall),
+        "transmission_weight": float(transmission_weight),
     }
 
 
@@ -1188,6 +1207,10 @@ def _pack_tex_fields(pr: dict) -> dict:
         "bump_strength": float(pr.get("bump_strength", 1.0) if pr.get("bump_strength") is not None else 1.0),
         "bump_distance": float(pr.get("bump_distance", 0.001) if pr.get("bump_distance") is not None else 0.001),
         "bump_invert": int(pr.get("bump_invert", 0) or 0),
+        "thin_wall": int(pr.get("thin_wall", 0) or 0),
+        "transmission_weight": float(
+            pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
+        ),
     }
     return out
 
@@ -1868,6 +1891,10 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         packed.get("bump_distance", 0.001) if packed.get("bump_distance") is not None else 0.001
     )
     desc.bump_invert = int(packed.get("bump_invert", 0) or 0)
+    desc.thin_wall = int(packed.get("thin_wall", 0) or 0)
+    desc.transmission_weight = float(
+        packed.get("transmission_weight", 0.0) if packed.get("transmission_weight") is not None else 0.0
+    )
 
 
 def make_qt_simple_scene_type():
@@ -2130,6 +2157,8 @@ def make_qt_simple_scene_type():
             ("bump_strength", ctypes.c_float),
             ("bump_distance", ctypes.c_float),
             ("bump_invert", ctypes.c_int),
+            ("thin_wall", ctypes.c_int),
+            ("transmission_weight", ctypes.c_float),
         ]
 
     return QT_SimpleScene
@@ -2432,6 +2461,8 @@ def make_qt_scene_types():
             ("bump_strength", ctypes.c_float),
             ("bump_distance", ctypes.c_float),
             ("bump_invert", ctypes.c_int),
+            ("thin_wall", ctypes.c_int),
+            ("transmission_weight", ctypes.c_float),
         ]
 
     class QT_Light(ctypes.Structure):

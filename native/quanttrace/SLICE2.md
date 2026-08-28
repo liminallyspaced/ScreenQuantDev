@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2x landed** (2026-08-28 12pm PlugWalk ET). Principled.Normal ← Bump ← TEX_IMAGE Height. Bump 32²/4 Δmax=2.38e-7; 256²/128 Δmax=4.77e-7 PASS (0 px ≥1e-3). Combined not constant / not all-zero; vs no-bump cube 32²/4 Δmax=0.205 (82 px) so the bump graph is live. NormalMap 32²/4 2j regression Δmax=3.58e-7 PASS. Aniso 32²/4 2w regression Δmax=3.35e-8 PASS. Parallel `bump_*` ABI (not reuse of `normal_image_path`). Blender 5.2 RNA Distance=0.001 (not Cycles 0.1). If both bump_* and normal_* set, Bump wins; packer fills one. `is_tracer=1`. Native `0.0.25-slice2x`.
+Status: **Slice 2y landed** (2026-08-28 1pm PlugWalk ET). Principled Thin Wall unlinked BOOLEAN + unlinked Transmission Weight constant. ThinWall 32²/4 Δmax=3.18e-12; 256²/128 Δmax=2.32e-8 PASS (0 px ≥1e-3). Combined peak 8.31e-6 / 1.24e-5 (near-black thin glass vs black world; not all-zero / not constant). True vs False 32²/4 Δmax=6.83e-5 (below 1e-3; both glass-dark). Session True matches stock True (3.18e-12) not stock False (6.83e-5) so the boolean is live. Opaque trans=0 vs trans=1 32²/4 Δmax=1.56 (82 px) so Transmission Weight is live. Bump 32²/4 2x regression Δmax=2.38e-7 PASS. Linked Thin Wall still refuses (BOOLEAN, not TEX_IMAGE). `is_tracer=1`. Native `0.0.26-slice2y`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -13,6 +13,46 @@ addon zip or public commit tree.
 
 
 ---
+
+## 1pm PlugWalk (2026-08-28) — Principled Thin Wall BOOLEAN (Slice 2y)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `thin_wall` (int 0/1) + `transmission_weight` (float) appended after `bump_invert` on `QT_Mesh` + `QT_SimpleScene`. Existing ctypes offsets stay valid. Reserved `thin_wall_image_path` Color→Int unused (packer never fills). |
+| Python | Unlinked Thin Wall → `thin_wall = 1 if bool(default_value) else 0`. Linked Thin Wall still `QuantTraceSyncError` (BOOLEAN, not TEX_IMAGE). Unlinked Transmission Weight RNA default → `transmission_weight` (0.0 if missing / linked). Slice 2p `trans_` TEX_IMAGE still wins when linked. Defaults 0/0.0 so opaque cubes stay bit-identical. |
+| Native | `bsdf->set_thin_wall(m->thin_wall)` always. If `trans_image_path` empty: `set_transmission_weight`; else keep Color→Transmission Weight TEX_IMAGE. Color→Thin Wall block stays as a dead reserved path. |
+| RNA | Blender 5.2 Thin Wall is BOOLEAN. Cycles `is_thin_wall()` = (socket unlinked) AND `thin_wall`. Visual no-op unless Transmission Weight is nonzero. Cycles default Transmission Weight 0. |
+| Version | `0.0.26-slice2y` |
+| Tools | `tools/_quanttrace_slice2y_scene.py`, `tools/_quanttrace_slice2y_smoke.py` |
+| Visibility | Thin Wall True, Transmission Weight 1.0, Roughness 0.05, Metallic 0, IOR 1.45, Base ~0.8 gray. No textures. Combined not all-zero / not constant. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Socket | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| ThinWall True | 32² / 4 | **3.18e-12** | 2.92e-14 | **PASS** |
+| ThinWall True | 256² / 128 | **2.32e-8** | 1.37e-12 | **PASS** |
+| Bump (2x regression) | 32² / 4 | **2.38e-7** | 5.49e-9 | **PASS** |
+
+True vs False (stock, Transmission=1 both) 32²/4: Δmax=**6.83e-5** (0 px ≥1e-3; below the 1e-3 “clearly live” bar). Combined peak True 8.31e-6 / False 7.35e-5 — both near-black thin/thick glass vs black world (Fresnel + missed specular; opaque trans=0 same cube Δmax=1.56, 82 px). Session True matches stock True (3.18e-12) not stock False (6.83e-5) — boolean is packed, not a geometric-opaque match. Packed `thin_wall=1` `transmission_weight=1.0`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- Object/World Normal, linked Strength, Bump on Coat Normal, HDR/kitchens, Object-with-pointer, packed-only, linked Mapping L/R/S still refuse.
+- Linked Thin Wall still refuses (BOOLEAN, not TEX_IMAGE).
+- Still-life 256² 1px + SSSWeight 256² 1px + SSSAniso 256² 3px noise-class residue still documented (not claimed fixed).
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+SSS 256 residue or Object/World Normal space. Not ReSTIR. Not Classroom time %.
+
+
 
 ## 12pm PlugWalk (2026-08-28) — Principled Bump TEX_IMAGE Height (Slice 2x)
 
