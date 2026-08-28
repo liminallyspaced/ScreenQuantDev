@@ -326,13 +326,27 @@ static bool tex_mode_is_camera(int mode)
            mode == QT_TEX_VECTOR_MAPPING_CAMERA;
 }
 
+static bool tex_mode_is_window(int mode)
+{
+    return mode == QT_TEX_VECTOR_TEXCOORD_WINDOW ||
+           mode == QT_TEX_VECTOR_MAPPING_WINDOW;
+}
+
+static bool tex_mode_is_reflection(int mode)
+{
+    return mode == QT_TEX_VECTOR_TEXCOORD_REFLECTION ||
+           mode == QT_TEX_VECTOR_MAPPING_REFLECTION;
+}
+
 static bool tex_mode_has_texcoord(int mode)
 {
     return mode == QT_TEX_VECTOR_TEXCOORD ||
            mode == QT_TEX_VECTOR_MAPPING ||
            tex_mode_is_generated(mode) ||
            tex_mode_is_object(mode) ||
-           tex_mode_is_camera(mode);
+           tex_mode_is_camera(mode) ||
+           tex_mode_is_window(mode) ||
+           tex_mode_is_reflection(mode);
 }
 
 static bool tex_mode_has_mapping(int mode)
@@ -340,7 +354,9 @@ static bool tex_mode_has_mapping(int mode)
     return mode == QT_TEX_VECTOR_MAPPING ||
            mode == QT_TEX_VECTOR_MAPPING_GENERATED ||
            mode == QT_TEX_VECTOR_MAPPING_OBJECT ||
-           mode == QT_TEX_VECTOR_MAPPING_CAMERA;
+           mode == QT_TEX_VECTOR_MAPPING_CAMERA ||
+           mode == QT_TEX_VECTOR_MAPPING_WINDOW ||
+           mode == QT_TEX_VECTOR_MAPPING_REFLECTION;
 }
 
 static bool mesh_uses_generated(const QT_Mesh *m)
@@ -387,7 +403,7 @@ static void fill_generated_orco(Mesh *mesh, const QT_Mesh *m)
     }
 }
 
-/* Wire ImageTexture (+ optional TEX_COORD UV/Generated/Object/Camera + Mapping).
+/* Wire ImageTexture (+ optional TEX_COORD UV/Generated/Object/Camera/Window/Reflection + Mapping).
  * Color→float (Roughness/Metallic) gets ConvertNode via ShaderGraph::connect. */
 static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
                                         const char *path,
@@ -415,9 +431,18 @@ static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
          * ATTR_STD_GENERATED. Object pointer / ob_itfm refused in packer.
          * Camera: TextureCoordinateNode "Camera" → NODE_TEXCO_CAMERA
          * (kernel_data.cam.worldtocamera; already set by Camera::update).
-         * No extra inverse-matrix ABI. from_dupli unused on Camera. */
+         * Window: "Window" → NODE_TEXCO_WINDOW (camera_world_to_ndc).
+         * Reflection: "Reflection" → NODE_TEXCO_REFLECTION
+         * (svm_texco_reflection). Both use existing Camera::update data;
+         * no extra inverse-matrix ABI. from_dupli unused. */
         const char *coord_sock = "UV";
-        if (tex_mode_is_camera(tex_vector_mode)) {
+        if (tex_mode_is_reflection(tex_vector_mode)) {
+            coord_sock = "Reflection";
+        }
+        else if (tex_mode_is_window(tex_vector_mode)) {
+            coord_sock = "Window";
+        }
+        else if (tex_mode_is_camera(tex_vector_mode)) {
             coord_sock = "Camera";
         }
         else if (tex_mode_is_object(tex_vector_mode)) {

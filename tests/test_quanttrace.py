@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.14-slice2m" in hello_c, "hello.c version string 0.0.14-slice2m")
+    check("0.0.15-slice2n" in hello_c, "hello.c version string 0.0.15-slice2n")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -446,7 +446,7 @@ def main():
     check("NormalMapNode" in bridge, "bridge builds NormalMapNode")
     check("NODE_NORMAL_MAP_TANGENT" in bridge, "bridge pins Tangent space")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.14-slice2m" in hello, "hello version is 0.0.14-slice2m")
+    check("0.0.15-slice2n" in hello, "hello version is 0.0.15-slice2n")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("_normal_map_from_sock" in sync_src, "sync parses Normal Map")
     check(callable(sync._normal_map_from_sock), "sync._normal_map_from_sock")
@@ -496,7 +496,7 @@ def main():
     check('output("Generated")' in bridge or "output(coord_sock)" in bridge,
           "bridge connects Generated socket")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.14-slice2m" in hello, "hello version is 0.0.14-slice2m")
+    check("0.0.15-slice2n" in hello, "hello version is 0.0.15-slice2n")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("_tex_coord_space_from_vector_link" in sync_src, "sync parses Generated")
     check("Generated" in sync_src, "sync names Generated")
@@ -506,47 +506,6 @@ def main():
     check("pack_scene" in gsmoke and "render_qt_scene_rgba" in gsmoke,
           "generated smoke packs QT_Scene")
 
-    class _TCWin:
-        type = "TEX_COORD"
-    class _FromWin:
-        name = "Window"
-    class _WinLink:
-        from_node = _TCWin()
-        from_socket = _FromWin()
-    class _TexWin:
-        type = "TEX_IMAGE"
-        image = _Img("/tmp/qt_test_checker_missing.exr")
-        inputs = _Inputs(Vector=_Sock((0, 0, 0), linked=True, links=[_WinLink()]))
-    class _FromColor:
-        name = "Color"
-    class _ColorLink:
-        def __init__(self, node):
-            self.from_node = node
-            self.from_socket = _FromColor()
-    class _BsdfWin:
-        type = "BSDF_PRINCIPLED"
-        inputs = _Inputs({
-            "Base Color": _Sock((0.8, 0.8, 0.8, 1), linked=True,
-                               links=[_ColorLink(_TexWin())]),
-            "Roughness": _Sock(0.5),
-            "Metallic": _Sock(0.0),
-            "IOR": _Sock(1.45),
-            "Alpha": _Sock(1.0),
-        })
-    class _TreeWin:
-        nodes = [_BsdfWin()]
-    class _MatWin:
-        use_nodes = True
-        node_tree = _TreeWin()
-    raised_win = None
-    try:
-        sync._principled_from_material(_MatWin())
-    except sync.QuantTraceSyncError as exc:
-        raised_win = exc
-    check(raised_win is not None, "TEX_COORD Window still refuses")
-    check("window" in str(raised_win).lower() or "reflection" in str(raised_win).lower(),
-          "refuse names Window / Reflection")
-
     section("Slice 2m Camera TEX_COORD ABI")
     hdr = _read("native/quanttrace/src/quanttrace.h")
     check("QT_TEX_VECTOR_TEXCOORD_CAMERA" in hdr, "header has CAMERA mode 7")
@@ -555,7 +514,7 @@ def main():
     check("tex_mode_is_camera" in bridge, "bridge has camera mode helper")
     check('"Camera"' in bridge, "bridge names Camera socket")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.14-slice2m" in hello, "hello version is 0.0.14-slice2m")
+    check("0.0.15-slice2n" in hello, "hello version is 0.0.15-slice2n")
     sync_src = _read("scenequant/quanttrace/sync.py")
     check("Camera" in sync_src, "sync names Camera")
     ctools = _read("tools/_quanttrace_camera_scene.py")
@@ -563,6 +522,36 @@ def main():
     csmoke = _read("tools/_quanttrace_camera_smoke.py")
     check("pack_scene" in csmoke and "render_qt_scene_rgba" in csmoke,
           "camera smoke packs QT_Scene")
+
+    section("Slice 2n Window/Reflection TEX_COORD ABI")
+    hdr = _read("native/quanttrace/src/quanttrace.h")
+    check("QT_TEX_VECTOR_TEXCOORD_WINDOW" in hdr, "header has WINDOW mode 9")
+    check("QT_TEX_VECTOR_MAPPING_WINDOW" in hdr, "header has MAPPING_WINDOW mode 10")
+    check("QT_TEX_VECTOR_TEXCOORD_REFLECTION" in hdr, "header has REFLECTION mode 11")
+    check("QT_TEX_VECTOR_MAPPING_REFLECTION" in hdr, "header has MAPPING_REFLECTION mode 12")
+    bridge = _read("native/quanttrace/src/session_bridge.cpp")
+    check("tex_mode_is_window" in bridge, "bridge has window mode helper")
+    check("tex_mode_is_reflection" in bridge, "bridge has reflection mode helper")
+    check('"Window"' in bridge, "bridge names Window socket")
+    check('"Reflection"' in bridge, "bridge names Reflection socket")
+    hello = _read("native/quanttrace/src/hello.c")
+    check("0.0.15-slice2n" in hello, "hello version is 0.0.15-slice2n")
+    sync_src = _read("scenequant/quanttrace/sync.py")
+    check("Window" in sync_src and "Reflection" in sync_src, "sync names Window/Reflection")
+    check("tex_vector_mode = 9" in sync_src, "sync assigns Window texcoord mode 9")
+    check("tex_vector_mode = 10" in sync_src, "sync assigns Window mapping mode 10")
+    check("tex_vector_mode = 11" in sync_src, "sync assigns Reflection texcoord mode 11")
+    check("tex_vector_mode = 12" in sync_src, "sync assigns Reflection mapping mode 12")
+    wtools = _read("tools/_quanttrace_window_scene.py")
+    check("Window" in wtools, "window scene wires Window")
+    wsmoke = _read("tools/_quanttrace_window_smoke.py")
+    check("pack_scene" in wsmoke and "render_qt_scene_rgba" in wsmoke,
+          "window smoke packs QT_Scene")
+    rtools = _read("tools/_quanttrace_reflection_scene.py")
+    check("Reflection" in rtools, "reflection scene wires Reflection")
+    rsmoke = _read("tools/_quanttrace_reflection_smoke.py")
+    check("pack_scene" in rsmoke and "render_qt_scene_rgba" in rsmoke,
+          "reflection smoke packs QT_Scene")
 
     section("research brief present")
     brief = os.path.join(PROJECT_ROOT, "docs", "research", "SIDECAR-INTEGRATOR.md")

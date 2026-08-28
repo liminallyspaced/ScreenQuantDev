@@ -12,6 +12,7 @@
  * Slice 2k: TEX_COORD Generated (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2l: TEX_COORD Object (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2m: TEX_COORD Camera (+ optional Mapping) → TEX_IMAGE Vector.
+ * Slice 2n: TEX_COORD Window + Reflection (+ optional Mapping) → TEX_IMAGE Vector.
  *   is_tracer==1 only when QT_WITH_CYCLES is compiled in and
  *   SQ_QUANTTRACE.render can land Combined in the Image Editor.
  * Make it Fast stays on stock Cycles.
@@ -203,6 +204,10 @@ typedef struct QT_Mesh {
 #define QT_TEX_VECTOR_MAPPING_OBJECT        6 /* TEX_COORD Object → Mapping → TEX_IMAGE */
 #define QT_TEX_VECTOR_TEXCOORD_CAMERA       7 /* TEX_COORD Camera → TEX_IMAGE Vector */
 #define QT_TEX_VECTOR_MAPPING_CAMERA        8 /* TEX_COORD Camera → Mapping → TEX_IMAGE */
+#define QT_TEX_VECTOR_TEXCOORD_WINDOW       9 /* TEX_COORD Window → TEX_IMAGE Vector */
+#define QT_TEX_VECTOR_MAPPING_WINDOW       10 /* TEX_COORD Window → Mapping → TEX_IMAGE */
+#define QT_TEX_VECTOR_TEXCOORD_REFLECTION  11 /* TEX_COORD Reflection → TEX_IMAGE Vector */
+#define QT_TEX_VECTOR_MAPPING_REFLECTION   12 /* TEX_COORD Reflection → Mapping → TEX_IMAGE */
 
 
 typedef struct QT_Light {
