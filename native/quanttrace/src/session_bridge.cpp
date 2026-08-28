@@ -15,6 +15,7 @@
  * Slice 2j: Normal Map (Tangent) + TEX_IMAGE → Principled Normal.
  * Slice 2k: TEX_COORD Generated (+ optional Mapping) → TEX_IMAGE Vector.
  * Slice 2l: TEX_COORD Object (+ optional Mapping) → TEX_IMAGE Vector.
+ * Slice 2m: TEX_COORD Camera (+ optional Mapping) → TEX_IMAGE Vector.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,
@@ -319,19 +320,27 @@ static bool tex_mode_is_object(int mode)
            mode == QT_TEX_VECTOR_MAPPING_OBJECT;
 }
 
+static bool tex_mode_is_camera(int mode)
+{
+    return mode == QT_TEX_VECTOR_TEXCOORD_CAMERA ||
+           mode == QT_TEX_VECTOR_MAPPING_CAMERA;
+}
+
 static bool tex_mode_has_texcoord(int mode)
 {
     return mode == QT_TEX_VECTOR_TEXCOORD ||
            mode == QT_TEX_VECTOR_MAPPING ||
            tex_mode_is_generated(mode) ||
-           tex_mode_is_object(mode);
+           tex_mode_is_object(mode) ||
+           tex_mode_is_camera(mode);
 }
 
 static bool tex_mode_has_mapping(int mode)
 {
     return mode == QT_TEX_VECTOR_MAPPING ||
            mode == QT_TEX_VECTOR_MAPPING_GENERATED ||
-           mode == QT_TEX_VECTOR_MAPPING_OBJECT;
+           mode == QT_TEX_VECTOR_MAPPING_OBJECT ||
+           mode == QT_TEX_VECTOR_MAPPING_CAMERA;
 }
 
 static bool mesh_uses_generated(const QT_Mesh *m)
@@ -378,7 +387,7 @@ static void fill_generated_orco(Mesh *mesh, const QT_Mesh *m)
     }
 }
 
-/* Wire ImageTexture (+ optional TEX_COORD UV/Generated/Object + Mapping).
+/* Wire ImageTexture (+ optional TEX_COORD UV/Generated/Object/Camera + Mapping).
  * Color→float (Roughness/Metallic) gets ConvertNode via ShaderGraph::connect. */
 static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
                                         const char *path,
@@ -403,9 +412,15 @@ static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
             graph->create_node<TextureCoordinateNode>();
         /* Object: use_transform stays false (default) → NODE_TEXCO_OBJECT
          * (shading_position + object_inverse_position_transform). No
-         * ATTR_STD_GENERATED. Object pointer / ob_itfm refused in packer. */
+         * ATTR_STD_GENERATED. Object pointer / ob_itfm refused in packer.
+         * Camera: TextureCoordinateNode "Camera" → NODE_TEXCO_CAMERA
+         * (kernel_data.cam.worldtocamera; already set by Camera::update).
+         * No extra inverse-matrix ABI. from_dupli unused on Camera. */
         const char *coord_sock = "UV";
-        if (tex_mode_is_object(tex_vector_mode)) {
+        if (tex_mode_is_camera(tex_vector_mode)) {
+            coord_sock = "Camera";
+        }
+        else if (tex_mode_is_object(tex_vector_mode)) {
             coord_sock = "Object";
         }
         else if (tex_mode_is_generated(tex_vector_mode)) {
@@ -441,14 +456,16 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
     bsdf->set_metallic(m->metallic);
     bsdf->set_ior(m->ior);
     bsdf->set_alpha(m->alpha);
-    /* Slice 2f/2h/2i/2j/2k/2l: TEX_IMAGE → Base / Rough / Metal / Normal Map.
+    /* Slice 2f/2h/2i/2j/2k/2l/2m: TEX_IMAGE → Base / Rough / Metal / Normal Map.
      * mode 0: Vector unlinked → SVM LINK_TEXTURE_UV / ATTR_STD_UV.
      * mode 1: TextureCoordinate UV → Image Vector.
      * mode 2: TextureCoordinate UV → Mapping → Image Vector.
      * mode 3: TextureCoordinate Generated → Image Vector.
      * mode 4: TextureCoordinate Generated → Mapping → Image Vector.
      * mode 5: TextureCoordinate Object → Image Vector (no object_itfm).
-     * mode 6: TextureCoordinate Object → Mapping → Image Vector. */
+     * mode 6: TextureCoordinate Object → Mapping → Image Vector.
+     * mode 7: TextureCoordinate Camera → Image Vector (NODE_TEXCO_CAMERA).
+     * mode 8: TextureCoordinate Camera → Mapping → Image Vector. */
     if (m->image_path && m->image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
             graph.get(), m->image_path, m->image_colorspace, m->tex_vector_mode,

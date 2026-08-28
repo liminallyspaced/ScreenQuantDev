@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2l landed** (2026-08-28 12:16am PlugWalk ET). TEX_COORD Object (+ Mapping) PASS. Object 32²/4 Δmax=7.99e-6; 256²/128 Δmax=4.35e-6. Object+Mapping 32²/4 Δmax=1.42e-5 / 256²/128 Δmax=6.56e-6. Generated 32²/4 regression Δmax=2.15e-6 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.13-slice2l`.
+Status: **Slice 2m landed** (2026-08-28 1am PlugWalk ET). TEX_COORD Camera (+ Mapping) PASS. Camera 32²/4 Δmax=1.79e-6; 256²/128 Δmax=3.46e-6. Camera+Mapping 32²/4 Δmax=7.39e-6 / 256²/128 Δmax=5.96e-6. Generated 32²/4 regression Δmax=2.15e-6 PASS. Object 32²/4 regression Δmax=7.99e-6 PASS. Still-life 256² 1px noise-class residue still documented. `is_tracer=1`. Native `0.0.14-slice2m`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 Design: `docs/research/SIDECAR-INTEGRATOR.md`.
@@ -1074,4 +1074,53 @@ Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Re
 
 ### Next
 
-More Principled sockets (IOR/Alpha) / close still-life 1px. Not ReSTIR. Not Classroom time %.
+Done 1am: Camera TEX_COORD. See 1am section.
+
+---
+
+## 1am PlugWalk (2026-08-28) — Slice 2m: TEX_COORD Camera
+
+Box: Linux, 8 cores. Did **not** `make update` / rebuild `native/cycles-src`. Rebuilt only
+`native/quanttrace/build` (`-DQT_WITH_CYCLES=ON`). No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| ABI | `QT_TEX_VECTOR_TEXCOORD_CAMERA=7`, `QT_TEX_VECTOR_MAPPING_CAMERA=8` (existing `tex_vector_mode` int; no new struct fields) |
+| Packer | TEX_COORD Camera accepted. Mapping.Vector may come from UV/Generated/Object/Camera. Window/Reflection still refuse. |
+| Native | `TextureCoordinateNode` output `"Camera"` → `NODE_TEXCO_CAMERA` (`kernel_data.cam.worldtocamera` via `Camera::update`). No extra inverse-matrix ABI. `from_dupli` unused on Camera. |
+| Version | `0.0.14-slice2m` |
+| Tools | `_quanttrace_camera_scene/smoke.py` (8×8 sRGB checker `/tmp/qt_checker_cam.png`); mapping_scene `--coord Camera` |
+
+### Measured — TEX_COORD Camera (8×8 sRGB checker)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Camera Session | 32² / 4 | **1.79e-6** | 1.90e-8 | 0 / 1024 | **PASS** |
+| Camera Session | 256² / 128 | **3.46e-6** | 1.23e-8 | 0 / 65536 | **PASS** |
+
+### Measured — TEX_COORD Camera → Mapping VECTOR (scale 2, loc 0.1/0.2, rot_z 0.15)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Camera+Mapping Session | 32² / 4 | **7.39e-6** | 5.46e-8 | 0 / 1024 | **PASS** |
+| Camera+Mapping Session | 256² / 128 | **5.96e-6** | 2.26e-8 | 0 / 65536 | **PASS** |
+
+### Measured — regressions (32² / 4)
+
+| Path | Res / spp | Δmax | MAE | Gate |
+|---|---|---|---|---|
+| 2k Generated texcoord | 32² / 4 | **2.15e-6** | 1.14e-8 | **PASS** |
+| 2l Object texcoord | 32² / 4 | **7.99e-6** | 2.56e-8 | **PASS** |
+
+### Honesty / still refuses
+
+- Still-life off-center 256² **1px noise-class** residue from 4pm remains documented (not claimed fixed).
+- HDR worlds, kitchens, Window/Reflection TEX_COORD, TEX_COORD Object **with** Object reference (use_transform / object_itfm), linked Mapping L/R/S, packed-only images, IOR/Alpha still raise `QuantTraceSyncError`.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Window / Reflection TEX_COORD if they stay kernel-only (no extra ABI), or Principled IOR/Alpha constant/socket sync. Close still-life 1px. Not ReSTIR. Not Classroom time %.

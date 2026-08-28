@@ -18,12 +18,12 @@ def build_mapping_scene(
     rotation_z=0.15,
     coord="UV",
 ):
-    """Build tex scene; optionally wire TEX_COORD UV/Generated/Object [→ Mapping] → TEX_IMAGE.
+    """Build tex scene; optionally wire TEX_COORD UV/Generated/Object/Camera [→ Mapping] → TEX_IMAGE.
 
     use_texcoord=False + use_mapping=False → Slice 2f unlinked Vector regression.
     use_texcoord=True + use_mapping=False → TEX_COORD only.
     use_texcoord=True + use_mapping=True → TEX_COORD → Mapping (VECTOR) → TEX_IMAGE.
-    coord: "UV" (2h), "Generated" (2k), or "Object" (2l).
+    coord: "UV" (2h), "Generated" (2k), "Object" (2l), or "Camera" (2m).
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -49,6 +49,8 @@ def build_mapping_scene(
             coord_name = "Generated"
         elif key == "object":
             coord_name = "Object"
+        elif key == "camera":
+            coord_name = "Camera"
         else:
             coord_name = "UV"
         coord_out = tc.outputs[coord_name]
@@ -96,7 +98,7 @@ def main():
     p.add_argument("--res", type=int, default=64)
     p.add_argument("--samples", type=int, default=32)
     p.add_argument("--mode", choices=("mapping", "texcoord", "unlinked"), default="mapping")
-    p.add_argument("--coord", choices=("UV", "Generated", "Object"), default="UV")
+    p.add_argument("--coord", choices=("UV", "Generated", "Object", "Camera"), default="UV")
     p.add_argument("--scale", type=float, nargs=3, default=(2.0, 2.0, 2.0))
     p.add_argument("--location", type=float, nargs=3, default=(0.1, 0.2, 0.0))
     p.add_argument("--rotation-z", type=float, default=0.15)
