@@ -31,6 +31,10 @@
 #   Coat Normal stays Normal-Map-only (Bump on Coat Normal refuses).
 # Slice 2az: Principled.Normal ← Bevel (samples + unlinked Radius). Nested
 #   NormalMap / Bump OK; Bump.Normal ← NormalMap OK (loft Metal_Sheet).
+# Slice 2ba: ColorRamp (VALTORGB) → Principled.Roughness. Official
+#   colorramp_to_array LUT size+1=257. Fac unlinked float OR Fac ← TEX_IMAGE
+#   (reuse rough_image_*). n==0 skips (2az/2i bit-identical). Noise/Fresnel/
+#   LayerWeight/GROUP/Mix Fac named refuse Slice 2ba. Color output → Roughness.
 # Slice 2y: Principled Thin Wall unlinked BOOLEAN + unlinked Transmission Weight
 #   constant. Linked Thin Wall still refuses (BOOLEAN, not TEX_IMAGE).
 # Slice 2aa: Environment Texture world (empty path = Slice 2b black).
@@ -761,6 +765,114 @@ def _empty_bevel_info() -> dict:
         "bevel_samples": 4,
         "bevel_radius": 0.05,
     }
+
+
+def _empty_rough_ramp_info() -> dict:
+    """Slice 2ba: no ColorRamp — 2i TEX_IMAGE / constant roughness."""
+    return {
+        "rough_ramp": [],
+        "rough_ramp_alpha": [],
+        "rough_ramp_n": 0,
+        "rough_ramp_interpolate": 1,
+        "rough_ramp_fac": 0.5,
+    }
+
+
+def _pack_color_ramp_lut(node) -> tuple:
+    """Official intern/cycles/blender/util.h colorramp_to_array.
+
+    RAMP_TABLE_SIZE=256; full_size = size+1 = 257; evaluate(i/size).
+    CONSTANT → interpolate=0; LINEAR/EASE/CARDINAL/B_SPLINE → 1 (lerp LUT).
+    bpy ColorRamp.evaluate(t) matches BKE_colorband_evaluate.
+    """
+    cr = getattr(node, "color_ramp", None)
+    if cr is None:
+        raise QuantTraceSyncError(
+            "Principled.Roughness ColorRamp missing color_ramp (Slice 2ba)"
+        )
+    interp = str(getattr(cr, "interpolation", "LINEAR") or "LINEAR")
+    interpolate = 0 if interp == "CONSTANT" else 1
+    n = _RAMP_TABLE_SIZE + 1
+    rgb = []
+    alpha = []
+    for i in range(n):
+        tval = float(i) / float(_RAMP_TABLE_SIZE)
+        col = cr.evaluate(tval)
+        rgb.extend((float(col[0]), float(col[1]), float(col[2])))
+        alpha.append(float(col[3]) if len(col) > 3 else 1.0)
+    return rgb, alpha, n, interpolate
+
+
+def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
+    """Slice 2ba: peel REROUTE, ColorRamp LUT, Fac unlinked or TEX_IMAGE."""
+    ctx = _mat_refuse_ctx(object_name, mat)
+    empty_tex = _empty_tex_info()
+    empty_ramp = _empty_rough_ramp_info()
+    links = list(getattr(sock, "links", None) or [])
+    if not links:
+        return empty_tex, empty_ramp
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness has multiple links (Slice 2ba)"
+        )
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype in ("VALTORGB",) or (
+        from_node is not None
+        and getattr(from_node, "bl_idname", "") == "ShaderNodeValToRGB"
+    ):
+        out_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
+        if out_name not in ("Color", "color"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Roughness ColorRamp output {out_name!r} "
+                f"refused (Slice 2ba: Color only this hour)"
+            )
+        rgb, alpha, n, interpolate = _pack_color_ramp_lut(from_node)
+        ramp = {
+            "rough_ramp": rgb,
+            "rough_ramp_alpha": alpha,
+            "rough_ramp_n": n,
+            "rough_ramp_interpolate": interpolate,
+            "rough_ramp_fac": 0.5,
+        }
+        fac_sock = None
+        inputs = getattr(from_node, "inputs", None)
+        if inputs is not None:
+            getter = getattr(inputs, "get", None)
+            fac_sock = getter("Fac") if callable(getter) else None
+        if fac_sock is None or not getattr(fac_sock, "is_linked", False):
+            if fac_sock is not None:
+                v = getattr(fac_sock, "default_value", None)
+                if v is not None:
+                    ramp["rough_ramp_fac"] = float(v)
+            return empty_tex, ramp
+        flinks = list(getattr(fac_sock, "links", None) or [])
+        if len(flinks) != 1:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Roughness ColorRamp.Fac has multiple links "
+                f"(Slice 2ba)"
+            )
+        fn = getattr(flinks[0], "from_node", None)
+        fs = getattr(flinks[0], "from_socket", None)
+        fn, fs = _peel_reroute(fn, fs)
+        ftype = getattr(fn, "type", None) if fn is not None else None
+        if ftype == "TEX_IMAGE":
+            tex = _tex_image_from_tex_node(fn, fs, "ColorRamp.Fac", ctx=ctx)
+            return tex, ramp
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac from {ftype!r} refused "
+            f"(Slice 2ba: unlinked Fac or TEX_IMAGE Color only; Noise/"
+            f"Fresnel/LayerWeight/GROUP/Mix still refuse)"
+        )
+    if ntype == "TEX_IMAGE":
+        tex = _tex_image_from_tex_node(from_node, from_sock, "Roughness", ctx=ctx)
+        return tex, empty_ramp
+    raise QuantTraceSyncError(
+        f"{ctx} Principled.Roughness from {ntype!r} refused "
+        f"(Slice 2ba: ColorRamp or TEX_IMAGE Color only)"
+    )
 
 
 def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> dict:
@@ -1660,6 +1772,7 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         **_prefix_tex(_empty_tex_info(), "tangent_"),
         **_empty_bump_info(),
         **_empty_bevel_info(),
+        **_empty_rough_ramp_info(),
         "thin_wall": 0,
         "transmission_weight": 0.0,
         "tex_ob_ref": None,
@@ -1716,10 +1829,18 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
     base_tex, base_gh, peeled_rgb = _base_color_tex_and_gh(
         base_sock, object_name=object_name, mat=mat
     )
+    # Slice 2ba: Roughness peels REROUTE then ColorRamp or TEX_IMAGE.
+    _rname, rough_sock = _input_by_names(bsdf, "Roughness")
+    if rough_sock is not None and getattr(rough_sock, "is_linked", False):
+        rough_tex, rough_ramp = _roughness_tex_and_ramp(
+            rough_sock, object_name=object_name, mat=mat
+        )
+    else:
+        rough_ramp = _empty_rough_ramp_info()
     # 5.x names first; legacy Transmission / Specular / Coat / Sheen / Emission accepted.
     # Base Color handled above (2ax) — do not call TEX_IMAGE-only packer on it.
+    # Roughness handled above (2ba) — do not call TEX_IMAGE-only packer on it.
     allowed = (
-        ("Roughness", ("Roughness",), "rough"),
         ("Metallic", ("Metallic",), "metal"),
         ("IOR", ("IOR",), "ior"),
         ("Alpha", ("Alpha",), "alpha"),
@@ -1752,9 +1873,7 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         if sock is None or not getattr(sock, "is_linked", False):
             continue
         tex = _tex_image_from_sock(sock, label)
-        if kind == "rough":
-            rough_tex = tex
-        elif kind == "metal":
+        if kind == "metal":
             metal_tex = tex
         elif kind == "ior":
             ior_tex = tex
@@ -1845,6 +1964,7 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         **base_tex,
         **base_gh,
         **_prefix_tex(rough_tex, "rough_"),
+        **rough_ramp,
         **_prefix_tex(metal_tex, "metal_"),
         **normal_info,
         **_prefix_tex(ior_tex, "ior_"),
@@ -3880,6 +4000,19 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "bevel_radius": float(
             pr["bevel_radius"] if pr.get("bevel_radius") is not None else 0.05
         ),
+        "rough_ramp": list(pr.get("rough_ramp") or []),
+        "rough_ramp_alpha": list(pr.get("rough_ramp_alpha") or []),
+        "rough_ramp_n": int(
+            pr["rough_ramp_n"] if pr.get("rough_ramp_n") is not None else 0
+        ),
+        "rough_ramp_interpolate": int(
+            pr["rough_ramp_interpolate"]
+            if pr.get("rough_ramp_interpolate") is not None
+            else 1
+        ),
+        "rough_ramp_fac": float(
+            pr["rough_ramp_fac"] if pr.get("rough_ramp_fac") is not None else 0.5
+        ),
         "thin_wall": int(pr.get("thin_wall", 0) or 0),
         "transmission_weight": float(
             pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
@@ -4653,6 +4786,40 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.bevel_enable = _bi("bevel_enable", 0)
     desc.bevel_samples = _bi("bevel_samples", 4)
     desc.bevel_radius = _bf("bevel_radius", 0.05)
+    # Slice 2ba: n==0 skip; interpolate 0 is CONSTANT — never `or` on n/interp.
+    ramp_n = packed.get("rough_ramp_n", 0)
+    ramp_n = 0 if ramp_n is None else int(ramp_n)
+    ramp_list = packed.get("rough_ramp") or []
+    ramp_alpha_list = packed.get("rough_ramp_alpha") or []
+    desc.rough_ramp_interpolate = _bi("rough_ramp_interpolate", 1)
+    desc.rough_ramp_fac = _bf("rough_ramp_fac", 0.5)
+    if ramp_list and ramp_n > 0:
+        flat = [float(v) for v in ramp_list]
+        if len(flat) < ramp_n * 3:
+            raise QuantTraceSyncError(
+                f"rough_ramp len {len(flat)} < n*3={ramp_n * 3} (Slice 2ba)"
+            )
+        ramp_buf = (ctypes.c_float * (ramp_n * 3))(*flat[: ramp_n * 3])
+        keep.append(ramp_buf)
+        desc.rough_ramp = ctypes.cast(ramp_buf, ctypes.POINTER(ctypes.c_float))
+        desc.rough_ramp_n = ramp_n
+        if ramp_alpha_list:
+            aflat = [float(v) for v in ramp_alpha_list]
+            if len(aflat) < ramp_n:
+                raise QuantTraceSyncError(
+                    f"rough_ramp_alpha len {len(aflat)} < n={ramp_n} (Slice 2ba)"
+                )
+            abuf = (ctypes.c_float * ramp_n)(*aflat[:ramp_n])
+            keep.append(abuf)
+            desc.rough_ramp_alpha = ctypes.cast(
+                abuf, ctypes.POINTER(ctypes.c_float)
+            )
+        else:
+            desc.rough_ramp_alpha = None
+    else:
+        desc.rough_ramp = None
+        desc.rough_ramp_alpha = None
+        desc.rough_ramp_n = 0
 
 
 def make_qt_simple_scene_type():
@@ -4983,6 +5150,11 @@ def make_qt_simple_scene_type():
             ("bevel_enable", ctypes.c_int),
             ("bevel_samples", ctypes.c_int),
             ("bevel_radius", ctypes.c_float),
+            ("rough_ramp", ctypes.POINTER(ctypes.c_float)),
+            ("rough_ramp_alpha", ctypes.POINTER(ctypes.c_float)),
+            ("rough_ramp_n", ctypes.c_int),
+            ("rough_ramp_interpolate", ctypes.c_int),
+            ("rough_ramp_fac", ctypes.c_float),
         ]
 
     return QT_SimpleScene
@@ -5403,6 +5575,11 @@ def make_qt_scene_types():
             ("bevel_enable", ctypes.c_int),
             ("bevel_samples", ctypes.c_int),
             ("bevel_radius", ctypes.c_float),
+            ("rough_ramp", ctypes.POINTER(ctypes.c_float)),
+            ("rough_ramp_alpha", ctypes.POINTER(ctypes.c_float)),
+            ("rough_ramp_n", ctypes.c_int),
+            ("rough_ramp_interpolate", ctypes.c_int),
+            ("rough_ramp_fac", ctypes.c_float),
         ]
 
     class QT_Light(ctypes.Structure):

@@ -1,6 +1,29 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2az landed** (2026-08-29 4pm PlugWalk ET). Bevel → Principled.Normal (`bevel_enable` / `bevel_samples` / `bevel_radius` after `base_mix_b_*`). Nested NormalMap / Bump OK; Bump.Normal ← NormalMap OK (loft Metal_Sheet). bevel_enable=0 keeps 2ay/2x/2j bit-identical. Loft Bevel→Normal cleared; first refuse now Roughness←ColorRamp. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.53-slice2az`. Addon `0.3.3`.
+Status: **Slice 2ba landed** (2026-08-29 5pm PlugWalk ET). ColorRamp → Principled.Roughness (`rough_ramp` / `rough_ramp_alpha` / `rough_ramp_n` / `rough_ramp_interpolate` / `rough_ramp_fac` after `bevel_radius`). Official `colorramp_to_array` LUT **257** (RAMP_TABLE_SIZE+1; evaluate i/256). Fac unlinked float OR Fac ← TEX_IMAGE (reuse `rough_image_*`). n==0 skips RGBRampNode — 2az/2i bit-identical. Connect Color → Roughness (NODE_CONVERT_CF). Loft Plane ColorRamp (LINEAR, Color out, 2 stops, Fac←Noise) recognized then named-refuse Fac. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.54-slice2ba`. Addon `0.3.3`.
+
+## Slice 2ba — ColorRamp → Principled.Roughness (2026-08-29 5pm ET)
+
+Loft census (object `Plane` / material `0`, current first PACK_FAIL after 2az): ShaderNodeValToRGB LINEAR RGB, 2 stops pos=0.254546 color=(0,0,0,1) / pos=0.822727 color=(1,1,1,1), **Color** out (not Alpha), no REROUTE. Fac ← **TEX_NOISE** Factor (leftover Fac kind — named refuse). 864 ColorRamps on Roughness in loft; other leftover Fac/kinds: Noise (majority), Invert, SEPARATE_COLOR, GROUP. Official intern/cycles/blender/util.h `colorramp_to_array` uses `full_size = size+1` = **257**. CONSTANT → interpolate=false; LINEAR/EASE/CARDINAL/B_SPLINE → evaluate LUT then interpolate=true. Claim cube matches LINEAR + loft stops; Fac ← Non-Color TEX_IMAGE (Noise Fac still refused). Also Fac unlinked.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| ramp CLAIM | 32²/4 | 4.77e-7 | 6.32e-9 | 0 | **PASS** |
+| ramp CLAIM | 256²/128 | 7.15e-7 | 4.08e-9 | 0 | **PASS** |
+| fac_unlinked | 32²/4 | 3.58e-7 | 7.49e-9 | 0 | **PASS** |
+| tex 2i | 32²/4 | 3.58e-7 | 6.71e-9 | 0 | **PASS** |
+| bevel 2az | 32²/4 | 4.77e-6 | 2.05e-8 | 0 | **PASS** |
+| mix 2ay | 32²/4 | 5.36e-7 | 3.54e-9 | 0 | **PASS** |
+| point 2av | 32²/4 | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| live ramp vs tex | 32²/4 | 0.0244 | 4.85e-4 | 57 | graph live |
+| noise Fac | — | — | — | — | **REFUSE** Slice 2ba |
+
+Loft pack: ColorRamp node accepted; first PACK_FAIL `object='Plane' material='0' Principled.Roughness ColorRamp.Fac from 'TEX_NOISE' refused (Slice 2ba: unlinked Fac or TEX_IMAGE Color only; Noise/Fresnel/LayerWeight/GROUP/Mix still refuse)`. Next: Noise→ColorRamp Fac, Invert/SEPARATE_COLOR on Roughness, Fresnel-Fac Mix / GROUP / Botaniq. Not loft Session Δmax.
+
+ABI: `rough_ramp` n*3 RGB, `rough_ramp_alpha` n floats, `rough_ramp_n`, `rough_ramp_interpolate`, `rough_ramp_fac` after `bevel_radius` on `QT_Mesh` + `QT_SimpleScene`. Defaults n=0 interpolate=1 fac=0.5 pointers NULL. Native RGBRampNode set_ramp/set_ramp_alpha/set_interpolate; Fac ← TEX_IMAGE Color or set_fac.
+
+Proof plate `docs/proof/quanttrace-colorramp-rough-32-pair.png`. Tools `_quanttrace_slice2ba_scene/smoke.py`.
 
 ## Slice 2az — Bevel → Principled.Normal (2026-08-29 4pm ET)
 

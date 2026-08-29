@@ -323,6 +323,12 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->bevel_enable = 0;
     d->bevel_samples = 4;
     d->bevel_radius = 0.05f;
+    /* Slice 2ba identity — n==0 skips RGBRampNode. */
+    d->rough_ramp = nullptr;
+    d->rough_ramp_alpha = nullptr;
+    d->rough_ramp_n = 0;
+    d->rough_ramp_interpolate = 1;
+    d->rough_ramp_fac = 0.5f;
     /* Slice 2ap identity — bright=0 contrast=0 (memset is fine; set explicit). */
     d->world_bright = 0.0f;
     d->world_contrast = 0.0f;
@@ -615,6 +621,12 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->bevel_enable = s->bevel_enable;
     mesh->bevel_samples = s->bevel_samples;
     mesh->bevel_radius = s->bevel_radius;
+    /* Slice 2ba: ColorRamp → Principled.Roughness. */
+    mesh->rough_ramp = s->rough_ramp;
+    mesh->rough_ramp_alpha = s->rough_ramp_alpha;
+    mesh->rough_ramp_n = s->rough_ramp_n;
+    mesh->rough_ramp_interpolate = s->rough_ramp_interpolate;
+    mesh->rough_ramp_fac = s->rough_ramp_fac;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1174,7 +1186,38 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             graph->connect(cur, bsdf->input("Base Color"));
         }
     }
-    if (m->rough_image_path && m->rough_image_path[0]) {
+    /* Slice 2ba: ColorRamp → Principled.Roughness.
+     * n>0: RGBRampNode LUT (official colorramp_to_array size+1=257).
+     * Fac ← TEX_IMAGE Color when rough_image_path nonempty, else set_fac.
+     * Color → Roughness via NODE_CONVERT_CF (same as 2i Color→float).
+     * n==0 + image: keep 2i (image → Roughness directly). */
+    if (m->rough_ramp_n > 0 && m->rough_ramp != nullptr) {
+        RGBRampNode *ramp = graph->create_node<RGBRampNode>();
+        array<packed_float3> ramp_c;
+        array<float> ramp_a;
+        ramp_c.resize(m->rough_ramp_n);
+        ramp_a.resize(m->rough_ramp_n);
+        for (int i = 0; i < m->rough_ramp_n; i++) {
+            const float *p = m->rough_ramp + i * 3;
+            ramp_c[i] = make_float3(p[0], p[1], p[2]);
+            ramp_a[i] = (m->rough_ramp_alpha != nullptr) ? m->rough_ramp_alpha[i] : 1.0f;
+        }
+        ramp->set_ramp(ramp_c);
+        ramp->set_ramp_alpha(ramp_a);
+        ramp->set_interpolate(m->rough_ramp_interpolate != 0);
+        if (m->rough_image_path && m->rough_image_path[0]) {
+            ImageTextureNode *img = wire_tex_image(
+                graph.get(), m, m->rough_image_path, m->rough_image_colorspace,
+                m->rough_tex_vector_mode, m->rough_map_location, m->rough_map_rotation,
+                m->rough_map_scale, m->rough_map_type);
+            graph->connect(img->output("Color"), ramp->input("Fac"));
+        }
+        else {
+            ramp->set_fac(m->rough_ramp_fac);
+        }
+        graph->connect(ramp->output("Color"), bsdf->input("Roughness"));
+    }
+    else if (m->rough_image_path && m->rough_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
             graph.get(), m, m->rough_image_path, m->rough_image_colorspace,
             m->rough_tex_vector_mode, m->rough_map_location, m->rough_map_rotation,

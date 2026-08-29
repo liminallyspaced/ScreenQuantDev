@@ -32,6 +32,13 @@
  *   Bevel.Normal ← NormalMap and/or Bump. When bump_* + normal_* both set,
  *   NormalMap → Bump.Normal → (Bevel?) → Principled (loft Metal_Sheet shape).
  *   bevel_enable=0 keeps 2x/2j bit-identical.
+ * Slice 2ba: ColorRamp (VALTORGB) -> Principled.Roughness. Official
+ *   intern/cycles/blender/util.h colorramp_to_array uses RAMP_TABLE_SIZE+1
+ *   = 257 (evaluate i/256). interpolate=false only for CONSTANT; LINEAR/
+ *   EASE/CARDINAL/B_SPLINE pack interpolate=true then lerp the LUT.
+ *   Fac unlinked float OR Fac <- TEX_IMAGE (reuse rough_image_*). n==0
+ *   skips RGBRampNode -- 2az/2i bit-identical. Noise/Fresnel/GROUP Fac
+ *   named refuse. Connect Color -> Roughness (NODE_CONVERT_CF).
  * Slice 2z: Principled Normal Map space OBJECT + WORLD (plus Coat Normal space).
  *   0=TANGENT (default, 2j/2t bit-identical), 1=OBJECT, 2=WORLD.
  * Slice 2ad: BLENDER_OBJECT=3 / BLENDER_WORLD=4 (Cycles NODE_NORMAL_MAP_BLENDER_*).
@@ -528,6 +535,15 @@ typedef struct QT_SimpleScene {
   int bevel_enable;
   int bevel_samples;
   float bevel_radius;
+  /* Slice 2ba: ColorRamp -> Principled.Roughness. n==0 / NULL = skip
+   * (2az/2i bit-identical). n * 3 RGB + n alpha. interpolate 1=lerp
+   * 0=CONSTANT. Fac unlinked (rough_ramp_fac) unless rough_image_path
+   * nonempty (then Fac <- existing 2i TEX_IMAGE). */
+  const float *rough_ramp;
+  const float *rough_ramp_alpha;
+  int rough_ramp_n;
+  int rough_ramp_interpolate;
+  float rough_ramp_fac;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -846,6 +862,12 @@ typedef struct QT_Mesh {
   int bevel_enable;
   int bevel_samples;
   float bevel_radius;
+  /* Slice 2ba: ColorRamp -> Principled.Roughness (same layout as QT_SimpleScene). */
+  const float *rough_ramp;
+  const float *rough_ramp_alpha;
+  int rough_ramp_n;
+  int rough_ramp_interpolate;
+  float rough_ramp_fac;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
