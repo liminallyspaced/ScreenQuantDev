@@ -55,8 +55,13 @@
 #   order walking toward the source). Identity (gamma=1, hue=0.5, sat=1, val=1,
 #   fac=1) keeps 2aa/2al/2am/2an bit-identical. Native applies loft order:
 #   Color source → Gamma → HSV → Background. Linked Gamma/Hue/Sat/Value/Fac,
-#   RGB Curves, Noise, Bright/Contrast (defer 2ap), Mix after HSV, second
-#   Gamma/HueSat still refuse.
+#   RGB Curves, Noise, Mix after HSV, second Gamma/HueSat still refuse.
+# Slice 2ap: also peel one unlinked BrightContrast (Bright+Contrast unlinked
+#   floats). Identity bright=0 contrast=0 skips native node — 2ao/2an/2am/2aa/
+#   2al bit-identical. Up to 3 hops (Gamma, HueSat, BrightContrast, any order).
+#   Native loft: Color → Gamma → HSV → BrightContrast → Background. Second
+#   BrightContrast / linked Bright/Contrast refuse. Noise / RGB Curves / Mix
+#   after HSV / second Gamma/HueSat / linked Sky Vector still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -2010,47 +2015,52 @@ def _pack_world_color_image_from_node(from_node) -> dict:
 
 
 def _world_gamma_hsv_identity():
-    """Slice 2ao identity — skip native Gamma/HSV (2aa/2al/2am/2an bit-identical)."""
+    """Slice 2ao/2ap identity — skip native Gamma/HSV/BrightContrast.
+
+    Keeps 2aa/2al/2am/2an/2ao bit-identical when all identity.
+    """
     return {
         "world_gamma": 1.0,
         "world_hsv_hue": 0.5,
         "world_hsv_sat": 1.0,
         "world_hsv_val": 1.0,
         "world_hsv_fac": 1.0,
+        "world_bright": 0.0,
+        "world_contrast": 0.0,
     }
 
 
 def _require_unlinked_float(node, names, label: str) -> float:
-    """Require an unlinked float socket (Slice 2ao Gamma/Hue/Sat/Value/Fac)."""
+    """Require an unlinked float socket (Slice 2ao/2ap Gamma/Hue/Sat/Value/Fac/Bright/Contrast)."""
     inputs = getattr(node, "inputs", None)
     if inputs is None:
         raise QuantTraceSyncError(
-            f"world Background Color {label} has no inputs (Slice 2ao)"
+            f"world Background Color {label} has no inputs (Slice 2ap)"
         )
     sock = _sock_ident_or_name(inputs, *names)
     if sock is None:
         raise QuantTraceSyncError(
-            f"world Background Color {label} missing (Slice 2ao)"
+            f"world Background Color {label} missing (Slice 2ap)"
         )
     if getattr(sock, "is_linked", False):
         raise QuantTraceSyncError(
             f"world Background Color {label} is linked refused "
-            "(Slice 2ao: texture-driven Gamma/Hue/Sat/Value/Fac still refuse)"
+            "(Slice 2ap: texture-driven Gamma/Hue/Sat/Value/Fac/Bright/Contrast still refuse)"
         )
     return float(getattr(sock, "default_value", 0.0) or 0.0)
 
 
 def _gamma_hsv_color_source(node):
-    """Color input of Gamma/HueSat: (from_node, from_sock, unlinked_rgb_or_None)."""
+    """Color input of Gamma/HueSat/BrightContrast: (from_node, from_sock, unlinked_rgb_or_None)."""
     inputs = getattr(node, "inputs", None)
     if inputs is None:
         raise QuantTraceSyncError(
-            "world Background Color Gamma/HueSat has no inputs (Slice 2ao)"
+            "world Background Color Gamma/HueSat/BrightContrast has no inputs (Slice 2ap)"
         )
     color_in = _sock_ident_or_name(inputs, "Color")
     if color_in is None:
         raise QuantTraceSyncError(
-            "world Background Color Gamma/HueSat missing Color (Slice 2ao)"
+            "world Background Color Gamma/HueSat/BrightContrast missing Color (Slice 2ap)"
         )
     if not getattr(color_in, "is_linked", False):
         col = getattr(color_in, "default_value", (0.0, 0.0, 0.0, 1.0))
@@ -2059,8 +2069,8 @@ def _gamma_hsv_color_source(node):
     links = list(getattr(color_in, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
-            "world Background Color Gamma/HueSat Color multi-link refused "
-            "(Slice 2ao)"
+            "world Background Color Gamma/HueSat/BrightContrast Color multi-link refused "
+            "(Slice 2ap)"
         )
     return (
         getattr(links[0], "from_node", None),
@@ -2070,24 +2080,26 @@ def _gamma_hsv_color_source(node):
 
 
 def _peel_world_gamma_hsv(from_node, from_sock):
-    """Peel one unlinked Gamma + one unlinked HueSat (either order).
+    """Peel one unlinked Gamma + HueSat + BrightContrast (any order, ≤3 hops).
 
-    Returns (from_node, from_sock, unlinked_rgb_or_None, gamma_hsv_dict).
+    Returns (from_node, from_sock, unlinked_rgb_or_None, gamma_hsv_bc_dict).
     Remaining source is resolved by the caller (TEX_ENVIRONMENT / TEX_SKY /
-    TEX_IMAGE / RGB/Mix/Value/Math). Second Gamma/HueSat refuses. Linked
-    Gamma/Hue/Sat/Value/Fac refuses. Native applies loft order Color →
-    Gamma → HSV → Background regardless of peel order.
+    TEX_IMAGE / RGB/Mix/Value/Math). Second Gamma/HueSat/BrightContrast
+    refuses. Linked Gamma/Hue/Sat/Value/Fac/Bright/Contrast refuses. Native
+    applies loft order Color → Gamma → HSV → BrightContrast → Background
+    regardless of peel order (Slice 2ap).
     """
     gh = dict(_world_gamma_hsv_identity())
     seen_gamma = False
     seen_hsv = False
+    seen_bc = False
     unlinked_rgb = None
-    for _hop in range(2):
+    for _hop in range(3):
         ntype = getattr(from_node, "type", None) if from_node is not None else None
         if ntype == "GAMMA":
             if seen_gamma:
                 raise QuantTraceSyncError(
-                    "world Background Color second Gamma refused (Slice 2ao)"
+                    "world Background Color second Gamma refused (Slice 2ap)"
                 )
             gh["world_gamma"] = _require_unlinked_float(
                 from_node, ("Gamma",), "Gamma.Gamma"
@@ -2100,7 +2112,7 @@ def _peel_world_gamma_hsv(from_node, from_sock):
         if ntype == "HUE_SAT":
             if seen_hsv:
                 raise QuantTraceSyncError(
-                    "world Background Color second HueSat refused (Slice 2ao)"
+                    "world Background Color second HueSat refused (Slice 2ap)"
                 )
             gh["world_hsv_hue"] = _require_unlinked_float(
                 from_node, ("Hue",), "HueSat.Hue"
@@ -2119,20 +2131,32 @@ def _peel_world_gamma_hsv(from_node, from_sock):
             if unlinked_rgb is not None:
                 break
             continue
+        if ntype in ("BRIGHTCONTRAST", "BRIGHTNESS_CONTRAST"):
+            if seen_bc:
+                raise QuantTraceSyncError(
+                    "world Background Color second Bright/Contrast refused "
+                    "(Slice 2ap)"
+                )
+            gh["world_bright"] = _require_unlinked_float(
+                from_node, ("Bright", "Brightness"), "BrightContrast.Bright"
+            )
+            gh["world_contrast"] = _require_unlinked_float(
+                from_node, ("Contrast",), "BrightContrast.Contrast"
+            )
+            seen_bc = True
+            from_node, from_sock, unlinked_rgb = _gamma_hsv_color_source(from_node)
+            if unlinked_rgb is not None:
+                break
+            continue
         break
     ntype = getattr(from_node, "type", None) if from_node is not None else None
-    if ntype in ("BRIGHTCONTRAST", "BRIGHTNESS_CONTRAST"):
-        raise QuantTraceSyncError(
-            "world Background Color Bright/Contrast refused "
-            "(Slice 2ao: defer Slice 2ap)"
-        )
     if ntype == "CURVE_RGB":
         raise QuantTraceSyncError(
-            "world Background Color RGB Curves refused (Slice 2ao)"
+            "world Background Color RGB Curves refused (Slice 2ap)"
         )
     if ntype in ("TEX_NOISE", "NOISE"):
         raise QuantTraceSyncError(
-            "world Background Color Noise refused (Slice 2ao)"
+            "world Background Color Noise refused (Slice 2ap)"
         )
     # Mix immediately on Background is 2al (constant) or refuse. Mix after
     # HSV (Background ← Mix ← HSV) is not peeled here — Mix fold refuses
@@ -2141,7 +2165,7 @@ def _peel_world_gamma_hsv(from_node, from_sock):
 
 
 def _world_info(scene) -> dict:
-    """Pack world Background + Env / Sky / ImageTexture Color (2aa/2al/2am/2an/2ao).
+    """Pack world Background + Env / Sky / ImageTexture Color (2aa/2al/2am/2an/2ao/2ap).
 
     Returns dict:
       world_strength: float
@@ -2155,18 +2179,19 @@ def _world_info(scene) -> dict:
       world_color_image_*: Slice 2an Image Texture → Color (empty path = none)
 
     Empty path keeps locked-cube black worlds bit-identical when world_color is 0
-    and world_sky_type is 0 and world_color_image_path is empty and Gamma/HSV
-    are identity (Slice 2ao).
+    and world_sky_type is 0 and world_color_image_path is empty and Gamma/HSV/
+    BrightContrast are identity (Slice 2ao/2ap).
     Slice 2al: unlinked Color (incl. non-black), ShaderNodeRGB, MixRGB / Mix
     FLOAT constants, Value/Math → Color as grey. TEX_ENVIRONMENT still wins
     (world_color stays 0,0,0). Slice 2am: ShaderNodeTexSky (unlinked Vector)
     packs world_sky_* (path empty, color zeros). Slice 2an: ShaderNodeTexImage
     Color → Background Color (path empty + color zeros + sky_type 0); Vector
-    same shapes as env 2ac/2ae. Slice 2ao: peel unlinked Gamma + HueSat (one
-    of each, either order walking toward the source) then resolve remaining
-    source as today. Native loft order Color → Gamma → HSV → Background.
-    Noise / RGB Curves / Bright-Contrast / Mix after HSV / linked Gamma/Hue/
-    Sat/Value/Fac / second Gamma/HueSat / linked Sky Vector refuse.
+    same shapes as env 2ac/2ae. Slice 2ao/2ap: peel unlinked Gamma + HueSat +
+    BrightContrast (one of each, any order, ≤3 hops) then resolve remaining
+    source as today. Native loft order Color → Gamma → HSV → BrightContrast →
+    Background. Noise / RGB Curves / Mix after HSV / linked Gamma/Hue/Sat/
+    Value/Fac/Bright/Contrast / second Gamma/HueSat/BrightContrast / linked
+    Sky Vector refuse.
     Slice 2ac: Vector may be TEX_COORD Generated/Object/Camera/Window/Reflection
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
@@ -2222,13 +2247,13 @@ def _world_info(scene) -> dict:
             "world_strength": strength,
             "world_color": world_color,
         }
-    # Color linked — optional Gamma/HueSat peel (Slice 2ao), then
-    # TEX_ENVIRONMENT (2aa), TEX_SKY (2am), TEX_IMAGE (2an), or RGB/Mix (2al).
+    # Color linked — optional Gamma/HueSat/BrightContrast peel (Slice 2ap),
+    # then TEX_ENVIRONMENT (2aa), TEX_SKY (2am), TEX_IMAGE (2an), or RGB/Mix (2al).
     links = list(getattr(color_sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
             "world Background Color multi-link refused "
-            "(Slice 2aa/2al/2am/2an/2ao)"
+            "(Slice 2aa/2al/2am/2an/2ao/2ap)"
         )
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
@@ -3465,6 +3490,8 @@ def make_qt_simple_scene_type():
             ("world_hsv_sat", ctypes.c_float),
             ("world_hsv_val", ctypes.c_float),
             ("world_hsv_fac", ctypes.c_float),
+            ("world_bright", ctypes.c_float),
+            ("world_contrast", ctypes.c_float),
             ("exr_path", ctypes.c_char_p),
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
@@ -3744,7 +3771,7 @@ def _fill_world_vec_ctypes(desc, packed):
     desc.world_color_image_projection = int(
         packed.get("world_color_image_projection", 0) or 0
     )
-    # Slice 2ao: identity defaults. Do not use `or` — 0.0 is a valid gamma.
+    # Slice 2ao/2ap: identity defaults. Do not use `or` — 0.0 is a valid gamma/bright.
     def _wf(key, default):
         v = packed.get(key, default)
         if v is None:
@@ -3755,6 +3782,9 @@ def _fill_world_vec_ctypes(desc, packed):
     desc.world_hsv_sat = _wf("world_hsv_sat", 1.0)
     desc.world_hsv_val = _wf("world_hsv_val", 1.0)
     desc.world_hsv_fac = _wf("world_hsv_fac", 1.0)
+    # Slice 2ap: identity defaults bright=0 contrast=0. Do not use `or`.
+    desc.world_bright = _wf("world_bright", 0.0)
+    desc.world_contrast = _wf("world_contrast", 0.0)
 
 def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     """Build a QT_SimpleScene + keep-alive buffers from pack_simple_scene output."""
@@ -4133,6 +4163,8 @@ def make_qt_scene_types():
             ("world_hsv_sat", ctypes.c_float),
             ("world_hsv_val", ctypes.c_float),
             ("world_hsv_fac", ctypes.c_float),
+            ("world_bright", ctypes.c_float),
+            ("world_contrast", ctypes.c_float),
             ("exr_path", ctypes.c_char_p),
         ]
 

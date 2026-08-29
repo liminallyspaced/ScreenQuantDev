@@ -51,6 +51,11 @@
  *   2aa/2al/2am/2an bit-identical. Non-identity wires ccl::GammaNode then
  *   ccl::HSVNode (loft order: Color source → Gamma → HSV → Background).
  *   If only HSV, skip Gamma. If only Gamma, skip HSV.
+ * Slice 2ap: Bright/Contrast on world Background Color (world_bright /
+ *   world_contrast after world_hsv_fac). Identity (bright=0, contrast=0)
+ *   skips BrightContrastNode — 2ao/2an/2am/2aa/2al bit-identical. Loft
+ *   order: Color → Gamma → HSV → BrightContrast → Background. Cite
+ *   shader_nodes.h BrightContrastNode (set_bright, set_contrast).
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  *   Empty Object ref (2l) stays use_transform=false / NODE_TEXCO_OBJECT.
  *   Pointer set → NODE_TEXCO_OBJECT_WITH_TRANSFORM + packed inverse of ob_tfm.
@@ -167,6 +172,9 @@ typedef struct QT_SimpleScene {
   float world_hsv_sat;   /* 1.0 = identity */
   float world_hsv_val;   /* 1.0 = identity */
   float world_hsv_fac;   /* 1.0 = identity */
+  /* Slice 2ap: Bright/Contrast on world Color. Identity skips native node. */
+  float world_bright;    /* 0.0 = identity */
+  float world_contrast;  /* 0.0 = identity */
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -829,6 +837,9 @@ typedef struct QT_Scene {
   float world_hsv_sat;   /* 1.0 = identity */
   float world_hsv_val;   /* 1.0 = identity */
   float world_hsv_fac;   /* 1.0 = identity */
+  /* Slice 2ap: Bright/Contrast on world Color. Identity skips native node. */
+  float world_bright;    /* 0.0 = identity */
+  float world_contrast;  /* 0.0 = identity */
   const char *exr_path;
 } QT_Scene;
 
