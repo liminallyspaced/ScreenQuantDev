@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2av landed** (2026-08-29 12pm PlugWalk ET). Mapping `vector_type='POINT'` accepted on env/sky/teximage Vector (and mesh TEX_IMAGE). NODE_MAPPING_TYPE_POINT=0 / VECTOR=2; TEXTURE/NORMAL still refuse. Native already `set_mapping_type(world_map_type)` — ctypes `or 2` was zeroing POINT=0, now None-checked. POINT loc=(0.15,0,0) rot_z=0.7 32²/4 Δmax=5.66e-4 PASS / 256²/128 Δmax=8.00e-5 PASS. Stock POINT vs VECTOR Δmax=0.098 (graph live). Loft EasyHDR `_world_info` **PACKS** (strength 20, map_type 0, tex_mode 4, mix MULTIPLY fac=0). `pack_scene` refuses **need 1..32 meshes, got 1200**. `is_tracer=1`. Native `0.0.49-slice2av`. Addon `0.3.3`.
+Status: **Slice 2aw landed** (2026-08-29 1pm PlugWalk ET). Pack caps raised: `QT_MAX_MESHES` **2048** / `QT_MAX_LIGHTS` **128** (was 32/16). Caps are **validation only** — `QT_Scene.meshes` / `lights` stay heap pointers from ctypes (no fixed C array / stack / BSS blowup). Synthetic 64-cube grid `pack_scene` accepts; optional tiny Session 32²/4 (pack-only gate; no loft Δmax claim). Loft EasyHDR `_world_info` still PACKS from 2av. Official loft still refuses Principled.Base Color non-TEX_IMAGE (count OK). `is_tracer=1`. Native `0.0.50-slice2aw`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -29,6 +29,45 @@ addon zip or public commit tree.
 
 
 
+
+## 1pm PlugWalk (2026-08-29) — mesh/light pack caps (Slice 2aw)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Kitchen-first: after 2av, loft EasyHDR `_world_info` PACKS but `pack_scene` refused **need 1..32 meshes, got 1200** (`QT_MAX_MESHES 32` / `QT_MAX_LIGHTS 16` in `quanttrace.h` + Python sync).
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | `QT_Scene.meshes` / `lights` are `const QT_Mesh*` / `const QT_Light*` heap pointers from ctypes. Caps are count checks in `session_bridge.cpp` + `classify_scene` only — not embedded fixed arrays. |
+| ABI | `#define QT_MAX_MESHES 2048` / `QT_MAX_LIGHTS 128` (was 32/16). Simple define bump; no struct layout change. |
+| Python | `sync.QT_MAX_MESHES` / `QT_MAX_LIGHTS` matched. Engine still-life message updated. |
+| Native | Version stamp `0.0.50-slice2aw`. |
+| Tools | `_quanttrace_slice2aw_scene/smoke.py` |
+
+### Measured — synthetic grid (claim = pack accepts N>32)
+
+64 constant-Principled cubes + 2 AREA. Persistent off. Box Blender 5.2.0 CPU.
+
+| Path | Detail | Gate |
+|---|---|---|
+| pack_scene | n_meshes=**64** (>32), n_lights=2, wall **0.029s** | **PASS** (no refuse) |
+| Session | 32² / 4, rc=0, wall **0.072s**, EXR 5641 B | pack+render OK; **no Δmax claim** |
+
+### Measured — regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| point 2av | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+
+### Honesty / still refuses
+
+- Cap raise unblocks count. Official loft.blend on box (`/workspace/scenequant/work/bench/loft.blend`) still **PACK_FAIL** `Principled.Base Color link is not TEX_IMAGE (Slice 2f/2h/2i)` — not a mesh-count refuse. Do **not** claim loft Session match.
+- Mapping TEXTURE / NORMAL still refuse. Noise → Color still refuse.
+- Still-life 1px / SSS / sky-256 residue still document-only.
+- Next: loft Principled Base Color non-TEX_IMAGE (Mix/RGB/etc) pack, Mapping TEXTURE, or Noise→Color. Not ReSTIR. Not Classroom time %.
 
 ## 12pm PlugWalk (2026-08-29) — Mapping POINT → env Vector (Slice 2av)
 
@@ -78,7 +117,7 @@ Proof plate `docs/proof/quanttrace-env-point-32-pair.png` + `/workspace/quanttra
 - Mapping TEXTURE / NORMAL still refuse.
 - env_mul0_add20 32/256 FAIL is HDR-MIS at Strength 20 (matches unlinked 20), not a fold/mapping bug.
 - Still-life 1px / SSS / sky-256 residue still document-only.
-- Next: raise mesh cap / kitchens, or Mapping TEXTURE, or Noise→Color. Not ReSTIR. Not Classroom time %.
+- Next (done in 2aw): raise mesh cap. Remaining: loft Base Color non-TEX_IMAGE, Mapping TEXTURE, or Noise→Color. Not ReSTIR. Not Classroom time %.
 
 ## 11am PlugWalk (2026-08-29) — TEX_ENVIRONMENT×0 → world Strength (Slice 2au)
 

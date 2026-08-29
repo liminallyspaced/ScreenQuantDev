@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.26-slice2y" in hello_c, "hello.c version string 0.0.26-slice2y")
+    check("0.0.50-slice2aw" in hello_c, "hello.c version string 0.0.50-slice2aw")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -316,8 +316,8 @@ def main():
     check(callable(sync.can_sync_scene), "sync.can_sync_scene exists")
     check(callable(sync.make_qt_scene_types), "sync.make_qt_scene_types exists")
     check(callable(sync.to_ctypes_scene), "sync.to_ctypes_scene exists")
-    check(sync.QT_MAX_MESHES == 32, "QT_MAX_MESHES is 32")
-    check(sync.QT_MAX_LIGHTS == 16, "QT_MAX_LIGHTS is 16")
+    check(sync.QT_MAX_MESHES == 2048, "QT_MAX_MESHES is 2048")
+    check(sync.QT_MAX_LIGHTS == 128, "QT_MAX_LIGHTS is 128")
     check(issubclass(sync.QuantTraceSyncError, RuntimeError), "QuantTraceSyncError is RuntimeError")
     hdr = _read("native/quanttrace/src/quanttrace.h")
     check("QT_SimpleScene" in hdr, "header declares QT_SimpleScene")
@@ -765,7 +765,7 @@ def main():
     check("set_thin_wall" in bridge, "bridge sets thin_wall")
     check("set_transmission_weight" in bridge, "bridge sets transmission_weight")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.26-slice2y" in hello, "hello version is 0.0.26-slice2y")
+    check("0.0.50-slice2aw" in hello, "hello version is 0.0.50-slice2aw")
     ytools = _read("tools/_quanttrace_slice2y_scene.py")
     check("ThinWall" in ytools and "Thin Wall" in ytools, "slice2y scene wires Thin Wall")
     ysmoke = _read("tools/_quanttrace_slice2y_smoke.py")

@@ -3,7 +3,7 @@
 # Walks a Blender depsgraph and packs camera / meshes / Principled /
 # AREA lights / world into ctypes QT_SimpleScene (1+1) or QT_Scene (N+N)
 # for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
-# Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN/SPOT lights, constant Principled.
+# Slice 2aw: up to 2048 meshes + 128 AREA/POINT/SUN/SPOT lights (was 32/16).
 # Slice 2f: TEX_IMAGE → Principled Base Color (default UV; disk or packed).
 # Slice 2h: TEX_COORD UV (+ optional Mapping POINT/VECTOR constants) → TEX_IMAGE Vector.
 # Slice 2i: TEX_IMAGE → Principled Roughness / Metallic (same Vector rules as Base Color).
@@ -3307,8 +3307,8 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
     }
 
 
-QT_MAX_MESHES = 32
-QT_MAX_LIGHTS = 16
+QT_MAX_MESHES = 2048
+QT_MAX_LIGHTS = 128
 
 
 def _visible_objects(scene, depsgraph=None):

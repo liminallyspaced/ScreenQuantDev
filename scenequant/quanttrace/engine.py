@@ -1,10 +1,10 @@
 # QuantTrace RenderEngine — depsgraph-fed Session F12 when is_tracer==1.
 #
 # Slice 2d: native lib with QT_WITH_CYCLES returns is_tracer=1 and
-# SQ_QUANTTRACE.render packs a depsgraph scene (1..32 meshes with
-# Principled (constant or TEX_IMAGE Base Color), 1..16 AREA/POINT/SUN,
-# camera, black world) into QT_Scene and lands Combined via begin_result /
-# end_result. Kitchens / other linked shaders / SPOT / HDR refuse.
+# SQ_QUANTTRACE.render packs a depsgraph scene (1..2048 meshes with
+# Principled (constant or TEX_IMAGE Base Color), 1..128 AREA/POINT/SUN/SPOT,
+# camera, black/env world) into QT_Scene and lands Combined via begin_result /
+# end_result. Other linked shaders may still refuse.
 # Make it Fast stays on stock Cycles.
 # Design: docs/research/SIDECAR-INTEGRATOR.md
 
@@ -26,10 +26,10 @@ HELLO_LOADED_MESSAGE = (
     "Make it Fast stays on stock Cycles."
 )
 SIMPLE_ONLY_MESSAGE = (
-    "QuantTrace F12 currently syncs still-life scenes: 1..32 meshes with "
-    "Principled BSDF (constant or TEX_IMAGE Base Color), 1..16 AREA/POINT/SUN "
-    "lights, one camera, and a black/constant world. Other linked Principled "
-    "sockets, SPOT, HDR worlds, and kitchens are not wired yet. Make it Fast "
+    "QuantTrace F12 currently syncs scenes: 1..2048 meshes with "
+    "Principled BSDF (constant or TEX_IMAGE Base Color), 1..128 AREA/POINT/SUN/SPOT "
+    "lights, one camera, and a black/env world. Other linked Principled "
+    "sockets may still refuse. Make it Fast "
     "stays on stock Cycles."
 )
 PANEL_NOTE = (

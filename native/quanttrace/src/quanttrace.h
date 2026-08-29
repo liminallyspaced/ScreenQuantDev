@@ -60,6 +60,8 @@
  * Slice 2av: Mapping vector_type POINT accepted on env/sky/teximage Vector
  *   (and mesh TEX_IMAGE). Same world_map_type int ABI; 0=POINT 2=VECTOR.
  *   Native already set_mapping_type. TEXTURE/NORMAL still refuse.
+ * Slice 2aw: QT_MAX_MESHES 2048 / QT_MAX_LIGHTS 128 (was 32/16). Caps are
+ *   validation only — QT_Scene.meshes/lights stay heap pointers.
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
@@ -102,9 +104,12 @@ extern "C" {
 #  define QT_EXPORT __attribute__((visibility("default")))
 #endif
 
-/* Slice 2c caps — kitchens still refuse. */
-#define QT_MAX_MESHES 32
-#define QT_MAX_LIGHTS 16
+/* Slice 2aw pack caps — validation only (QT_Scene.meshes/lights are
+ * heap pointers from ctypes; not fixed C arrays / stack / BSS).
+ * 2048 meshes covers loft (~1200) with headroom; 128 lights ditto.
+ */
+#define QT_MAX_MESHES 2048
+#define QT_MAX_LIGHTS 128
 
 QT_EXPORT const char *quanttrace_version(void);
 
@@ -499,8 +504,8 @@ QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
                                            int *out_h);
 
 /* Slice 2c: N meshes + N AREA lights (constant Principled per mesh).
- * Caps: QT_MAX_MESHES / QT_MAX_LIGHTS. AREA + POINT + SUN + SPOT.
- * HDR worlds still refuse on the Python packer.
+ * Caps: QT_MAX_MESHES / QT_MAX_LIGHTS (Slice 2aw: 2048/128; heap pointers).
+ * AREA + POINT + SUN + SPOT.
  */
 typedef struct QT_Mesh {
   int nverts;

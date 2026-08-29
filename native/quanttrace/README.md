@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.49-slice2av` — Mapping POINT → env Vector (after TEX_ENVIRONMENT×0 Strength). Addon still `0.3.3`.
+**Current native:** `0.0.50-slice2aw` — pack caps 2048 meshes / 128 lights (after Mapping POINT). Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.49-slice2av` (Mapping POINT env Vector).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.50-slice2aw` (mesh/light pack caps).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -63,10 +63,11 @@ this tree never feeds Auto clocks.
 | **2as — RGB Curves → world Color** | **PASS** | rgb_curves 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **5.96e-7**. Native `0.0.46-slice2as`. |
 | **2at — 3-deep Math → world Strength** | **PASS** | math_nest3 (0.5×1.4)/1+0=0.7 32²/4 Δmax **2.16e-4**; 256²/128 Δmax **1.21e-4**. math_mul 2ai 32²/4 Δmax **4.25e-4**. rgb_curves/rgb_mix/rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.47-slice2at`. |
 | **2au — TEX_ENVIRONMENT×0 → world Strength** | **env_mul0 PASS; add20 HDR-MIS FAIL** | env_mul0 32²/4 Δmax **3.58e-7**. env_mul0_add20 loft ops=20 32²/4 Δmax **6.17e-3** (16 px) FAIL / 256²/128 Δmax **2.34e-2** (70 px) FAIL — same as unlinked Strength 20. math_nest3/math_mul/hdr/rgb/rgb_mix/rgb_curves/nishita/teximage 32²/4 PASS. Native `0.0.48-slice2au`. |
+| **2aw — mesh/light pack caps** | **PASS (pack)** | `QT_MAX_MESHES` **2048** / `QT_MAX_LIGHTS` **128** (was 32/16; heap pointers, validation only). Synthetic 64-cube pack wall **0.029s**; Session 32²/4 **0.072s** no Δmax. point/hdr 32²/4 regressions PASS. Loft count OK; still refuses Base Color non-TEX_IMAGE. Native `0.0.50-slice2aw`. |
 | **2av — Mapping POINT → env Vector** | **PASS** | POINT loc=(0.15,0,0) rot_z=0.7 32²/4 Δmax **5.66e-4**; 256²/128 Δmax **8.00e-5**. Stock POINT vs VECTOR Δmax **0.098**. ctypes POINT=0 fix. Loft `_world_info` PACKS; `pack_scene` 1200 meshes refuse. Native `0.0.49-slice2av`. |
 | **2ao — Gamma/HueSat → world Color** | **PASS** | rgb_gamma 32²/4 Δmax **4.77e-7**; 256²/128 Δmax **5.96e-7**. rgb_gamma_hsv loft 32²/4 Δmax **7.15e-7**; 256²/128 Δmax **4.77e-7**. rgb_hsv 32²/4 Δmax **5.96e-7**. hdr_gamma 32²/4 Δmax **9.73e-4**; 256²/128 Δmax **1.91e-4**. rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.42-slice2ao`. |
 
-Kitchens / linked Thin Wall (BOOLEAN) / TEX_IMAGE → world Strength still refuse with a named `QuantTraceSyncError`. Map Range FLOAT LINEAR / Clamp → world Strength is Slice 2ak. Mix FLOAT / MixRGB constant → world Strength is Slice 2aj. Math → world Strength is Slice 2ai. Linked world Strength (Value node) is Slice 2ah. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y. World Color RGB/Mix is Slice 2al. Sky/Nishita (unlinked Vector) is Slice 2am. TEX_IMAGE→Color is Slice 2an. Gamma/HueSat on world Color is Slice 2ao. Bright/Contrast on world Color is Slice 2ap. Mix after Color chain is Slice 2aq. Linked Sky Vector (PREETHAM/HOSEK) is Slice 2ar. RGB Curves → Color is Slice 2as. 3-deep Math → Strength is Slice 2at. TEX_ENVIRONMENT×0 MULTIPLY → Strength is Slice 2au. Noise / 4-deep Math / non-zero tex Math / Mapping TEXTURE/NORMAL still refuse. Mapping POINT is Slice 2av. Loft world packs; kitchens (1200 meshes) still refuse.
+Kitchens / linked Thin Wall (BOOLEAN) / TEX_IMAGE → world Strength still refuse with a named `QuantTraceSyncError`. Map Range FLOAT LINEAR / Clamp → world Strength is Slice 2ak. Mix FLOAT / MixRGB constant → world Strength is Slice 2aj. Math → world Strength is Slice 2ai. Linked world Strength (Value node) is Slice 2ah. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y. World Color RGB/Mix is Slice 2al. Sky/Nishita (unlinked Vector) is Slice 2am. TEX_IMAGE→Color is Slice 2an. Gamma/HueSat on world Color is Slice 2ao. Bright/Contrast on world Color is Slice 2ap. Mix after Color chain is Slice 2aq. Linked Sky Vector (PREETHAM/HOSEK) is Slice 2ar. RGB Curves → Color is Slice 2as. 3-deep Math → Strength is Slice 2at. TEX_ENVIRONMENT×0 MULTIPLY → Strength is Slice 2au. Noise / 4-deep Math / non-zero tex Math / Mapping TEXTURE/NORMAL still refuse. Mapping POINT is Slice 2av. Loft world packs; mesh count cap raised (2aw 2048/128). Other loft shader refuses may remain.
 
 ## Build (Linux) — hello stub (default)
 
