@@ -548,17 +548,21 @@ def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
     (cycles-src/src/kernel/svm/types.h + mapping_util.h).
     POINT: rotate(vector * scale) + location.
     VECTOR: rotate(vector * scale) — Location packed for ABI, SVM ignores it.
-    TEXTURE / NORMAL still refuse Slice 2av.
+    TEXTURE accepted Slice 2ay (map_type=1); NORMAL still refuse.
     """
     vtype = str(getattr(map_node, "vector_type", "POINT") or "POINT").upper()
     if vtype == "POINT":
         map_type = 0
+    elif vtype == "TEXTURE":
+        # Slice 2ay: loft Metal_Sheet / Concrete dual-TEX Mix uses Mapping TEXTURE.
+        # Native MappingNode already set_mapping_type(NODE_MAPPING_TYPE_TEXTURE=1).
+        map_type = 1
     elif vtype == "VECTOR":
         map_type = 2
     else:
         raise QuantTraceSyncError(
             f"Mapping vector_type={vtype!r} refused "
-            "(Slice 2av accepts POINT or VECTOR; TEXTURE/NORMAL still refuse)"
+            "(Slice 2ay accepts POINT/TEXTURE/VECTOR; NORMAL still refuse)"
         )
     vec_in = _mapping_input_by_name(map_node, "Vector")
     if vec_in is None or not getattr(vec_in, "is_linked", False):
@@ -955,6 +959,300 @@ def _base_gamma_hsv_identity():
     }
 
 
+def _base_mix_identity():
+    """Slice 2ay identity — skip MixColorNode on Principled Base Color (2ax/2f bit-identical)."""
+    return {
+        "base_mix_type": 0,
+        "base_mix_fac": 0.5,
+        "base_mix_other": (0.0, 0.0, 0.0),
+        "base_mix_chain_is_a": 1,
+        "base_mix_clamp_factor": 0,
+        "base_mix_clamp_result": 0,
+        "base_mix_b_image_path": "",
+        "base_mix_b_image_colorspace": "",
+    }
+
+
+def _tex_vector_source_key(tex_node):
+    """Comparable Vector-graph key for dual TEX_IMAGE Mix (Slice 2ay).
+
+    Accepts: both unlinked UV, both the same Mapping node, both Mapping nodes
+    with equal vector_type + L/R/S + same TEX_COORD space (loft Metal_Sheet
+    uses two identical TEXTURE Mappings ← UV), or both the same TEX_COORD
+    output. Mismatched graphs refuse rather than inventing a second vector ABI.
+    """
+    inputs = getattr(tex_node, "inputs", None)
+    if inputs is None:
+        return ("unlinked",)
+    getter = getattr(inputs, "get", None)
+    vec = getter("Vector") if callable(getter) else None
+    if vec is None or not getattr(vec, "is_linked", False):
+        return ("unlinked",)
+    vlinks = list(getattr(vec, "links", None) or [])
+    if len(vlinks) != 1:
+        return ("multi", id(tex_node))
+    vnode = getattr(vlinks[0], "from_node", None)
+    vsock = getattr(vlinks[0], "from_socket", None)
+    # Peel REROUTE on Vector source.
+    vnode, vsock = _peel_reroute(vnode, vsock)
+    vtype = getattr(vnode, "type", None) if vnode is not None else None
+    vname = getattr(vsock, "name", "") if vsock is not None else ""
+    if vtype == "TEX_COORD":
+        return ("texcoord", str(vname).strip().lower())
+    if vtype == "MAPPING":
+        def _f3(sock_names, default):
+            for nm in sock_names:
+                s = None
+                inputs_m = getattr(vnode, "inputs", None)
+                if inputs_m is not None:
+                    g = getattr(inputs_m, "get", None)
+                    s = g(nm) if callable(g) else None
+                if s is None:
+                    continue
+                if getattr(s, "is_linked", False):
+                    return ("linked", nm)
+                dv = getattr(s, "default_value", default)
+                return tuple(round(float(dv[i]), 6) for i in range(3))
+            return tuple(round(float(default[i]), 6) for i in range(3))
+        loc = _f3(("Location",), (0.0, 0.0, 0.0))
+        rot = _f3(("Rotation",), (0.0, 0.0, 0.0))
+        scale = _f3(("Scale",), (1.0, 1.0, 1.0))
+        mtype = str(getattr(vnode, "vector_type", "POINT") or "POINT").upper()
+        space = "UV"
+        vec_in = None
+        inputs_m = getattr(vnode, "inputs", None)
+        if inputs_m is not None:
+            g = getattr(inputs_m, "get", None)
+            vec_in = g("Vector") if callable(g) else None
+        if vec_in is not None and getattr(vec_in, "is_linked", False):
+            ml = list(getattr(vec_in, "links", None) or [])
+            if len(ml) == 1:
+                tn = getattr(ml[0], "from_node", None)
+                ts = getattr(ml[0], "from_socket", None)
+                tn, ts = _peel_reroute(tn, ts)
+                if getattr(tn, "type", None) == "TEX_COORD":
+                    space = str(getattr(ts, "name", "UV") or "UV").strip().lower()
+                else:
+                    space = ("other", getattr(tn, "type", None))
+            else:
+                space = ("multi",)
+        elif vec_in is not None:
+            space = "unlinked"
+        return ("mapping", mtype, loc, rot, scale, space)
+    return ("other", vtype)
+
+
+def _mix_side_tex_node(sock):
+    """If Mix A/B is linked TEX_IMAGE Color (peel REROUTE), return that node else None."""
+    if sock is None or not getattr(sock, "is_linked", False):
+        return None
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        return None
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    if getattr(fn, "type", None) != "TEX_IMAGE":
+        return None
+    sock_name = getattr(fs, "name", "Color") if fs is not None else "Color"
+    if sock_name not in ("Color", "color"):
+        return None
+    return fn
+
+
+def _fold_constant_mix_base_rgb(mix_node, ctx: str):
+    """Fold both-unlinked constant Mix into Base Color RGB (prefer over Mix ABI)."""
+    fac_sock, a_sock, b_sock = _mix_input_socks(mix_node)
+    if fac_sock is None or a_sock is None or b_sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color constant Mix missing Fac/A/B (Slice 2ay)"
+        )
+    if getattr(fac_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix Factor is linked refused (Slice 2ay)"
+        )
+    op = str(getattr(mix_node, "blend_type", "MIX") or "MIX")
+    if op not in _WORLD_STRENGTH_MIX_OPS:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix blend_type {op!r} refused "
+            f"(Slice 2ay: MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only)"
+        )
+    fac = float(getattr(fac_sock, "default_value", 0.5) or 0.0)
+    if bool(getattr(mix_node, "clamp_factor", False)):
+        fac = min(1.0, max(0.0, fac))
+
+    def _rgb(sock):
+        stype = getattr(sock, "type", None)
+        dv = getattr(sock, "default_value", None)
+        if stype == "RGBA" or (hasattr(dv, "__len__") and not isinstance(dv, (str, bytes))):
+            return (float(dv[0]), float(dv[1]), float(dv[2]))
+        v = float(dv or 0.0)
+        return (v, v, v)
+
+    a = _rgb(a_sock)
+    b = _rgb(b_sock)
+    if op == "MIX":
+        out = tuple((1.0 - fac) * a[i] + fac * b[i] for i in range(3))
+    elif op == "ADD":
+        out = tuple(a[i] + fac * b[i] for i in range(3))
+    elif op == "SUBTRACT":
+        out = tuple(a[i] - fac * b[i] for i in range(3))
+    elif op == "MULTIPLY":
+        out = tuple(a[i] * ((1.0 - fac) + fac * b[i]) for i in range(3))
+    elif op == "DIVIDE":
+        out = []
+        for i in range(3):
+            denom = (1.0 - fac) + fac * b[i]
+            out.append(a[i] / denom if abs(denom) > 1e-12 else 0.0)
+        out = tuple(out)
+    else:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix fold unsupported (Slice 2ay)"
+        )
+    if bool(
+        getattr(mix_node, "clamp_result", False)
+        or getattr(mix_node, "use_clamp", False)
+    ):
+        out = tuple(min(1.0, max(0.0, c)) for c in out)
+    return out
+
+
+def _peel_base_color_mix(from_node, from_sock, ctx: str):
+    """Peel Mix immediately on Principled Base Color (Slice 2ay).
+
+    Returns (from_node, from_sock, mix_dict, dual_b_tex_node_or_None).
+    Shape 1: exactly one of A/B linked = chain; other unlinked constant RGB.
+    Shape 2: both linked TEX_IMAGE Color with matching Vector graphs; dual_b
+    is the non-chain TEX_IMAGE node; chain side returned as from_node/from_sock.
+    Both-unlinked constants: leave Mix in place (fold later; mix_type stays 0).
+    Linked Fac / VECTOR / unsupported blend / both-linked non-TEX_IMAGE refuse.
+    """
+    mix = dict(_base_mix_identity())
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype not in ("MIX", "MIX_RGB"):
+        return from_node, from_sock, mix, None
+    if ntype == "MIX":
+        data_type = str(getattr(from_node, "data_type", "FLOAT") or "FLOAT")
+        if data_type in ("VECTOR", "ROTATION"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix data_type {data_type!r} refused "
+                "(Slice 2ay: ShaderNodeMix RGBA / MixRGB only)"
+            )
+        if data_type == "FLOAT":
+            # Constant FLOAT Mix may fold; leave for later classify.
+            return from_node, from_sock, mix, None
+        if data_type not in ("RGBA", "COLOR"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix data_type {data_type!r} refused "
+                "(Slice 2ay: RGBA / MixRGB only)"
+            )
+    op = str(getattr(from_node, "blend_type", "MIX") or "MIX")
+    if op not in _WORLD_STRENGTH_MIX_OPS:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix blend_type {op!r} refused "
+            "(Slice 2ay: MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only)"
+        )
+    fac_sock, a_sock, b_sock = _mix_input_socks(from_node)
+    if fac_sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix missing Factor (Slice 2ay)"
+        )
+    if getattr(fac_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix Factor is linked refused "
+            "(Slice 2ay: unlinked Factor only; Fresnel/texture Fac still refuse)"
+        )
+    a_linked = bool(getattr(a_sock, "is_linked", False)) if a_sock is not None else False
+    b_linked = bool(getattr(b_sock, "is_linked", False)) if b_sock is not None else False
+    if not a_linked and not b_linked:
+        # Both unlinked constants → fold into base_color later (mix_type 0).
+        return from_node, from_sock, mix, None
+    clamp_factor = bool(getattr(from_node, "clamp_factor", False))
+    clamp_result = bool(
+        getattr(from_node, "clamp_result", False)
+        or getattr(from_node, "use_clamp", False)
+    )
+    fac = float(getattr(fac_sock, "default_value", 0.5) or 0.0)
+    # Do not use `or` on fac — 0.0 is valid.
+    if getattr(fac_sock, "default_value", None) is not None:
+        fac = float(fac_sock.default_value)
+    if clamp_factor:
+        fac = min(1.0, max(0.0, fac))
+
+    if a_linked and b_linked:
+        tex_a = _mix_side_tex_node(a_sock)
+        tex_b = _mix_side_tex_node(b_sock)
+        if tex_a is None or tex_b is None:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix both sides linked refused "
+                "(Slice 2ay: dual TEX_IMAGE Color only; Curves/Fresnel/nested Mix refuse)"
+            )
+        key_a = _tex_vector_source_key(tex_a)
+        key_b = _tex_vector_source_key(tex_b)
+        if key_a != key_b:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix dual TEX_IMAGE Vector graphs differ "
+                "(Slice 2ay: shared unlinked UV / same Mapping / same TEX_COORD only)"
+            )
+        # Primary chain = A (chain_is_a=1); B path = other image.
+        mix["base_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+        mix["base_mix_fac"] = float(fac)
+        mix["base_mix_other"] = (0.0, 0.0, 0.0)
+        mix["base_mix_chain_is_a"] = 1
+        mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
+        mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+        # B image path filled by caller after packing tex_b.
+        a_links = list(getattr(a_sock, "links", None) or [])
+        fn = getattr(a_links[0], "from_node", None)
+        fs = getattr(a_links[0], "from_socket", None)
+        fn, fs = _peel_reroute(fn, fs)
+        return fn, fs, mix, tex_b
+
+    # Exactly one side linked = chain; other must be unlinked constant RGB.
+    chain_is_a = 1 if a_linked else 0
+    other_sock = b_sock if a_linked else a_sock
+    chain_sock = a_sock if a_linked else b_sock
+    if other_sock is None or chain_sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix missing A/B (Slice 2ay)"
+        )
+    stype = getattr(other_sock, "type", None)
+    dv = getattr(other_sock, "default_value", None)
+    if stype == "RGBA" or (hasattr(dv, "__len__") and not isinstance(dv, (str, bytes))):
+        try:
+            other = (float(dv[0]), float(dv[1]), float(dv[2]))
+        except (TypeError, IndexError, ValueError) as e:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix other side not constant RGB "
+                "(Slice 2ay)"
+            ) from e
+    else:
+        try:
+            v = float(dv) if dv is not None else 0.0
+        except (TypeError, ValueError) as e:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix other side not constant "
+                "(Slice 2ay)"
+            ) from e
+        other = (v, v, v)
+    mix["base_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+    mix["base_mix_fac"] = float(fac)
+    mix["base_mix_other"] = other
+    mix["base_mix_chain_is_a"] = int(chain_is_a)
+    mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
+    mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+    links = list(getattr(chain_sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix chain multi-link refused (Slice 2ay)"
+        )
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    return fn, fs, mix, None
+
+
 def _peel_reroute(from_node, from_sock):
     """Follow REROUTE until the real source (no ABI; loft uses REROUTE freely)."""
     for _ in range(64):
@@ -1094,7 +1392,7 @@ def _peel_base_color_gamma_hsv(from_node, from_sock, ctx: str):
     if ntype in ("MIX", "MIX_RGB"):
         raise QuantTraceSyncError(
             f"{ctx} Principled.Base Color from {ntype!r} refused "
-            f"(Slice 2ax: Mix→Base Color next; linked-Fac/Curves loft shape)"
+            f"(Slice 2ay: unsupported Mix after Gamma/HueSat peel)"
         )
     if ntype in ("TEX_NOISE", "NOISE"):
         raise QuantTraceSyncError(
@@ -1104,57 +1402,94 @@ def _peel_base_color_gamma_hsv(from_node, from_sock, ctx: str):
 
 
 def _base_color_tex_and_gh(sock, *, object_name: str = "", mat=None):
-    """Principled Base Color: peel REROUTE + Gamma/HueSat then TEX_IMAGE or constant.
+    """Principled Base Color: peel REROUTE + Mix + Gamma/HueSat then TEX_IMAGE/constant.
 
-    Returns (tex_info, gamma_hsv_dict, base_color_rgb_or_None).
-    base_color_rgb_or_None is set when the remaining source is an unlinked Color
-    default after peels (constant Base Color with Gamma/HSV). None means keep
-    Principled socket default (TEX_IMAGE path or unlinked Principled).
+    Returns (tex_info_with_mix, gamma_hsv_dict, base_color_rgb_or_None).
+    Mix peel (Slice 2ay) runs before Gamma/HueSat. tex_info carries base_mix_*
+    (and optional base_mix_b_image_path for dual TEX_IMAGE). type 0 = identity.
     """
     ctx = _mat_refuse_ctx(object_name, mat)
     empty = _empty_tex_info()
     gh = dict(_base_gamma_hsv_identity())
+    mix = dict(_base_mix_identity())
     if sock is None or not getattr(sock, "is_linked", False):
-        return empty, gh, None
+        return {**empty, **mix}, gh, None
     links = list(getattr(sock, "links", None) or [])
     if not links:
-        return empty, gh, None
+        return {**empty, **mix}, gh, None
     if len(links) != 1:
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color has multiple links (Slice 2ax)"
+            f"{ctx} Principled.Base Color has multiple links (Slice 2ay)"
         )
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
     from_node, from_sock = _peel_reroute(from_node, from_sock)
+    from_node, from_sock, mix, dual_b = _peel_base_color_mix(from_node, from_sock, ctx)
+    # Both-unlinked constant Mix left in place — fold now (mix_type stays 0).
+    ntype0 = getattr(from_node, "type", None) if from_node is not None else None
+    if (
+        mix.get("base_mix_type", 0) == 0
+        and dual_b is None
+        and ntype0 in ("MIX", "MIX_RGB")
+    ):
+        fac_sock, a_sock, b_sock = _mix_input_socks(from_node)
+        a_l = bool(getattr(a_sock, "is_linked", False)) if a_sock is not None else False
+        b_l = bool(getattr(b_sock, "is_linked", False)) if b_sock is not None else False
+        if not a_l and not b_l:
+            folded = _fold_constant_mix_base_rgb(from_node, ctx)
+            return {**empty, **mix}, gh, folded
+        # FLOAT Mix or other leftover — refuse named 2ay.
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color from {ntype0!r} refused "
+            f"(Slice 2ay: RGBA Mix chain / dual TEX_IMAGE / constant fold only)"
+        )
     from_node, from_sock, unlinked_rgb, gh = _peel_base_color_gamma_hsv(
         from_node, from_sock, ctx
     )
     if unlinked_rgb is not None:
-        return empty, gh, unlinked_rgb
+        return {**empty, **mix}, gh, unlinked_rgb
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "TEX_IMAGE":
         sock_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
         if sock_name not in ("Color", "color"):
             raise QuantTraceSyncError(
                 f"{ctx} Principled.Base Color must come from Image Texture Color "
-                f"(Slice 2ax; got {sock_name!r})"
+                f"(Slice 2ay; got {sock_name!r})"
             )
-        # Reuse Vector/path packing by building a one-link sock view via the
-        # existing helper: temporarily require the link shape. Call the body
-        # of _tex_image_from_sock by faking through a thin wrapper.
-        return _tex_image_from_tex_node(from_node, from_sock, "Base Color", ctx), gh, None
+        tex = _tex_image_from_tex_node(from_node, from_sock, "Base Color", ctx)
+        if dual_b is not None:
+            # Shape 2: pack B image path/cs; reuse primary Vector (already matched).
+            img = getattr(dual_b, "image", None)
+            if img is None:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color Mix B TEX_IMAGE has no image "
+                    "(Slice 2ay)"
+                )
+            path = _abspath_image(img)
+            if not path:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color Mix B TEX_IMAGE has no filepath "
+                    "(Slice 2ay)"
+                )
+            cs = ""
+            settings = getattr(img, "colorspace_settings", None)
+            if settings is not None:
+                cs = str(getattr(settings, "name", "") or "")
+            mix["base_mix_b_image_path"] = path
+            mix["base_mix_b_image_colorspace"] = cs
+        return {**tex, **mix}, gh, None
     if ntype in ("MIX", "MIX_RGB"):
         raise QuantTraceSyncError(
             f"{ctx} Principled.Base Color from {ntype!r} refused "
-            f"(Slice 2ax: Mix→Base Color next)"
+            f"(Slice 2ay: second Mix / unsupported Mix shape)"
         )
     if ntype in ("TEX_NOISE", "NOISE"):
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color Noise refused (Slice 2ax)"
+            f"{ctx} Principled.Base Color Noise refused (Slice 2ay)"
         )
     raise QuantTraceSyncError(
         f"{ctx} Principled.Base Color from {ntype!r} refused "
-        f"(Slice 2ax: TEX_IMAGE / unlinked Gamma/HueSat / constant only)"
+        f"(Slice 2ay: TEX_IMAGE / Mix / unlinked Gamma/HueSat / constant only)"
     )
 
 
@@ -1223,6 +1558,7 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         "transmission_weight": 0.0,
         "tex_ob_ref": None,
         **_base_gamma_hsv_identity(),
+        **_base_mix_identity(),
     }
     if mat is None:
         raise QuantTraceSyncError(
@@ -2892,7 +3228,7 @@ def _world_info(scene) -> dict:
     Color; proven const 0). 4-deep Math / TEX_IMAGE / color-linked Mix /
     RGB Curves / Noise / non-zero tex Math / ADD/SUB/DIV/POWER with a tex
     Color input still refuse. Slice 2av: Mapping POINT accepted (map_type 0);
-    VECTOR still map_type 2. TEXTURE/NORMAL still refuse.
+    VECTOR still map_type 2. TEXTURE accepted (2ay); NORMAL still refuse.
     """
     empty = {
         "world_strength": 0.0,
@@ -3451,6 +3787,27 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "base_hsv_fac": float(
             pr["base_hsv_fac"] if pr.get("base_hsv_fac") is not None else 1.0
         ),
+        # Slice 2ay: None-check — do not use `or` (type 0 / fac 0.0 valid).
+        "base_mix_type": int(
+            pr["base_mix_type"] if pr.get("base_mix_type") is not None else 0
+        ),
+        "base_mix_fac": float(
+            pr["base_mix_fac"] if pr.get("base_mix_fac") is not None else 0.5
+        ),
+        "base_mix_other": tuple(
+            float(x) for x in (pr.get("base_mix_other") or (0.0, 0.0, 0.0))[:3]
+        ),
+        "base_mix_chain_is_a": int(
+            pr["base_mix_chain_is_a"] if pr.get("base_mix_chain_is_a") is not None else 1
+        ),
+        "base_mix_clamp_factor": int(
+            pr["base_mix_clamp_factor"] if pr.get("base_mix_clamp_factor") is not None else 0
+        ),
+        "base_mix_clamp_result": int(
+            pr["base_mix_clamp_result"] if pr.get("base_mix_clamp_result") is not None else 0
+        ),
+        "base_mix_b_image_path": pr.get("base_mix_b_image_path") or "",
+        "base_mix_b_image_colorspace": pr.get("base_mix_b_image_colorspace") or "",
     }
     out.update(_pack_tex_ob_fields(pr, depsgraph=depsgraph))
     return out
@@ -4159,6 +4516,26 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.base_hsv_sat = _bf("base_hsv_sat", 1.0)
     desc.base_hsv_val = _bf("base_hsv_val", 1.0)
     desc.base_hsv_fac = _bf("base_hsv_fac", 1.0)
+    # Slice 2ay: type 0 / fac 0.0 valid — never `or` on type/fac.
+    def _bi(key, default):
+        v = packed.get(key, default)
+        if v is None:
+            return int(default)
+        return int(v)
+    desc.base_mix_type = _bi("base_mix_type", 0)
+    desc.base_mix_fac = _bf("base_mix_fac", 0.5)
+    other = packed.get("base_mix_other") or (0.0, 0.0, 0.0)
+    for i, v in enumerate(other[:3]):
+        desc.base_mix_other[i] = float(v)
+    desc.base_mix_chain_is_a = _bi("base_mix_chain_is_a", 1)
+    desc.base_mix_clamp_factor = _bi("base_mix_clamp_factor", 0)
+    desc.base_mix_clamp_result = _bi("base_mix_clamp_result", 0)
+    bip = (packed.get("base_mix_b_image_path") or "").encode("utf-8")
+    bics = (packed.get("base_mix_b_image_colorspace") or "").encode("utf-8")
+    keep.append(bip)
+    keep.append(bics)
+    desc.base_mix_b_image_path = bip if bip else None
+    desc.base_mix_b_image_colorspace = bics if bics else None
 
 
 def make_qt_simple_scene_type():
@@ -4478,6 +4855,14 @@ def make_qt_simple_scene_type():
             ("base_hsv_sat", ctypes.c_float),
             ("base_hsv_val", ctypes.c_float),
             ("base_hsv_fac", ctypes.c_float),
+            ("base_mix_type", ctypes.c_int),
+            ("base_mix_fac", ctypes.c_float),
+            ("base_mix_other", ctypes.c_float * 3),
+            ("base_mix_chain_is_a", ctypes.c_int),
+            ("base_mix_clamp_factor", ctypes.c_int),
+            ("base_mix_clamp_result", ctypes.c_int),
+            ("base_mix_b_image_path", ctypes.c_char_p),
+            ("base_mix_b_image_colorspace", ctypes.c_char_p),
         ]
 
     return QT_SimpleScene
@@ -4887,6 +5272,14 @@ def make_qt_scene_types():
             ("base_hsv_sat", ctypes.c_float),
             ("base_hsv_val", ctypes.c_float),
             ("base_hsv_fac", ctypes.c_float),
+            ("base_mix_type", ctypes.c_int),
+            ("base_mix_fac", ctypes.c_float),
+            ("base_mix_other", ctypes.c_float * 3),
+            ("base_mix_chain_is_a", ctypes.c_int),
+            ("base_mix_clamp_factor", ctypes.c_int),
+            ("base_mix_clamp_result", ctypes.c_int),
+            ("base_mix_b_image_path", ctypes.c_char_p),
+            ("base_mix_b_image_colorspace", ctypes.c_char_p),
         ]
 
     class QT_Light(ctypes.Structure):

@@ -507,6 +507,18 @@ typedef struct QT_SimpleScene {
   float base_hsv_sat;   /* default 1.0 */
   float base_hsv_val;   /* default 1.0 */
   float base_hsv_fac;   /* default 1.0; skip HSVNode when identity */
+  /* Slice 2ay: MixColorNode on Principled Base Color (mesh analog of world 2aq).
+   * type 0 = skip Mix (2ax/2f bit-identical). 1=MIX 2=ADD 3=SUB 4=MUL 5=DIV.
+   * Empty base_mix_b_image_path = constant other (base_mix_other).
+   * Nonempty B path = second ImageTextureNode (same Vector as primary); ignore other. */
+  int base_mix_type;
+  float base_mix_fac;
+  float base_mix_other[3];
+  int base_mix_chain_is_a; /* 1 = chain→A other/B-image→B; 0 = reverse */
+  int base_mix_clamp_factor;
+  int base_mix_clamp_result;
+  const char *base_mix_b_image_path;
+  const char *base_mix_b_image_colorspace;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -809,6 +821,16 @@ typedef struct QT_Mesh {
   float base_hsv_sat;   /* default 1.0 */
   float base_hsv_val;   /* default 1.0 */
   float base_hsv_fac;   /* default 1.0; skip HSVNode when identity */
+  /* Slice 2ay: MixColorNode on Principled Base Color (mesh analog of world 2aq).
+   * type 0 = skip. Empty B path = constant other; nonempty = second TEX_IMAGE. */
+  int base_mix_type;
+  float base_mix_fac;
+  float base_mix_other[3];
+  int base_mix_chain_is_a;
+  int base_mix_clamp_factor;
+  int base_mix_clamp_result;
+  const char *base_mix_b_image_path;
+  const char *base_mix_b_image_colorspace;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

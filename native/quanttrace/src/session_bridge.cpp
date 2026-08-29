@@ -58,7 +58,12 @@
  * Slice 2ax: GammaNode + HSVNode on Principled Base Color (base_gamma /
  *   base_hsv_* after tex_ob_tfm). Identity skips — 2f TEX_IMAGE bit-identical.
  *   Color → Gamma (if gamma!=1) → HSV (if not identity) → Base Color. Cite
- *   same GammaNode/HSVNode as world 2ao. Mix on Base Color still refuses.
+ *   same GammaNode/HSVNode as world 2ao.
+ * Slice 2ay: MixColorNode on Principled Base Color (base_mix_* after
+ *   base_hsv_fac; optional base_mix_b_image_path for dual TEX_IMAGE).
+ *   type 0 = skip — 2ax/2f bit-identical. Color → Gamma → HSV → Mix →
+ *   Base Color. Cite MixColorNode (same as world 2aq). Empty B path uses
+ *   base_mix_other; nonempty B shares primary Vector graph.
  * Slice 2ap: BrightContrastNode on world Color (world_bright / world_contrast).
  *   Identity (bright=0, contrast=0) skips — 2ao/2an/2am/2aa/2al bit-identical.
  *   Loft: Color → Gamma → HSV → BrightContrast → Background. Cite
@@ -301,6 +306,15 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->base_hsv_sat = 1.0f;
     d->base_hsv_val = 1.0f;
     d->base_hsv_fac = 1.0f;
+    /* Slice 2ay identity — mix_type=0 (memset is NOT identity for fac/other). */
+    d->base_mix_type = 0;
+    d->base_mix_fac = 0.5f;
+    d->base_mix_other[0] = d->base_mix_other[1] = d->base_mix_other[2] = 0.0f;
+    d->base_mix_chain_is_a = 1;
+    d->base_mix_clamp_factor = 0;
+    d->base_mix_clamp_result = 0;
+    d->base_mix_b_image_path = nullptr;
+    d->base_mix_b_image_colorspace = nullptr;
     /* Slice 2ap identity — bright=0 contrast=0 (memset is fine; set explicit). */
     d->world_bright = 0.0f;
     d->world_contrast = 0.0f;
@@ -580,6 +594,15 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->base_hsv_sat = s->base_hsv_sat;
     mesh->base_hsv_val = s->base_hsv_val;
     mesh->base_hsv_fac = s->base_hsv_fac;
+    /* Slice 2ay: Base Color Mix (+ optional second TEX_IMAGE). */
+    mesh->base_mix_type = s->base_mix_type;
+    mesh->base_mix_fac = s->base_mix_fac;
+    std::memcpy(mesh->base_mix_other, s->base_mix_other, sizeof(mesh->base_mix_other));
+    mesh->base_mix_chain_is_a = s->base_mix_chain_is_a;
+    mesh->base_mix_clamp_factor = s->base_mix_clamp_factor;
+    mesh->base_mix_clamp_result = s->base_mix_clamp_result;
+    mesh->base_mix_b_image_path = s->base_mix_b_image_path;
+    mesh->base_mix_b_image_colorspace = s->base_mix_b_image_colorspace;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1045,15 +1068,17 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * mode 6: TextureCoordinate Object → Mapping → Image Vector.
      * mode 7: TextureCoordinate Camera → Image Vector (NODE_TEXCO_CAMERA).
      * mode 8: TextureCoordinate Camera → Mapping → Image Vector. */
-    /* Slice 2ax: Color source → Gamma (if gamma!=1) → HSV (if not identity)
-     * → Principled Base Color. Identity skips nodes so 2f TEX_IMAGE cubes
-     * stay bit-identical. Cite shader_nodes.h GammaNode/HSVNode (same as
-     * world 2ao). Loft mesh order: TEX_IMAGE → [Gamma] → HueSat → Base Color. */
+    /* Slice 2ax/2ay: Color source → Gamma (if gamma!=1) → HSV (if not identity)
+     * → MixColorNode (if base_mix_type!=0) → Principled Base Color.
+     * type 0 keeps 2ax/2f bit-identical. Cite GammaNode/HSVNode/MixColorNode
+     * (world 2ao/2aq). Empty base_mix_b_image_path → constant other;
+     * nonempty → second ImageTextureNode sharing primary Vector graph. */
     {
         const float3 bcol = make_float3(m->base_color[0], m->base_color[1], m->base_color[2]);
         const bool use_gamma = (m->base_gamma != 1.0f);
         const bool use_hsv = !(m->base_hsv_hue == 0.5f && m->base_hsv_sat == 1.0f &&
                                m->base_hsv_val == 1.0f && m->base_hsv_fac == 1.0f);
+        const bool use_mix = (m->base_mix_type != 0);
         ShaderOutput *cur = nullptr;
         if (m->image_path && m->image_path[0]) {
             ImageTextureNode *img = wire_tex_image(
@@ -1085,6 +1110,53 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
                 h->set_color(bcol);
             }
             cur = h->output("Color");
+        }
+        if (use_mix) {
+            MixColorNode *mx = graph->create_node<MixColorNode>();
+            mx->set_blend_type(world_mix_blend_type(m->base_mix_type));
+            mx->set_fac(m->base_mix_fac);
+            mx->set_use_clamp(m->base_mix_clamp_factor != 0);
+            mx->set_use_clamp_result(m->base_mix_clamp_result != 0);
+            ShaderOutput *b_cur = nullptr;
+            if (m->base_mix_b_image_path && m->base_mix_b_image_path[0]) {
+                ImageTextureNode *img_b = wire_tex_image(
+                    graph.get(), m, m->base_mix_b_image_path,
+                    m->base_mix_b_image_colorspace, m->tex_vector_mode,
+                    m->map_location, m->map_rotation, m->map_scale, m->map_type);
+                b_cur = img_b->output("Color");
+            }
+            const float3 other = make_float3(m->base_mix_other[0],
+                                             m->base_mix_other[1],
+                                             m->base_mix_other[2]);
+            if (m->base_mix_chain_is_a) {
+                if (cur) {
+                    graph->connect(cur, mx->input("A"));
+                }
+                else {
+                    mx->set_a(bcol);
+                }
+                if (b_cur) {
+                    graph->connect(b_cur, mx->input("B"));
+                }
+                else {
+                    mx->set_b(other);
+                }
+            }
+            else {
+                if (b_cur) {
+                    graph->connect(b_cur, mx->input("A"));
+                }
+                else {
+                    mx->set_a(other);
+                }
+                if (cur) {
+                    graph->connect(cur, mx->input("B"));
+                }
+                else {
+                    mx->set_b(bcol);
+                }
+            }
+            cur = mx->output("Result");
         }
         if (cur) {
             graph->connect(cur, bsdf->input("Base Color"));

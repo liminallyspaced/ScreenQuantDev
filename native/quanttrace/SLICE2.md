@@ -1,8 +1,28 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ax landed** (2026-08-29 2pm PlugWalk ET). Peel REROUTE + unlinked Gamma + HueSat on Principled Base Color (`base_gamma` / `base_hsv_*` after `tex_ob_tfm`). Identity skips native Gamma/HSV — 2f TEX_IMAGE cubes bit-identical. Native wires Color → Gamma → HSV → Base Color (cite shader_nodes.h; mesh analog of world 2ao). Mix on Base Color still refuses (named Slice 2ax with object+material). Loft pack probe only — no loft Session Δmax claim. `is_tracer=1`. Native `0.0.51-slice2ax`. Addon `0.3.3`.
+Status: **Slice 2ay landed** (2026-08-29 3pm PlugWalk ET). Peel Mix on Principled Base Color (`base_mix_*` + optional `base_mix_b_image_path` after `base_hsv_fac`). Shape 1 constant-other + shape 2 dual TEX_IMAGE. Mapping TEXTURE packs (`map_type=1`). Identity type=0 keeps 2ax/2f bit-identical. Native Color → Gamma → HSV → Mix → Base Color. Loft Metal_Sheet dual-TEX MULTIPLY packs; first refuse now Bevel→Normal. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.52-slice2ay`. Addon `0.3.3`.
+
+## Slice 2ay — Mix → Principled Base Color (2026-08-29 3pm ET)
+
+Mesh analog of world Slice 2aq, plus dual TEX_IMAGE B path for loft Metal_Sheet / Concrete. ABI appends after `base_hsv_fac`. Packer peels REROUTE then Mix (unlinked Fac; MIX/ADD/SUB/MUL/DIV) then Gamma/HueSat then TEX_IMAGE/constant. Both-linked non-TEX_IMAGE / linked Fac / Curves / Fresnel refuse Slice 2ay (named). Dual TEX_IMAGE requires matching Vector graphs (value-equal Mapping OK — loft uses two identical TEXTURE Mappings ← UV).
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| mix CLAIM | 32²/4 | 5.36e-7 | 3.54e-9 | 0 | **PASS** |
+| mix CLAIM | 256²/128 | 4.77e-7 | 1.64e-9 | 0 | **PASS** |
+| mix_mul2 | 32²/4 | 5.22e-7 | 4.42e-9 | 0 | **PASS** |
+| mix_add | 32²/4 | 1.01e-6 | 7.01e-9 | 0 | **PASS** |
+| mix_hsv | 32²/4 | 8.20e-7 | 4.21e-9 | 0 | **PASS** |
+| tex 2f | 32²/4 | 1.01e-6 | 7.01e-9 | 0 | **PASS** |
+| hsv 2ax | 32²/4 | 1.61e-6 | 8.44e-9 | 0 | **PASS** |
+| point 2av | 32²/4 | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| mix_tex Fac | — | — | — | — | **REFUSE** Slice 2ay |
+| live mix vs tex | 32²/4 | 0.661 | — | 82 | graph live |
+
+Loft pack: first PACK_FAIL `Principled.Normal from 'BEVEL'` (Metal_Sheet Mix cleared). Next: Bevel→Normal, Fresnel-Fac Mix beds, GROUP, missing Botaniq. Not loft Session Δmax.
 
 ## Slice 2ax — Gamma/HueSat → Principled Base Color (2026-08-29 2pm ET)
+
 
 Mesh analog of world Slice 2ao. ABI appends `base_gamma` / `base_hsv_hue` / `base_hsv_sat` / `base_hsv_val` / `base_hsv_fac` after `tex_ob_tfm` on `QT_Mesh` + `QT_SimpleScene` mesh section. Packer peels REROUTE then one unlinked Gamma + one HueSat (either order) then TEX_IMAGE Color or constant Color default. Identity (gamma=1, hue=0.5, sat=1, val=1, fac=1) skips native nodes. Linked Hue/Sat/Value/Fac/Gamma, second Gamma/HueSat, Noise, Mix on Base Color refuse (Mix named Slice 2ax; object+material in error). Native `make_principled`: Color source → GammaNode → HSVNode → Base Color.
 
