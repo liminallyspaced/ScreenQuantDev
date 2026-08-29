@@ -9,7 +9,7 @@
 #  define QT_EXPORT __attribute__((visibility("default")))
 #endif
 
-static const char QT_VERSION[] = "0.0.35-slice2ah";
+static const char QT_VERSION[] = "0.0.36-slice2ai";
 
 QT_EXPORT const char *quanttrace_version(void)
 {

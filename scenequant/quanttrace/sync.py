@@ -1198,11 +1198,106 @@ def _mesh_arrays(obj) -> Tuple[List[float], List[int]]:
 
 
 
-def _world_strength_from_sock(sock) -> float:
-    """Resolve Background.Strength to a constant float (Slice 2ah).
+_WORLD_STRENGTH_MATH_OPS = frozenset(
+    {"ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "POWER"}
+)
+_WORLD_STRENGTH_MATH_MAX_DEPTH = 2  # Math → (Value|unlinked|Math…) one nest OK
 
-    Accepts unlinked default_value or a single ShaderNodeValue. Multi-link,
-    TEX_IMAGE / Mix / RGB Curves / Noise / Math / kitchens refuse.
+
+def _world_strength_math_input(sock, label: str, *, depth: int) -> float:
+    """Resolve a Math Value input: unlinked float, Value, or shallow Math (2ai)."""
+    if sock is None:
+        raise QuantTraceSyncError(f"{label} missing (Slice 2ai)")
+    if not getattr(sock, "is_linked", False):
+        return float(getattr(sock, "default_value", 0.0) or 0.0)
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"{label} multi-link refused (Slice 2ai)"
+        )
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype == "VALUE":
+        if from_sock is None:
+            raise QuantTraceSyncError(
+                f"{label} Value link has no from_socket (Slice 2ai)"
+            )
+        return float(getattr(from_sock, "default_value", 0.0) or 0.0)
+    if ntype == "MATH":
+        if depth >= _WORLD_STRENGTH_MATH_MAX_DEPTH:
+            raise QuantTraceSyncError(
+                f"{label} Math nest too deep (Slice 2ai max "
+                f"{_WORLD_STRENGTH_MATH_MAX_DEPTH})"
+            )
+        return _fold_world_strength_math(from_node, depth=depth)
+    raise QuantTraceSyncError(
+        f"{label} linked from {ntype!r} refused "
+        "(Slice 2ai: Value/Math/unlinked float only; "
+        "TEX_IMAGE/Mix/RGB Curves/Noise still refuse)"
+    )
+
+
+def _fold_world_strength_math(node, *, depth: int = 0) -> float:
+    """Fold ShaderNodeMath ADD/SUB/MUL/DIV/POWER with constant inputs (2ai)."""
+    op = str(getattr(node, "operation", "") or "")
+    if op not in _WORLD_STRENGTH_MATH_OPS:
+        raise QuantTraceSyncError(
+            f"world Background Strength Math operation {op!r} refused "
+            "(Slice 2ai: ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER only)"
+        )
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(
+            "world Background Strength Math has no inputs (Slice 2ai)"
+        )
+    getter = getattr(inputs, "get", None)
+    a_sock = getter("Value") if callable(getter) else None
+    b_sock = getter("Value_001") if callable(getter) else None
+    if a_sock is None or b_sock is None:
+        try:
+            a_sock = a_sock or inputs[0]
+            b_sock = b_sock or inputs[1]
+        except (IndexError, TypeError, KeyError) as e:
+            raise QuantTraceSyncError(
+                "world Background Strength Math missing Value/Value_001 "
+                "(Slice 2ai)"
+            ) from e
+    a = _world_strength_math_input(
+        a_sock, "world Background Strength Math.Value", depth=depth + 1
+    )
+    b = _world_strength_math_input(
+        b_sock, "world Background Strength Math.Value_001", depth=depth + 1
+    )
+    if op == "ADD":
+        return float(a + b)
+    if op == "SUBTRACT":
+        return float(a - b)
+    if op == "MULTIPLY":
+        return float(a * b)
+    if op == "DIVIDE":
+        if abs(b) < 1e-12:
+            raise QuantTraceSyncError(
+                "world Background Strength Math DIVIDE by zero refused "
+                "(Slice 2ai)"
+            )
+        return float(a / b)
+    # POWER
+    try:
+        return float(a ** b)
+    except (OverflowError, ValueError) as e:
+        raise QuantTraceSyncError(
+            f"world Background Strength Math POWER failed ({e}) (Slice 2ai)"
+        ) from e
+
+
+def _world_strength_from_sock(sock) -> float:
+    """Resolve Background.Strength to a constant float (Slice 2ah/2ai).
+
+    Accepts unlinked default_value, ShaderNodeValue, or ShaderNodeMath whose
+    Value inputs are unlinked floats / Value / shallow Math
+    (ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER). Multi-link, TEX_IMAGE / Mix /
+    RGB Curves / Noise / texture-driven Math / kitchens refuse.
     """
     if sock is None:
         return 0.0
@@ -1211,26 +1306,29 @@ def _world_strength_from_sock(sock) -> float:
     links = list(getattr(sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
-            "world Background Strength multi-link refused (Slice 2ah)"
+            "world Background Strength multi-link refused (Slice 2ai)"
         )
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
     ntype = getattr(from_node, "type", None) if from_node is not None else None
-    if ntype != "VALUE":
-        raise QuantTraceSyncError(
-            f"world Background Strength linked from {ntype!r} refused "
-            "(Slice 2ah: ShaderNodeValue or unlinked float only; "
-            "TEX_IMAGE/Mix/RGB Curves/Noise/Math still refuse)"
-        )
-    if from_sock is None:
-        raise QuantTraceSyncError(
-            "world Background Strength Value link has no from_socket (Slice 2ah)"
-        )
-    return float(getattr(from_sock, "default_value", 0.0) or 0.0)
+    if ntype == "VALUE":
+        if from_sock is None:
+            raise QuantTraceSyncError(
+                "world Background Strength Value link has no from_socket "
+                "(Slice 2ah)"
+            )
+        return float(getattr(from_sock, "default_value", 0.0) or 0.0)
+    if ntype == "MATH":
+        return _fold_world_strength_math(from_node, depth=0)
+    raise QuantTraceSyncError(
+        f"world Background Strength linked from {ntype!r} refused "
+        "(Slice 2ai: ShaderNodeValue / ShaderNodeMath / unlinked float only; "
+        "TEX_IMAGE/Mix/RGB Curves/Noise still refuse)"
+    )
 
 
 def _world_info(scene) -> dict:
-    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah).
+    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah/2ai).
 
     Returns dict:
       world_strength: float
@@ -1245,8 +1343,9 @@ def _world_info(scene) -> dict:
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
     refuse with Slice 2ac in the error.
-    Slice 2ah: Strength may be unlinked default_value or a single
-    ShaderNodeValue. TEX_IMAGE/Mix/RGB/Noise/Math → Strength still refuse.
+    Slice 2ah/2ai: Strength may be unlinked default_value, ShaderNodeValue,
+    or ShaderNodeMath (ADD/SUB/MUL/DIV/POWER) ← Value/unlinked/shallow Math.
+    TEX_IMAGE/Mix/RGB/Noise/texture-driven Math → Strength still refuse.
     """
     empty = {
         "world_strength": 0.0,
