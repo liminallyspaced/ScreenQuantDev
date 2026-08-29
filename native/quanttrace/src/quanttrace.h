@@ -28,6 +28,9 @@
  * Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (parallel bump_* ABI;
  *   not reuse of normal_image_path). Strength/Distance unlinked floats
  *   (Blender 5.2 RNA 1.0 / 0.001). invert RNA 0/1. use_object_space false.
+ * Slice 2bc: Bump Height ← TEX_NOISE Color/Factor (bump_noise_* after
+ *   bump_invert). enable=0 keeps 2x bit-identical. Vector unlinked
+ *   Generated. Same RNA as 2bb Noise. use_color 1=Color 0=Factor.
  * Slice 2az: Principled.Normal ← Bevel (samples + unlinked Radius). Optional
  *   Bevel.Normal ← NormalMap and/or Bump. When bump_* + normal_* both set,
  *   NormalMap → Bump.Normal → (Bevel?) → Principled (loft Metal_Sheet shape).
@@ -501,6 +504,23 @@ typedef struct QT_SimpleScene {
   float bump_strength;
   float bump_distance;
   int bump_invert;
+  /* Slice 2bc: NoiseTextureNode → Bump Height. enable=0 keeps 2x
+   * bit-identical (TEX_IMAGE Height). Vector unlinked Generated.
+   * Pack Blender 5.2 RNA Cycles uses (same as rough_ramp_noise_*).
+   * use_color 1 = Color, 0 = Factor (NODE_CONVERT_CF if Color). */
+  int bump_noise_enable;
+  int bump_noise_dimensions;
+  int bump_noise_type;
+  int bump_noise_normalize;
+  float bump_noise_w;
+  float bump_noise_scale;
+  float bump_noise_detail;
+  float bump_noise_roughness;
+  float bump_noise_lacunarity;
+  float bump_noise_offset;
+  float bump_noise_gain;
+  float bump_noise_distortion;
+  int bump_noise_use_color;
   /* Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight.
    * thin_wall: 0/1 from unlinked BOOLEAN RNA default_value.
    * transmission_weight: unlinked Transmission Weight RNA default (0 if missing).
@@ -853,6 +873,23 @@ typedef struct QT_Mesh {
   float bump_strength;
   float bump_distance;
   int bump_invert;
+  /* Slice 2bc: NoiseTextureNode → Bump Height. enable=0 keeps 2x
+   * bit-identical (TEX_IMAGE Height). Vector unlinked Generated.
+   * Pack Blender 5.2 RNA Cycles uses (same as rough_ramp_noise_*).
+   * use_color 1 = Color, 0 = Factor (NODE_CONVERT_CF if Color). */
+  int bump_noise_enable;
+  int bump_noise_dimensions;
+  int bump_noise_type;
+  int bump_noise_normalize;
+  float bump_noise_w;
+  float bump_noise_scale;
+  float bump_noise_detail;
+  float bump_noise_roughness;
+  float bump_noise_lacunarity;
+  float bump_noise_offset;
+  float bump_noise_gain;
+  float bump_noise_distortion;
+  int bump_noise_use_color;
   /* Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight. */
   int thin_wall;
   float transmission_weight;

@@ -1,6 +1,33 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bb landed** (2026-08-29 6pm PlugWalk ET). NoiseTextureNode → RGBRampNode Fac → Principled.Roughness (`rough_ramp_noise_*` after `rough_ramp_fac`). enable=0 keeps 2ba bit-identical (Fac float or TEX_IMAGE). Pack Blender 5.2 RNA Cycles uses (dimensions, type, normalize, W/Scale/Detail/Roughness/Lacunarity/Offset/Gain/Distortion); Vector unlinked Generated. Loft Plane census: 3D FBM normalize, Fac out, Scale=150 Detail=16 Distortion=0.2, identity mapping; 854 loft Noise→ColorRamp Fac all unlinked. Named refuse Fresnel/LayerWeight/GROUP/Mix/linked Vector. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.55-slice2bb`. Addon `0.3.3`.
+Status: **Slice 2bc landed** (2026-08-29 7pm PlugWalk ET). NoiseTextureNode → BumpNode Height (`bump_noise_*` after `bump_invert`). enable=0 keeps 2x bit-identical (TEX_IMAGE Height). Pack Blender 5.2 RNA Cycles uses (dimensions, type, normalize, W/Scale/Detail/Roughness/Lacunarity/Offset/Gain/Distortion); Vector unlinked Generated. Loft Plane census: 3D FBM normalize, Color (or Factor) out → Bump.Height, Scale=150 Detail=16 Distortion=0.2, identity mapping. Named refuse linked Vector / non-identity texture_mapping / linked Scale. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.56-slice2bc`. Addon `0.3.3`.
+
+## Slice 2bc — Noise → Bump.Height → Principled.Normal (2026-08-29 7pm ET)
+
+Loft leftover after 2bb (Bump Height not TEX_IMAGE): TEX_IMAGE.Color 4409 already 2x; leftover TEX_NOISE.Color 17 / Factor 6 / REROUTE 4 / VALTORGB 3 / SEPARATE_COLOR 2 / MATH 1. Dominant: Noise → Bump.Height. Claim cube matches loft Plane / mat `0` Noise RNA: ShaderNodeTexNoise **3D FBM** normalize=True, Color out (Factor also packed), Vector unlinked Generated (identity TexMapping POINT loc0/rot0/scale1). Unlinked: W=0 Scale=**150** Detail=**16** Roughness=0.5 Lacunarity=2 Offset=0 Gain=1 Distortion=**0.2**. Peel REROUTE. No bake.
+
+Cite Cycles `shader_nodes.cpp` NODE_DEFINE(NoiseTextureNode) + BumpNode: LINK_TEXTURE_GENERATED Vector, NODE_NOISE_FBM, use_normalize. Native fills ATTR_STD_GENERATED when enable≠0. Color → Height NODE_CONVERT_CF; Fac → Height direct. `refine_bump_nodes` clones Height. Linked Vector / non-identity texture_mapping / linked Scale etc. refuse by name. enable=0 + bump_image_path keeps 2x bit-identical.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| noise CLAIM (Color) | 32²/4 | 4.65e-6 | 4.22e-8 | 0 | **PASS** |
+| noise CLAIM (Color) | 256²/128 | 6.32e-6 | 5.80e-8 | 0 | **PASS** |
+| noise_fac | 32²/4 | 5.01e-6 | 4.79e-8 | 0 | **PASS** |
+| bump 2x | 32²/4 | 2.38e-7 | 5.49e-9 | 0 | **PASS** |
+| noise 2bb | 32²/4 | 3.28e-5 | 1.94e-7 | 0 | **PASS** |
+| bevel 2az | 32²/4 | 4.77e-6 | 2.05e-8 | 0 | **PASS** |
+| mix 2ay | 32²/4 | 5.36e-7 | 3.54e-9 | 0 | **PASS** |
+| point 2av | 32²/4 | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| linked Noise Vector | — | — | — | — | **REFUSE** Slice 2bc |
+| non-identity mapping | — | — | — | — | **REFUSE** Slice 2bc |
+| linked Noise Scale | — | — | — | — | **REFUSE** Slice 2bc |
+
+Loft pack: Noise → Bump.Height cleared (REROUTE peel). First PACK_FAIL `object='Cube.001' material='Concrete_Facade_ufouccbo' Principled.Base Color from 'CURVE_RGB' refused (Slice 2ay: TEX_IMAGE / Mix / unlinked Gamma/HueSat / constant only)`. Next: RGB Curves → Base Color (mesh analog of world 2as), leftover Bump Height VALTORGB/SEPARATE/MATH, Fresnel-Fac Mix / GROUP / Botaniq. Not loft Session Δmax.
+
+ABI: `bump_noise_enable` / `dimensions` / `type` / `normalize` / `w` / `scale` / `detail` / `roughness` / `lacunarity` / `offset` / `gain` / `distortion` / `use_color` after `bump_invert` on `QT_Mesh` + `QT_SimpleScene`. enable=0 skips NoiseTextureNode on Bump Height. Native `0.0.56-slice2bc`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-noise-bump-32-pair.png`. Tools `_quanttrace_slice2bc_scene/smoke.py`.
 
 ## Slice 2bb — Noise → ColorRamp.Fac → Principled.Roughness (2026-08-29 6pm ET)
 

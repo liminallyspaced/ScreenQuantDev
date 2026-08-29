@@ -74,6 +74,10 @@
  *   (set_dimensions, set_type, set_use_normalize, set_scale, set_detail,
  *   set_roughness, set_lacunarity, set_distortion, set_w, set_offset,
  *   set_gain). Vector unlinked LINK_TEXTURE_GENERATED. Fac or Color.
+ * Slice 2bc: NoiseTextureNode → BumpNode Height (bump_noise_*).
+ *   enable=0 keeps 2x bit-identical (TEX_IMAGE Height). Same Noise RNA
+ *   as 2bb. Color → Height via NODE_CONVERT_CF; Fac → Height direct.
+ *   Fill ATTR_STD_GENERATED when enable≠0.
  * Slice 2ap: BrightContrastNode on world Color (world_bright / world_contrast).
  *   Identity (bright=0, contrast=0) skips — 2ao/2an/2am/2aa/2al bit-identical.
  *   Loft: Color → Gamma → HSV → BrightContrast → Background. Cite
@@ -349,6 +353,20 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->rough_ramp_noise_gain = 1.0f;
     d->rough_ramp_noise_distortion = 0.0f;
     d->rough_ramp_noise_use_color = 0;
+    /* Slice 2bc identity — enable=0 skips Noise on Bump Height (2x bit-identical). */
+    d->bump_noise_enable = 0;
+    d->bump_noise_dimensions = 3;
+    d->bump_noise_type = QT_NOISE_FBM;
+    d->bump_noise_normalize = 1;
+    d->bump_noise_w = 0.0f;
+    d->bump_noise_scale = 5.0f;
+    d->bump_noise_detail = 2.0f;
+    d->bump_noise_roughness = 0.5f;
+    d->bump_noise_lacunarity = 2.0f;
+    d->bump_noise_offset = 0.0f;
+    d->bump_noise_gain = 1.0f;
+    d->bump_noise_distortion = 0.0f;
+    d->bump_noise_use_color = 0;
     /* Slice 2ap identity — bright=0 contrast=0 (memset is fine; set explicit). */
     d->world_bright = 0.0f;
     d->world_contrast = 0.0f;
@@ -618,6 +636,19 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->bump_strength = s->bump_strength;
     mesh->bump_distance = s->bump_distance;
     mesh->bump_invert = s->bump_invert;
+    mesh->bump_noise_enable = s->bump_noise_enable;
+    mesh->bump_noise_dimensions = s->bump_noise_dimensions;
+    mesh->bump_noise_type = s->bump_noise_type;
+    mesh->bump_noise_normalize = s->bump_noise_normalize;
+    mesh->bump_noise_w = s->bump_noise_w;
+    mesh->bump_noise_scale = s->bump_noise_scale;
+    mesh->bump_noise_detail = s->bump_noise_detail;
+    mesh->bump_noise_roughness = s->bump_noise_roughness;
+    mesh->bump_noise_lacunarity = s->bump_noise_lacunarity;
+    mesh->bump_noise_offset = s->bump_noise_offset;
+    mesh->bump_noise_gain = s->bump_noise_gain;
+    mesh->bump_noise_distortion = s->bump_noise_distortion;
+    mesh->bump_noise_use_color = s->bump_noise_use_color;
     mesh->thin_wall = s->thin_wall;
     mesh->transmission_weight = s->transmission_weight;
     mesh->tex_ob_use_transform = s->tex_ob_use_transform;
@@ -988,8 +1019,9 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->aniso_rot_tex_vector_mode) ||
            tex_mode_is_generated(m->tangent_tex_vector_mode) ||
            tex_mode_is_generated(m->bump_tex_vector_mode) ||
-           /* Slice 2bb: NoiseTextureNode Vector LINK_TEXTURE_GENERATED. */
-           (m->rough_ramp_noise_enable != 0);
+           /* Slice 2bb/2bc: NoiseTextureNode Vector LINK_TEXTURE_GENERATED. */
+           (m->rough_ramp_noise_enable != 0) ||
+           (m->bump_noise_enable != 0);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -1323,17 +1355,47 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             graph->connect(img->output("Color"), nmap->input("Color"));
         }
         BumpNode *bump = nullptr;
-        if (m->bump_image_path && m->bump_image_path[0]) {
-            ImageTextureNode *img = wire_tex_image(
-                graph.get(), m, m->bump_image_path, m->bump_image_colorspace,
-                m->bump_tex_vector_mode, m->bump_map_location, m->bump_map_rotation,
-                m->bump_map_scale, m->bump_map_type);
+        const bool bump_noise = (m->bump_noise_enable != 0);
+        const bool bump_image = (m->bump_image_path && m->bump_image_path[0]);
+        if (bump_noise || bump_image) {
             bump = graph->create_node<BumpNode>();
             bump->set_invert(m->bump_invert != 0);
             bump->set_use_object_space(false);
             bump->set_strength(m->bump_strength);
             bump->set_distance(m->bump_distance);
-            graph->connect(img->output("Color"), bump->input("Height"));
+            if (bump_noise) {
+                /* Cite intern/cycles/scene/shader_nodes.cpp NODE_DEFINE(NoiseTextureNode).
+                 * Vector unlinked → LINK_TEXTURE_GENERATED. Color → Height NODE_CONVERT_CF. */
+                NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+                int dims = m->bump_noise_dimensions;
+                if (dims < 1 || dims > 4) {
+                    dims = 3;
+                }
+                noise->set_dimensions(dims);
+                noise->set_type(static_cast<NodeNoiseType>(m->bump_noise_type));
+                noise->set_use_normalize(m->bump_noise_normalize != 0);
+                noise->set_w(m->bump_noise_w);
+                noise->set_scale(m->bump_noise_scale);
+                noise->set_detail(m->bump_noise_detail);
+                noise->set_roughness(m->bump_noise_roughness);
+                noise->set_lacunarity(m->bump_noise_lacunarity);
+                noise->set_offset(m->bump_noise_offset);
+                noise->set_gain(m->bump_noise_gain);
+                noise->set_distortion(m->bump_noise_distortion);
+                if (m->bump_noise_use_color != 0) {
+                    graph->connect(noise->output("Color"), bump->input("Height"));
+                }
+                else {
+                    graph->connect(noise->output("Fac"), bump->input("Height"));
+                }
+            }
+            else {
+                ImageTextureNode *img = wire_tex_image(
+                    graph.get(), m, m->bump_image_path, m->bump_image_colorspace,
+                    m->bump_tex_vector_mode, m->bump_map_location, m->bump_map_rotation,
+                    m->bump_map_scale, m->bump_map_type);
+                graph->connect(img->output("Color"), bump->input("Height"));
+            }
             if (nmap) {
                 graph->connect(nmap->output("Normal"), bump->input("Normal"));
             }
