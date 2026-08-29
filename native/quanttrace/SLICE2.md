@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ap landed** (2026-08-29 6am PlugWalk ET). Bright/Contrast → world Background Color (`world_bright` / `world_contrast` after `world_hsv_fac`). Identity skip keeps 2ao/2an/2am/2aa/2al bit-identical. rgb_bc 32²/4 Δmax=5.96e-7 PASS / 256²/128 Δmax=5.96e-7 PASS. rgb_gamma_hsv_bc loft 32²/4 Δmax=5.96e-7 PASS / 256²/128 Δmax=5.96e-7 PASS. hdr_bc Bright=0.08 Contrast=0.05 32²/4 Δmax=9.08e-4 PASS / 256²/128 Δmax=1.98e-4 PASS. rgb_gamma/rgb/hdr/nishita/teximage 32²/4 PASS. Stock rgb_bc vs unlinked RGB Δmax=0.350 (lever live). Noise refuses. `is_tracer=1`. Native `0.0.43-slice2ap`. Addon `0.3.3`.
+Status: **Slice 2aq landed** (2026-08-29 7am PlugWalk ET). Mix after world Color chain → Background Color (`world_mix_*` after `world_contrast`). Identity skip (mix_type=0) keeps 2ap/2ao/2an/2am/2aa/2al bit-identical. rgb_mix 32²/4 Δmax=5.96e-7 PASS / 256²/128 Δmax=5.96e-7 PASS. rgb_hsv_mix 32²/4 Δmax=7.15e-7 PASS / 256²/128 Δmax=4.77e-7 PASS. rgb_gamma_hsv_mix loft-ish 32²/4 Δmax=7.15e-7 PASS / 256²/128 Δmax=4.77e-7 PASS. hdr_mix fac=0.25 other=(0.05,0.05,0.08) 32²/4 Δmax=4.88e-4 PASS / 256²/128 Δmax=1.58e-4 PASS. rgb_bc/rgb/hdr/nishita/teximage 32²/4 PASS. Stock rgb_mix vs unlinked RGB Δmax=0.5 (lever live). Noise refuses. `is_tracer=1`. Native `0.0.44-slice2aq`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -22,6 +22,77 @@ addon zip or public commit tree.
 
 
 
+
+
+---
+
+## 7am PlugWalk (2026-08-29) — Mix → world Color (Slice 2aq)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Retarget: 2ap packed Bright/Contrast and deferred Mix after HSV. Typical loft EasyHDR chains end with Mix (Color → Gamma → HSV → BrightContrast → Mix → Background). This hour peels Mix when Fac is unlinked and exactly one of A/B is a constant RGB (other side = chain), then peels Gamma/HSV/BC on the chain as today.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Cycles `MixColorNode` (`set_blend_type`, `set_fac`, `set_a`, `set_b`, `set_use_clamp`, `set_use_clamp_result`; SOCKET Factor default 0.5). Cite `shader_nodes.h` / `NodeMix` (`NODE_MIX_BLEND/ADD/SUB/MUL/DIV`). Blender 5.2 `ShaderNodeMix` `data_type=RGBA` (COLOR) or `MIX_RGB`; blend MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only (same ops as Slice 2aj `_WORLD_STRENGTH_MIX_OPS`). |
+| ABI | `world_mix_type` / `world_mix_fac` / `world_mix_other[3]` / `world_mix_chain_is_a` / `world_mix_clamp_factor` / `world_mix_clamp_result` after `world_contrast` on `QT_SimpleScene` + `QT_Scene`. type 0 = skip MixColorNode (2ap/2ao/2an/2am/2aa/2al bit-identical). |
+| Python | `_peel_world_mix` then `_peel_world_gamma_hsv`. Mix both-sides-constant stays 2al fold into `world_color`. Linked Fac / both-linked non-constant / second Mix / VECTOR Mix / unsupported blend / Noise / RGB Curves / linked Sky Vector refuse Slice 2aq. |
+| Native | Color source → Gamma → HSV → BrightContrast → **MixColorNode (if type!=0)** → Background Color. Chain feeds A or B per `world_mix_chain_is_a`. Version `0.0.44-slice2aq`. |
+| Version | `0.0.44-slice2aq` |
+| Tools | `_quanttrace_slice2aq_scene/smoke.py` (modes rgb_mix / rgb_hsv_mix / rgb_gamma_hsv_mix / hdr_mix / rgb_bc / rgb / hdr / nishita / teximage / noise / unlinked_rgb) |
+
+### Measured — rgb_mix (claim)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **5.96e-7** | 2.36e-9 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **5.96e-7** | 1.40e-9 | 0 / 65536 | **PASS** |
+
+### Measured — rgb_hsv_mix (claim)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **7.15e-7** | 2.48e-9 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **4.77e-7** | 1.43e-9 | 0 / 65536 | **PASS** |
+
+### Measured — rgb_gamma_hsv_mix loft-ish (claim)
+
+Color → Gamma 2.2 → HueSat → Mix fac=0.5 other=(0,0,0).
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **7.15e-7** | 2.56e-9 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **4.77e-7** | 1.42e-9 | 0 / 65536 | **PASS** |
+
+### Measured — hdr_mix EasyHDR-like (claim)
+
+Mix fac=0.25 other=(0.05,0.05,0.08) on 2aa equirect (mild so 32²/4 stays under 1e-3).
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **4.88e-4** | 3.17e-6 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **1.58e-4** | 6.86e-7 | 0 / 65536 | **PASS** |
+
+### Measured — secondary / regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| rgb_bc 2ap | 5.96e-7 | 2.29e-9 | 0 | **PASS** |
+| rgb 2al | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| nishita 2am | 1.91e-6 | 1.87e-8 | 0 | **PASS** |
+| teximage 2an Generated FLAT | 9.73e-4 | 2.79e-6 | 0 | **PASS** |
+| Stock rgb_mix vs unlinked RGB | 0.500 | 0.223 | 1024 | live |
+
+Identity skip: rgb_bc / rgb / hdr / nishita / teximage packed `world_mix_type=0`; Δmax matches prior slices within noise. Proof plate `docs/proof/quanttrace-mix-color-32-pair.png` (rgb_mix stock|session) + `/workspace/quanttrace-mix-color-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty / still refuses
+
+- Linked Mix Factor; both A/B linked non-constant; second Mix; VECTOR/FLOAT Mix as Color Mix-chain; unsupported blend (SCREEN/OVERLAY/…).
+- RGB Curves; Noise; linked Sky Vector; kitchens / still-life 1px / SSS / sky-256 residue still document-only.
+- Next-after-2aq notes: linked Sky Vector, RGB Curves (Mix done).
 
 
 ## 6am PlugWalk (2026-08-29) — Bright/Contrast → world Color (Slice 2ap)

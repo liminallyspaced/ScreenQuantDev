@@ -56,6 +56,12 @@
  *   skips BrightContrastNode — 2ao/2an/2am/2aa/2al bit-identical. Loft
  *   order: Color → Gamma → HSV → BrightContrast → Background. Cite
  *   shader_nodes.h BrightContrastNode (set_bright, set_contrast).
+ * Slice 2aq: Mix after world Color chain → Background Color (world_mix_*
+ *   after world_contrast). type 0 = skip MixColorNode — 2ap/2ao/2an/2am/
+ *   2aa/2al bit-identical. Chain → Mix (A or B) + constant other →
+ *   Background. Cite shader_nodes.h MixColorNode (blend_type, fac, a, b,
+ *   use_clamp, use_clamp_result). ShaderNodeMix data_type RGBA / MixRGB;
+ *   MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only.
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  *   Empty Object ref (2l) stays use_transform=false / NODE_TEXCO_OBJECT.
  *   Pointer set → NODE_TEXCO_OBJECT_WITH_TRANSFORM + packed inverse of ob_tfm.
@@ -175,6 +181,13 @@ typedef struct QT_SimpleScene {
   /* Slice 2ap: Bright/Contrast on world Color. Identity skips native node. */
   float world_bright;    /* 0.0 = identity */
   float world_contrast;  /* 0.0 = identity */
+  /* Slice 2aq: Mix after Color chain. type 0 = skip MixColorNode. */
+  int world_mix_type; /* 0=none 1=MIX 2=ADD 3=SUBTRACT 4=MULTIPLY 5=DIVIDE */
+  float world_mix_fac; /* unlinked Factor; default 0.5 when type!=0 */
+  float world_mix_other[3]; /* constant RGB on non-chain side */
+  int world_mix_chain_is_a; /* 1 = chain→A other→B; 0 = chain→B other→A */
+  int world_mix_clamp_factor; /* MixColorNode use_clamp */
+  int world_mix_clamp_result; /* MixColorNode use_clamp_result */
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -840,6 +853,13 @@ typedef struct QT_Scene {
   /* Slice 2ap: Bright/Contrast on world Color. Identity skips native node. */
   float world_bright;    /* 0.0 = identity */
   float world_contrast;  /* 0.0 = identity */
+  /* Slice 2aq: Mix after Color chain. type 0 = skip MixColorNode. */
+  int world_mix_type; /* 0=none 1=MIX 2=ADD 3=SUBTRACT 4=MULTIPLY 5=DIVIDE */
+  float world_mix_fac; /* unlinked Factor; default 0.5 when type!=0 */
+  float world_mix_other[3]; /* constant RGB on non-chain side */
+  int world_mix_chain_is_a; /* 1 = chain→A other→B; 0 = chain→B other→A */
+  int world_mix_clamp_factor; /* MixColorNode use_clamp */
+  int world_mix_clamp_result; /* MixColorNode use_clamp_result */
   const char *exr_path;
 } QT_Scene;
 

@@ -1868,9 +1868,9 @@ def _world_color_from_linked(from_node, from_sock):
         return _fold_world_color_mix(from_node, depth=0)
     raise QuantTraceSyncError(
         f"world Background Color linked from {ntype!r} refused "
-        "(Slice 2ao: TEX_IMAGE/TEX_ENVIRONMENT/TEX_SKY/RGB/Mix/Value/Math + "
-        "unlinked Gamma/HueSat; Noise/RGB Curves/Bright-Contrast/"
-        "spatially-varying Mix still refuse)"
+        "(Slice 2aq: TEX_IMAGE/TEX_ENVIRONMENT/TEX_SKY/RGB/Mix/Value/Math + "
+        "unlinked Gamma/HueSat/BrightContrast/Mix-chain; Noise/RGB Curves/"
+        "linked Fac / both-linked non-constant Mix still refuse)"
     )
 
 
@@ -2015,9 +2015,9 @@ def _pack_world_color_image_from_node(from_node) -> dict:
 
 
 def _world_gamma_hsv_identity():
-    """Slice 2ao/2ap identity — skip native Gamma/HSV/BrightContrast.
+    """Slice 2ao/2ap/2aq identity — skip native Gamma/HSV/BrightContrast/Mix.
 
-    Keeps 2aa/2al/2am/2an/2ao bit-identical when all identity.
+    Keeps 2aa/2al/2am/2an/2ao/2ap bit-identical when all identity.
     """
     return {
         "world_gamma": 1.0,
@@ -2027,6 +2027,12 @@ def _world_gamma_hsv_identity():
         "world_hsv_fac": 1.0,
         "world_bright": 0.0,
         "world_contrast": 0.0,
+        "world_mix_type": 0,
+        "world_mix_fac": 0.5,
+        "world_mix_other": (0.0, 0.0, 0.0),
+        "world_mix_chain_is_a": 1,
+        "world_mix_clamp_factor": 0,
+        "world_mix_clamp_result": 0,
     }
 
 
@@ -2079,6 +2085,127 @@ def _gamma_hsv_color_source(node):
     )
 
 
+_WORLD_MIX_TYPE_MAP = {
+    "MIX": 1,
+    "ADD": 2,
+    "SUBTRACT": 3,
+    "MULTIPLY": 4,
+    "DIVIDE": 5,
+}
+
+
+def _peel_world_mix(from_node, from_sock):
+    """Peel Mix immediately on Background Color (Slice 2aq).
+
+    Background ← Mix(chain, constant) with unlinked Factor packs world_mix_*
+    and returns the chain side for Gamma/HSV/BC peel. Both-sides-constant Mix
+    is left in place for Slice 2al fold into world_color (mix_type stays 0).
+    ShaderNodeMix data_type RGBA (Blender 5.2 COLOR) or MIX_RGB; FLOAT/VECTOR
+    Mix left for 2al or refused. Cite Cycles MixColorNode / NodeMix.
+    """
+    mix = {
+        "world_mix_type": 0,
+        "world_mix_fac": 0.5,
+        "world_mix_other": (0.0, 0.0, 0.0),
+        "world_mix_chain_is_a": 1,
+        "world_mix_clamp_factor": 0,
+        "world_mix_clamp_result": 0,
+    }
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype not in ("MIX", "MIX_RGB"):
+        return from_node, from_sock, mix
+    if ntype == "MIX":
+        data_type = str(getattr(from_node, "data_type", "FLOAT") or "FLOAT")
+        if data_type in ("VECTOR", "ROTATION"):
+            raise QuantTraceSyncError(
+                f"world Background Color Mix data_type {data_type!r} refused "
+                "(Slice 2aq: ShaderNodeMix RGBA / MixRGB only)"
+            )
+        if data_type == "FLOAT":
+            # Constant FLOAT Mix still folds via 2al; chain Mix after HSV is RGBA.
+            return from_node, from_sock, mix
+        if data_type != "RGBA":
+            raise QuantTraceSyncError(
+                f"world Background Color Mix data_type {data_type!r} refused "
+                "(Slice 2aq: RGBA / MixRGB only)"
+            )
+    op = str(getattr(from_node, "blend_type", "MIX") or "MIX")
+    if op not in _WORLD_STRENGTH_MIX_OPS:
+        raise QuantTraceSyncError(
+            f"world Background Color Mix blend_type {op!r} refused "
+            "(Slice 2aq: MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only)"
+        )
+    fac_sock, a_sock, b_sock = _mix_input_socks(from_node)
+    if fac_sock is None:
+        raise QuantTraceSyncError(
+            "world Background Color Mix missing Factor (Slice 2aq)"
+        )
+    if getattr(fac_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "world Background Color Mix Factor is linked refused "
+            "(Slice 2aq: unlinked Factor only)"
+        )
+    a_linked = bool(getattr(a_sock, "is_linked", False)) if a_sock is not None else False
+    b_linked = bool(getattr(b_sock, "is_linked", False)) if b_sock is not None else False
+    if not a_linked and not b_linked:
+        # Both unlinked constants → Slice 2al fold into world_color.
+        return from_node, from_sock, mix
+    if a_linked and b_linked:
+        # Both linked — leave for 2al fold (RGB/Value/Math); chain graphs refuse there.
+        return from_node, from_sock, mix
+    # Exactly one side linked = chain; other must be unlinked constant RGB.
+    chain_is_a = 1 if a_linked else 0
+    other_sock = b_sock if a_linked else a_sock
+    chain_sock = a_sock if a_linked else b_sock
+    if other_sock is None or chain_sock is None:
+        raise QuantTraceSyncError(
+            "world Background Color Mix missing A/B (Slice 2aq)"
+        )
+    stype = getattr(other_sock, "type", None)
+    dv = getattr(other_sock, "default_value", None)
+    if stype == "RGBA" or (hasattr(dv, "__len__") and not isinstance(dv, (str, bytes))):
+        try:
+            other = (float(dv[0]), float(dv[1]), float(dv[2]))
+        except (TypeError, IndexError, ValueError) as e:
+            raise QuantTraceSyncError(
+                "world Background Color Mix other side not constant RGB "
+                "(Slice 2aq)"
+            ) from e
+    else:
+        try:
+            v = float(dv or 0.0)
+        except (TypeError, ValueError) as e:
+            raise QuantTraceSyncError(
+                "world Background Color Mix other side not constant "
+                "(Slice 2aq)"
+            ) from e
+        other = (v, v, v)
+    fac = float(getattr(fac_sock, "default_value", 0.5) or 0.0)
+    clamp_factor = bool(getattr(from_node, "clamp_factor", False))
+    if clamp_factor:
+        fac = min(1.0, max(0.0, fac))
+    clamp_result = bool(
+        getattr(from_node, "clamp_result", False)
+        or getattr(from_node, "use_clamp", False)
+    )
+    mix["world_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+    mix["world_mix_fac"] = float(fac)
+    mix["world_mix_other"] = other
+    mix["world_mix_chain_is_a"] = int(chain_is_a)
+    mix["world_mix_clamp_factor"] = 1 if clamp_factor else 0
+    mix["world_mix_clamp_result"] = 1 if clamp_result else 0
+    links = list(getattr(chain_sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            "world Background Color Mix chain multi-link refused (Slice 2aq)"
+        )
+    return (
+        getattr(links[0], "from_node", None),
+        getattr(links[0], "from_socket", None),
+        mix,
+    )
+
+
 def _peel_world_gamma_hsv(from_node, from_sock):
     """Peel one unlinked Gamma + HueSat + BrightContrast (any order, ≤3 hops).
 
@@ -2086,8 +2213,8 @@ def _peel_world_gamma_hsv(from_node, from_sock):
     Remaining source is resolved by the caller (TEX_ENVIRONMENT / TEX_SKY /
     TEX_IMAGE / RGB/Mix/Value/Math). Second Gamma/HueSat/BrightContrast
     refuses. Linked Gamma/Hue/Sat/Value/Fac/Bright/Contrast refuses. Native
-    applies loft order Color → Gamma → HSV → BrightContrast → Background
-    regardless of peel order (Slice 2ap).
+    applies loft order Color → Gamma → HSV → BrightContrast → Mix →
+    Background regardless of peel order (Slice 2aq). Caller peels Mix first.
     """
     gh = dict(_world_gamma_hsv_identity())
     seen_gamma = False
@@ -2152,15 +2279,15 @@ def _peel_world_gamma_hsv(from_node, from_sock):
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "CURVE_RGB":
         raise QuantTraceSyncError(
-            "world Background Color RGB Curves refused (Slice 2ap)"
+            "world Background Color RGB Curves refused (Slice 2aq)"
         )
     if ntype in ("TEX_NOISE", "NOISE"):
         raise QuantTraceSyncError(
-            "world Background Color Noise refused (Slice 2ap)"
+            "world Background Color Noise refused (Slice 2aq)"
         )
-    # Mix immediately on Background is 2al (constant) or refuse. Mix after
-    # HSV (Background ← Mix ← HSV) is not peeled here — Mix fold refuses
-    # spatially-varying A/B (defer Mix after HSV).
+    # Mix immediately on Background with both-constant A/B is 2al (folded by
+    # caller). Mix after HSV/BC/source with one constant side is peeled by
+    # _peel_world_mix before this function (Slice 2aq).
     return from_node, from_sock, unlinked_rgb, gh
 
 
@@ -2180,18 +2307,19 @@ def _world_info(scene) -> dict:
 
     Empty path keeps locked-cube black worlds bit-identical when world_color is 0
     and world_sky_type is 0 and world_color_image_path is empty and Gamma/HSV/
-    BrightContrast are identity (Slice 2ao/2ap).
+    BrightContrast/Mix are identity (Slice 2ao/2ap/2aq).
     Slice 2al: unlinked Color (incl. non-black), ShaderNodeRGB, MixRGB / Mix
     FLOAT constants, Value/Math → Color as grey. TEX_ENVIRONMENT still wins
     (world_color stays 0,0,0). Slice 2am: ShaderNodeTexSky (unlinked Vector)
     packs world_sky_* (path empty, color zeros). Slice 2an: ShaderNodeTexImage
     Color → Background Color (path empty + color zeros + sky_type 0); Vector
-    same shapes as env 2ac/2ae. Slice 2ao/2ap: peel unlinked Gamma + HueSat +
-    BrightContrast (one of each, any order, ≤3 hops) then resolve remaining
-    source as today. Native loft order Color → Gamma → HSV → BrightContrast →
-    Background. Noise / RGB Curves / Mix after HSV / linked Gamma/Hue/Sat/
-    Value/Fac/Bright/Contrast / second Gamma/HueSat/BrightContrast / linked
-    Sky Vector refuse.
+    same shapes as env 2ac/2ae. Slice 2ao/2ap/2aq: peel Mix (chain+constant)
+    then unlinked Gamma + HueSat + BrightContrast (one of each, any order,
+    ≤3 hops) then resolve remaining source as today. Native loft order Color
+    → Gamma → HSV → BrightContrast → Mix → Background. Noise / RGB Curves /
+    linked Fac / both-sides-linked Mix (non-constant) / second Mix / linked
+    Gamma/Hue/Sat/Value/Fac/Bright/Contrast / second Gamma/HueSat/BrightContrast
+    / VECTOR Mix / linked Sky Vector refuse.
     Slice 2ac: Vector may be TEX_COORD Generated/Object/Camera/Window/Reflection
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
@@ -2247,19 +2375,22 @@ def _world_info(scene) -> dict:
             "world_strength": strength,
             "world_color": world_color,
         }
-    # Color linked — optional Gamma/HueSat/BrightContrast peel (Slice 2ap),
-    # then TEX_ENVIRONMENT (2aa), TEX_SKY (2am), TEX_IMAGE (2an), or RGB/Mix (2al).
+    # Color linked — optional Mix peel (Slice 2aq), then Gamma/HueSat/
+    # BrightContrast (2ap), then TEX_ENVIRONMENT (2aa), TEX_SKY (2am),
+    # TEX_IMAGE (2an), or RGB/Mix (2al).
     links = list(getattr(color_sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
             "world Background Color multi-link refused "
-            "(Slice 2aa/2al/2am/2an/2ao/2ap)"
+            "(Slice 2aa/2al/2am/2an/2ao/2ap/2aq)"
         )
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
+    from_node, from_sock, mix = _peel_world_mix(from_node, from_sock)
     from_node, from_sock, unlinked_rgb, gh = _peel_world_gamma_hsv(
         from_node, from_sock
     )
+    gh = {**gh, **mix}
     if unlinked_rgb is not None:
         return {
             **empty,
@@ -2268,6 +2399,10 @@ def _world_info(scene) -> dict:
             **gh,
         }
     ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if int(mix.get("world_mix_type", 0) or 0) != 0 and ntype in ("MIX", "MIX_RGB"):
+        raise QuantTraceSyncError(
+            "world Background Color second Mix refused (Slice 2aq)"
+        )
     if ntype == "TEX_SKY":
         sky = _pack_world_sky_from_node(from_node)
         return {
@@ -3492,6 +3627,12 @@ def make_qt_simple_scene_type():
             ("world_hsv_fac", ctypes.c_float),
             ("world_bright", ctypes.c_float),
             ("world_contrast", ctypes.c_float),
+            ("world_mix_type", ctypes.c_int),
+            ("world_mix_fac", ctypes.c_float),
+            ("world_mix_other", ctypes.c_float * 3),
+            ("world_mix_chain_is_a", ctypes.c_int),
+            ("world_mix_clamp_factor", ctypes.c_int),
+            ("world_mix_clamp_result", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
@@ -3785,6 +3926,16 @@ def _fill_world_vec_ctypes(desc, packed):
     # Slice 2ap: identity defaults bright=0 contrast=0. Do not use `or`.
     desc.world_bright = _wf("world_bright", 0.0)
     desc.world_contrast = _wf("world_contrast", 0.0)
+    # Slice 2aq: mix_type=0 identity. Do not use `or` on floats / chain_is_a=0.
+    desc.world_mix_type = int(packed.get("world_mix_type", 0) or 0)
+    desc.world_mix_fac = _wf("world_mix_fac", 0.5)
+    mo = packed.get("world_mix_other") or (0.0, 0.0, 0.0)
+    for i in range(3):
+        desc.world_mix_other[i] = float(mo[i])
+    _cia = packed.get("world_mix_chain_is_a", 1)
+    desc.world_mix_chain_is_a = 0 if _cia is None else int(_cia)
+    desc.world_mix_clamp_factor = int(packed.get("world_mix_clamp_factor", 0) or 0)
+    desc.world_mix_clamp_result = int(packed.get("world_mix_clamp_result", 0) or 0)
 
 def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     """Build a QT_SimpleScene + keep-alive buffers from pack_simple_scene output."""
@@ -4165,6 +4316,12 @@ def make_qt_scene_types():
             ("world_hsv_fac", ctypes.c_float),
             ("world_bright", ctypes.c_float),
             ("world_contrast", ctypes.c_float),
+            ("world_mix_type", ctypes.c_int),
+            ("world_mix_fac", ctypes.c_float),
+            ("world_mix_other", ctypes.c_float * 3),
+            ("world_mix_chain_is_a", ctypes.c_int),
+            ("world_mix_clamp_factor", ctypes.c_int),
+            ("world_mix_clamp_result", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
         ]
 

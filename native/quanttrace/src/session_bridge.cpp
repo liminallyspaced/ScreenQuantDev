@@ -55,6 +55,11 @@
  *   Identity (bright=0, contrast=0) skips — 2ao/2an/2am/2aa/2al bit-identical.
  *   Loft: Color → Gamma → HSV → BrightContrast → Background. Cite
  *   shader_nodes.h BrightContrastNode (set_bright, set_contrast).
+ * Slice 2aq: MixColorNode after Color chain (world_mix_*). type 0 = skip —
+ *   2ap/2ao/2an/2am/2aa/2al bit-identical. Loft: Color → Gamma → HSV →
+ *   BrightContrast → Mix → Background. Cite shader_nodes.h MixColorNode
+ *   (set_blend_type, set_fac, set_a, set_b, set_use_clamp,
+ *   set_use_clamp_result). MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only.
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
@@ -281,6 +286,13 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     /* Slice 2ap identity — bright=0 contrast=0 (memset is fine; set explicit). */
     d->world_bright = 0.0f;
     d->world_contrast = 0.0f;
+    /* Slice 2aq identity — mix_type=0 (memset is fine; set explicit). */
+    d->world_mix_type = 0;
+    d->world_mix_fac = 0.5f;
+    d->world_mix_other[0] = d->world_mix_other[1] = d->world_mix_other[2] = 0.0f;
+    d->world_mix_chain_is_a = 1;
+    d->world_mix_clamp_factor = 0;
+    d->world_mix_clamp_result = 0;
     d->exr_path = nullptr;
 }
 
@@ -601,6 +613,12 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->world_hsv_fac = s->world_hsv_fac;
     out->world_bright = s->world_bright;
     out->world_contrast = s->world_contrast;
+    out->world_mix_type = s->world_mix_type;
+    out->world_mix_fac = s->world_mix_fac;
+    std::memcpy(out->world_mix_other, s->world_mix_other, sizeof(out->world_mix_other));
+    out->world_mix_chain_is_a = s->world_mix_chain_is_a;
+    out->world_mix_clamp_factor = s->world_mix_clamp_factor;
+    out->world_mix_clamp_result = s->world_mix_clamp_result;
     out->exr_path = s->exr_path;
 }
 
@@ -674,11 +692,30 @@ static bool world_bc_identity(const QT_Scene *desc)
     return desc->world_bright == 0.0f && desc->world_contrast == 0.0f;
 }
 
+static bool world_mix_identity(const QT_Scene *desc)
+{
+    return desc->world_mix_type == 0;
+}
+
+static NodeMix world_mix_blend_type(int t)
+{
+    switch (t) {
+        case 2: return NODE_MIX_ADD;
+        case 3: return NODE_MIX_SUB;
+        case 4: return NODE_MIX_MUL;
+        case 5: return NODE_MIX_DIV;
+        case 1:
+        default: return NODE_MIX_BLEND;
+    }
+}
+
 /* Wire Color source → Gamma (if gamma!=1) → HSV (if not identity) →
- * BrightContrast (if not identity) → Background Color.
+ * BrightContrast (if not identity) → MixColorNode (if mix_type!=0) →
+ * Background Color.
  * color_src NULL uses wcol as unlinked Color default.
- * Cite shader_nodes.h GammaNode / HSVNode / BrightContrastNode
- * (set_bright, set_contrast). */
+ * Cite shader_nodes.h GammaNode / HSVNode / BrightContrastNode /
+ * MixColorNode (set_blend_type, set_fac, set_a, set_b, set_use_clamp,
+ * set_use_clamp_result). */
 static void connect_world_color_chain(ShaderGraph *graph,
                                       ShaderOutput *color_src,
                                       const float3 &wcol,
@@ -688,6 +725,7 @@ static void connect_world_color_chain(ShaderGraph *graph,
     const bool use_gamma = !world_gamma_identity(desc);
     const bool use_hsv = !world_hsv_identity(desc);
     const bool use_bc = !world_bc_identity(desc);
+    const bool use_mix = !world_mix_identity(desc);
     ShaderOutput *cur = color_src;
     if (use_gamma) {
         GammaNode *g = graph->create_node<GammaNode>();
@@ -725,6 +763,35 @@ static void connect_world_color_chain(ShaderGraph *graph,
             bc->set_color(wcol);
         }
         cur = bc->output("Color");
+    }
+    if (use_mix) {
+        MixColorNode *mx = graph->create_node<MixColorNode>();
+        mx->set_blend_type(world_mix_blend_type(desc->world_mix_type));
+        mx->set_fac(desc->world_mix_fac);
+        mx->set_use_clamp(desc->world_mix_clamp_factor != 0);
+        mx->set_use_clamp_result(desc->world_mix_clamp_result != 0);
+        const float3 other = make_float3(desc->world_mix_other[0],
+                                         desc->world_mix_other[1],
+                                         desc->world_mix_other[2]);
+        if (desc->world_mix_chain_is_a) {
+            if (cur) {
+                graph->connect(cur, mx->input("A"));
+            }
+            else {
+                mx->set_a(wcol);
+            }
+            mx->set_b(other);
+        }
+        else {
+            mx->set_a(other);
+            if (cur) {
+                graph->connect(cur, mx->input("B"));
+            }
+            else {
+                mx->set_b(wcol);
+            }
+        }
+        cur = mx->output("Result");
     }
     if (cur) {
         graph->connect(cur, bg->input("Color"));
