@@ -4,7 +4,7 @@
 # AREA lights / world into ctypes QT_SimpleScene (1+1) or QT_Scene (N+N)
 # for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
 # Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN/SPOT lights, constant Principled.
-# Slice 2f: TEX_IMAGE → Principled Base Color (default UV, disk filepath).
+# Slice 2f: TEX_IMAGE → Principled Base Color (default UV; disk or packed).
 # Slice 2h: TEX_COORD UV (+ optional Mapping Vector-type constants) → TEX_IMAGE Vector.
 # Slice 2i: TEX_IMAGE → Principled Roughness / Metallic (same Vector rules as Base Color).
 # Slice 2j: Principled.Normal ← Normal Map (Tangent) ← TEX_IMAGE Color (same Vector rules).
@@ -34,7 +34,8 @@
 # Slice 2aa: Environment Texture world (empty path = Slice 2b black).
 # Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
 #   Empty Object ref stays Slice 2l (use_transform=0). Mesh-level one pointer.
-#   Other linked sockets / packed-only / linked Mapping L/R/S still refuse.
+# Slice 2af: packed-only images materialize to /tmp/quanttrace_packed/ (filepath ABI).
+#   Linked Mapping L/R/S / linked world Strength / Sky/Nishita still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -83,8 +84,95 @@ def _world_verts(verts, tfm):
     return out
 
 
+# Slice 2af: packed-only images materialize to a stable temp under this dir.
+_PACKED_IMAGE_CACHE_DIR = "/tmp/quanttrace_packed"
+
+
+def _guess_image_ext(raw: bytes, img) -> str:
+    """Extension for materialized packed bytes (ABI stays filepath)."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if len(raw) >= 4 and raw[:4] == b"v/1\x01":
+        return ".exr"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if raw.startswith(b"BM"):
+        return ".bmp"
+    if raw.startswith(b"II") or raw.startswith(b"MM"):
+        return ".tif"
+    fmt = str(getattr(img, "file_format", "") or "").upper()
+    mapping = {
+        "PNG": ".png",
+        "JPEG": ".jpg",
+        "JPG": ".jpg",
+        "OPEN_EXR": ".exr",
+        "OPEN_EXR_MULTILAYER": ".exr",
+        "TIFF": ".tif",
+        "BMP": ".bmp",
+        "TARGA": ".tga",
+        "TARGA_RAW": ".tga",
+        "HDR": ".hdr",
+        "WEBP": ".webp",
+    }
+    if fmt in mapping:
+        return mapping[fmt]
+    # Prefer filepath suffix when present (even if file is gone).
+    for attr in ("filepath", "filepath_raw"):
+        fp = str(getattr(img, attr, "") or "")
+        if "." in fp:
+            suf = os.path.splitext(fp)[1].lower()
+            if suf in (".png", ".jpg", ".jpeg", ".exr", ".tif", ".tiff",
+                       ".bmp", ".tga", ".hdr", ".webp"):
+                return ".jpg" if suf == ".jpeg" else (".tif" if suf == ".tiff" else suf)
+    return ".bin"
+
+
+def _materialize_packed_image(img) -> str:
+    """Write packed_file bytes to /tmp/quanttrace_packed/<name>_<hash>.<ext>.
+
+    Stable within a session (same bytes → same path). Empty if no packed bytes.
+    """
+    pf = getattr(img, "packed_file", None)
+    if pf is None:
+        return ""
+    data = getattr(pf, "data", None)
+    if not data:
+        return ""
+    try:
+        raw = bytes(data)
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    import hashlib
+
+    digest = hashlib.sha1(raw).hexdigest()[:16]
+    name = str(getattr(img, "name", "img") or "img")
+    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in name)[:64] or "img"
+    ext = _guess_image_ext(raw, img)
+    out_dir = _PACKED_IMAGE_CACHE_DIR
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError:
+        return ""
+    out = os.path.join(out_dir, f"{safe}_{digest}{ext}")
+    if not os.path.isfile(out) or os.path.getsize(out) != len(raw):
+        try:
+            with open(out, "wb") as f:
+                f.write(raw)
+        except OSError:
+            return ""
+    return out if os.path.isfile(out) else ""
+
+
 def _abspath_image(img) -> str:
-    """Disk filepath for a Blender Image, or empty if packed/missing."""
+    """Disk filepath for a Blender Image (Slice 2af: packed-only → temp).
+
+    Prefers an existing on-disk filepath. If missing (packed-only or deleted
+    original), materializes packed_file bytes under /tmp/quanttrace_packed/
+    and returns that path for the existing image_path ABI. Empty only when
+    truly missing pixels/file.
+    """
     if img is None:
         return ""
     getter = getattr(img, "filepath_from_user", None)
@@ -96,18 +184,23 @@ def _abspath_image(img) -> str:
     else:
         raw = getattr(img, "filepath", "") or ""
     raw = str(raw).strip()
-    if not raw:
-        return ""
-    # bpy.path.abspath when available (// relative).
-    try:
-        import bpy  # type: ignore
-        abspath = getattr(getattr(bpy, "path", None), "abspath", None)
-        if callable(abspath):
-            raw = abspath(raw)
-    except Exception:
-        pass
-    raw = os.path.abspath(os.path.expanduser(raw))
-    return raw if os.path.isfile(raw) else ""
+    if raw:
+        # bpy.path.abspath when available (// relative).
+        try:
+            import bpy  # type: ignore
+            abspath = getattr(getattr(bpy, "path", None), "abspath", None)
+            if callable(abspath):
+                raw = abspath(raw)
+        except Exception:
+            pass
+        disk = os.path.abspath(os.path.expanduser(raw))
+        if os.path.isfile(disk):
+            return disk
+    # Slice 2af: packed-only (or filepath pointing at a gone file).
+    packed = _materialize_packed_image(img)
+    if packed:
+        return packed
+    return ""
 
 
 def _sock_default_float3(sock) -> Tuple[float, float, float]:
@@ -455,7 +548,7 @@ def _tex_image_from_sock(sock, sock_label: str) -> dict:
     path = _abspath_image(img)
     if not path:
         raise QuantTraceSyncError(
-            "Image Texture filepath missing on disk (Slice 2f/2h/2i; packed-only refused)"
+            "Image Texture has no disk filepath and no packed pixels (Slice 2af)"
         )
     cs = ""
     settings = getattr(img, "colorspace_settings", None)
@@ -521,7 +614,7 @@ def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> di
     Strength and Distance must be unlinked floats (Blender 5.2 RNA 1.0 / 0.001).
     Normal input unlinked. invert RNA True is OK (packed as bump_invert 1).
     use_object_space is not a Blender 5.2 property -- native forces false.
-    Packed-only images refuse via _tex_image_from_sock.
+    Packed-only images materialize via _abspath_image (Slice 2af).
     """
     empty = _empty_bump_info(prefix)
     if sock is None:
@@ -1095,8 +1188,8 @@ def _world_info(scene) -> dict:
     path = _abspath_image(img)
     if not path:
         raise QuantTraceSyncError(
-            "Environment Texture filepath missing on disk "
-            "(Slice 2ac; packed-only refused)"
+            "Environment Texture has no disk filepath and no packed pixels "
+            "(Slice 2af)"
         )
     proj_rna = str(getattr(from_node, "projection", "EQUIRECTANGULAR") or "").upper()
     if proj_rna == "EQUIRECTANGULAR":

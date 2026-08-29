@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ae landed** (2026-08-28 7pm PlugWalk ET). Env TEX_COORD Object-with-pointer (`world_ob_use_transform` + `world_ob_tfm[12]`). Pointer 32²/4 Δmax=6.74e-4; 256²/128 Δmax=2.12e-4 PASS (0 px ≥1e-3). Pointer+Mapping 32²/4 Δmax=6.43e-4 PASS. empty-ref 2ac 32²/4 Δmax=6.13e-4 PASS. Stock pointer vs empty-ref Δmax=0.217 (graph live). Empty default rot_z=0.4 loc=0 (translate+HDR 1px residue documented). `is_tracer=1`. Native `0.0.32-slice2ae`.
+Status: **Slice 2af landed** (2026-08-28 8pm PlugWalk ET). Packed-only images materialize to `/tmp/quanttrace_packed/<name>_<sha1>.<ext>` via `_abspath_image` (filepath ABI unchanged; no new C++ path fields). base_packed 32²/4 Δmax=1.01e-6; 256²/128 Δmax=1.43e-6 PASS (0 px ≥1e-3). hdr_packed 32²/4 Δmax=6.13e-4; 256²/128 Δmax=2.01e-4 PASS. disk 2f regression 32²/4 Δmax=1.01e-6 PASS. `is_tracer=1`. Native `0.0.33-slice2af`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -19,6 +19,46 @@ addon zip or public commit tree.
 ---
 
 
+
+## 8pm PlugWalk (2026-08-28) — packed-only images (Slice 2af)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Blender 5.2 `Image.packed_file.data` (bytes) + `filepath` / `filepath_from_user`. Prefer writing packed bytes over inventing a pixel-buffer ABI. Colorspace stays `Image.colorspace_settings.name`. |
+| ABI | Unchanged filepath: `image_path` / `world_image_path` / `*_image_path`. Native ImageTextureNode / EnvironmentTextureNode still `set_filename(path)`. |
+| Python | `_abspath_image` prefers on-disk filepath; else `_materialize_packed_image` writes to `/tmp/quanttrace_packed/<name>_<sha1>.<ext>` (stable within session). Covers mesh TEX_IMAGE (`_tex_image_from_sock`) and world Environment Texture (`_world_info`). Empty only when truly missing. |
+| Native | Version stamp only → `0.0.33-slice2af` (no C++ path change). |
+| Version | `0.0.33-slice2af` |
+| Tools | `tools/_quanttrace_slice2af_scene.py`, `tools/_quanttrace_slice2af_smoke.py`. Modes: `base_packed`, `hdr_packed`, `disk`. |
+| Visibility | Combined chromatic + non-constant on packed Base Color checker and packed HDR env. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| base_packed (TEX_IMAGE) | 32² / 4 | **1.01e-6** | 7.01e-9 | 0 | **PASS** |
+| base_packed (TEX_IMAGE) | 256² / 128 | **1.43e-6** | 3.27e-9 | 0 | **PASS** |
+| hdr_packed (Env TEX) | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+| hdr_packed (Env TEX) | 256² / 128 | **2.01e-4** | 9.02e-7 | 0 | **PASS** |
+| disk (2f regression) | 32² / 4 | **1.01e-6** | 7.01e-9 | 0 | **PASS** |
+
+Packed cache paths under `/tmp/quanttrace_packed/`. Proof plate `docs/proof/quanttrace-packed-32-pair.png` (base_packed stock|session). F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- Linked Mapping L/R/S, linked world Strength, Sky/Nishita/TEX_IMAGE/RGB/Mix → Background Color, kitchens still refuse.
+- HDR Δmax remains ~1e-4–7e-4 class (BackgroundLight MIS map), under the 1e-3 gate with 0 px ≥1e-3 on the claim cases.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Linked Mapping L/R/S, or linked world Strength. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
 
 ## 7pm PlugWalk (2026-08-28) — Env Object-with-pointer (Slice 2ae)
 
@@ -51,7 +91,7 @@ Honesty: Empty loc=(0.5,0.25,0)+rot_z=0.4 32²/4 Δmax=**1.84e-3** (1 px ≥1e-3
 
 ### Honesty
 
-- Packed-only images, linked Mapping L/R/S, linked world Strength, Sky/Nishita/TEX_IMAGE/RGB/Mix → Background Color, kitchens still refuse.
+- Linked Mapping L/R/S, linked world Strength, Sky/Nishita/TEX_IMAGE/RGB/Mix → Background Color, kitchens still refuse. (Packed-only images landed 2af.)
 - HDR Δmax remains ~1e-4–7e-4 class (BackgroundLight MIS map), under the 1e-3 gate with 0 px ≥1e-3 on the claim cases.
 - SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
 - Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
@@ -59,7 +99,7 @@ Honesty: Empty loc=(0.5,0.25,0)+rot_z=0.4 32²/4 Δmax=**1.84e-3** (1 px ≥1e-3
 
 ### Next
 
-Packed-only images, or linked Mapping L/R/S / world Strength. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
+Linked Mapping L/R/S / world Strength. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
 
 ## 6pm PlugWalk (2026-08-28) — BLENDER_OBJECT / BLENDER_WORLD Normal (Slice 2ad)
 
