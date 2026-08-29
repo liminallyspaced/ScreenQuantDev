@@ -297,6 +297,13 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->world_mix_chain_is_a = 1;
     d->world_mix_clamp_factor = 0;
     d->world_mix_clamp_result = 0;
+    /* Slice 2as identity — n==0 skips RGBCurvesNode. */
+    d->world_curves = nullptr;
+    d->world_curves_n = 0;
+    d->world_curves_min_x = 0.0f;
+    d->world_curves_max_x = 1.0f;
+    d->world_curves_fac = 1.0f;
+    d->world_curves_extrapolate = 1;
     d->exr_path = nullptr;
 }
 
@@ -623,6 +630,12 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->world_mix_chain_is_a = s->world_mix_chain_is_a;
     out->world_mix_clamp_factor = s->world_mix_clamp_factor;
     out->world_mix_clamp_result = s->world_mix_clamp_result;
+    out->world_curves = s->world_curves;
+    out->world_curves_n = s->world_curves_n;
+    out->world_curves_min_x = s->world_curves_min_x;
+    out->world_curves_max_x = s->world_curves_max_x;
+    out->world_curves_fac = s->world_curves_fac;
+    out->world_curves_extrapolate = s->world_curves_extrapolate;
     out->exr_path = s->exr_path;
 }
 
@@ -713,24 +726,53 @@ static NodeMix world_mix_blend_type(int t)
     }
 }
 
-/* Wire Color source → Gamma (if gamma!=1) → HSV (if not identity) →
- * BrightContrast (if not identity) → MixColorNode (if mix_type!=0) →
- * Background Color.
+
+/* Wire Color source → RGBCurves (if n>0 && fac!=0) → Gamma (if gamma!=1) →
+ * HSV (if not identity) → BrightContrast (if not identity) → MixColorNode
+ * (if mix_type!=0) → Background Color.
  * color_src NULL uses wcol as unlinked Color default.
- * Cite shader_nodes.h GammaNode / HSVNode / BrightContrastNode /
- * MixColorNode (set_blend_type, set_fac, set_a, set_b, set_use_clamp,
- * set_use_clamp_result). */
+ * Cite shader_nodes.h RGBCurvesNode (set_curves array<packed_float3>,
+ * set_min_x, set_max_x, set_fac, set_extrapolate) / GammaNode / HSVNode /
+ * BrightContrastNode / MixColorNode. Slice 2as. */
+static bool world_curves_active(const QT_Scene *desc)
+{
+    return desc->world_curves != nullptr && desc->world_curves_n > 0 &&
+           desc->world_curves_fac != 0.0f;
+}
+
 static void connect_world_color_chain(ShaderGraph *graph,
                                       ShaderOutput *color_src,
                                       const float3 &wcol,
                                       BackgroundNode *bg,
                                       const QT_Scene *desc)
 {
+    const bool use_curves = world_curves_active(desc);
     const bool use_gamma = !world_gamma_identity(desc);
     const bool use_hsv = !world_hsv_identity(desc);
     const bool use_bc = !world_bc_identity(desc);
     const bool use_mix = !world_mix_identity(desc);
     ShaderOutput *cur = color_src;
+    if (use_curves) {
+        RGBCurvesNode *rc = graph->create_node<RGBCurvesNode>();
+        array<packed_float3> curves;
+        curves.resize(desc->world_curves_n);
+        for (int i = 0; i < desc->world_curves_n; i++) {
+            const float *p = desc->world_curves + i * 3;
+            curves[i] = make_float3(p[0], p[1], p[2]);
+        }
+        rc->set_curves(curves);
+        rc->set_min_x(desc->world_curves_min_x);
+        rc->set_max_x(desc->world_curves_max_x);
+        rc->set_fac(desc->world_curves_fac);
+        rc->set_extrapolate(desc->world_curves_extrapolate != 0);
+        if (cur) {
+            graph->connect(cur, rc->input("Color"));
+        }
+        else {
+            rc->set_value(wcol);
+        }
+        cur = rc->output("Color");
+    }
     if (use_gamma) {
         GammaNode *g = graph->create_node<GammaNode>();
         g->set_gamma(desc->world_gamma);
@@ -1568,11 +1610,11 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
      * Background Color (Color→Color, no NODE_CONVERT_CF). Projection FLAT/BOX/
      * SPHERE/TUBE. Vector: mode 0 leaves LINK_TEXTURE_UV (ImageTextureNode
      * default; cite shader_nodes.cpp). Else same TEX_COORD (+ Mapping) as 2ac.
-     * Slice 2ao/2ap: Color source (env / sky / ImageTexture / world_color RGB)
-     * → GammaNode (if gamma != 1) → HSVNode (if hsv not identity) →
-     * BrightContrastNode (if bright/contrast not identity) → Background Color.
-     * Identity skips extra nodes (2aa/2al/2am/2an/2ao bit-identical). Cite
-     * shader_nodes.h GammaNode / HSVNode / BrightContrastNode.
+     * Slice 2ao/2ap/2aq/2as: Color source (env / sky / ImageTexture / world_color RGB)
+     * → RGBCurvesNode (if n>0 && fac!=0) → GammaNode (if gamma != 1) → HSVNode
+     * (if hsv not identity) → BrightContrastNode → MixColorNode (if mix) →
+     * Background Color.
+
      * Priority: has_env → has_sky → has_color_image → world_color RGB.
      * BackgroundLight + MIS when has_env || has_sky || has_color_image ||
      * color_nonzero. Env/Color/ImageTexture: map_res 1024. Sky AUTOMATIC 0.

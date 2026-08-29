@@ -43,7 +43,14 @@
  *   Mode 0: Vector unlinked (LINK_TEXTURE_GENERATED).
  * Slice 2ar: linked Sky Vector via world_tex_vector_mode + world_map_* +
  *   world_ob_* (TEX_COORD / Mapping, same as env 2ac/2ae). Mode 0 keeps
- *   2am bit-identical. RGB Curves still refuse (curve LUT/SVM deferred).
+ *   2am bit-identical.
+ * Slice 2as: ShaderNodeRGBCurve → world Background Color as packed LUT
+ *   (world_curves / world_curves_n / min_x / max_x / fac / extrapolate after
+ *   world_mix_clamp_result). n==0 / NULL skips native RGBCurvesNode —
+ *   2ar/2aq/2al bit-identical. Official Cycles curvemapping_color_to_array
+ *   (RAMP_TABLE_SIZE=256 → 257 entries; DNA cm[0]=R..cm[3]=I). Fac==0 also
+ *   skips (Cycles folds). Chain: Color → RGBCurves → Gamma → HSV → BC →
+ *   Mix → Background.
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
@@ -191,6 +198,13 @@ typedef struct QT_SimpleScene {
   int world_mix_chain_is_a; /* 1 = chain→A other→B; 0 = chain→B other→A */
   int world_mix_clamp_factor; /* MixColorNode use_clamp */
   int world_mix_clamp_result; /* MixColorNode use_clamp_result */
+  /* Slice 2as: RGB Curves LUT (NULL / n==0 = skip RGBCurvesNode). */
+  const float *world_curves; /* n * 3 RGB floats; NULL / n==0 = skip */
+  int world_curves_n;
+  float world_curves_min_x;  /* default 0 */
+  float world_curves_max_x;  /* default 1 */
+  float world_curves_fac;    /* default 1 */
+  int world_curves_extrapolate; /* default 1 */
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -863,6 +877,13 @@ typedef struct QT_Scene {
   int world_mix_chain_is_a; /* 1 = chain→A other→B; 0 = chain→B other→A */
   int world_mix_clamp_factor; /* MixColorNode use_clamp */
   int world_mix_clamp_result; /* MixColorNode use_clamp_result */
+  /* Slice 2as: RGB Curves LUT (NULL / n==0 = skip RGBCurvesNode). */
+  const float *world_curves; /* n * 3 RGB floats; NULL / n==0 = skip */
+  int world_curves_n;
+  float world_curves_min_x;  /* default 0 */
+  float world_curves_max_x;  /* default 1 */
+  float world_curves_fac;    /* default 1 */
+  int world_curves_extrapolate; /* default 1 */
   const char *exr_path;
 } QT_Scene;
 

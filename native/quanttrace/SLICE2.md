@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ar landed** (2026-08-29 8am PlugWalk ET). Linked Sky Vector → Background Color (`world_tex_vector_mode` + Mapping on `SkyTextureNode`; PREETHAM claim). Identity skip (mode 0) keeps 2aq/2ap/2ao/2an/2am/2aa/2al bit-identical. sky_map (PREETHAM + Mapping rot_z=0.7) 32²/4 Δmax=5.96e-7 PASS / 256²/128 Δmax=4.77e-7 PASS. sky_gen / preetham / nishita / rgb_mix / rgb / hdr / teximage 32²/4 PASS. Stock sky_map vs unlinked PREETHAM Δmax=0.643 (lever live). RGB Curves refuses (curve LUT/SVM deferred). Nishita linked Vector ignored by Blender (is_unavailable) — not a claim. `is_tracer=1`. Native `0.0.45-slice2ar`. Addon `0.3.3`.
+Status: **Slice 2as landed** (2026-08-29 9am PlugWalk ET). ShaderNodeRGBCurve → world Background Color as packed LUT (`world_curves*` after `world_mix_clamp_result`). Official Cycles `curvemapping_color_to_array` 257 entries. n==0 / Fac==0 skips — 2ar/2aq/2al bit-identical. rgb_curves (I mid_y=0.35) 32²/4 Δmax=5.96e-7 PASS / 256²/128 Δmax=5.96e-7 PASS. rgb_curves_gamma 32²/4 PASS. Identity rgb / rgb_mix / hdr / nishita / teximage / sky_map 32²/4 PASS. Stock vs unlinked RGB Δmax=0.102 (live). Noise refuses. `is_tracer=1`. Native `0.0.46-slice2as`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -25,6 +25,54 @@ addon zip or public commit tree.
 
 
 ---
+
+
+## 9am PlugWalk (2026-08-29) — RGB Curves → world Color (Slice 2as)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Retarget: 2ar honesty next was RGB Curves → world Color (curve LUT deferred). Official Cycles `intern/cycles/blender/util.h` `curvemapping_color_to_array` + `shader.cpp` ShaderNodeRGBCurve sync.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | `curvemapping_color_to_array(mapping, curves, RAMP_TABLE_SIZE=256, true)` → table length **257**. DNA cm[0]=R, cm[1]=G, cm[2]=B, cm[3]=I. `rgb = (eval(R,eval(I,t)), …)`. bpy `mapping.curves` mirrors DNA (verified identity LUT + Session match; no CRGB swap). Fac unlinked UI default 1.0; Fac==0 skips native (Cycles folds). |
+| ABI | `world_curves` / `world_curves_n` / `world_curves_min_x` / `world_curves_max_x` / `world_curves_fac` / `world_curves_extrapolate` after `world_mix_clamp_result` on `QT_SimpleScene` + `QT_Scene`. n==0 / NULL = skip. |
+| Python | `_peel_world_gamma_hsv` accepts one `CURVE_RGB` (≤4 hops with Gamma/HSV/BC). `_pack_world_rgb_curves_lut` calls `mapping.update()` + `evaluate`. Linked Fac / second Curves / Vector/Float Curve / Noise refuse. |
+| Native | Color → `RGBCurvesNode` (if n>0 && fac!=0) → Gamma → HSV → BrightContrast → Mix → Background. `set_curves(array<packed_float3>)`. Version `0.0.46-slice2as`. |
+| Version | `0.0.46-slice2as` |
+| Tools | `_quanttrace_slice2as_scene/smoke.py` |
+
+### Measured — rgb_curves (claim)
+
+RGB(1.0, 0.25, 0.1) → RGB Curves (master I mid_y=0.35, Fac=1) → Background.
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **5.96e-7** | 2.50e-9 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **5.96e-7** | 1.46e-9 | 0 / 65536 | **PASS** |
+
+### Measured — rgb_curves_gamma + regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| rgb_curves_gamma (Gamma 2.2 after Curves) | 4.77e-7 | 2.49e-9 | 0 | **PASS** |
+| rgb 2al (n==0 identity skip) | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| rgb_mix 2aq | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| nishita 2am | 1.91e-6 | 1.87e-8 | 0 | **PASS** |
+| teximage 2an | 9.73e-4 | 2.79e-6 | 0 | **PASS** |
+| sky_map 2ar | 5.96e-7 | 8.40e-9 | 0 | **PASS** |
+| Stock rgb_curves vs unlinked RGB | 0.102 | 4.78e-2 | 1024 | live |
+
+Proof plate `docs/proof/quanttrace-rgb-curves-32-pair.png` + `/workspace/quanttrace-rgb-curves-32-pair.png`. F12 not run this hour; Session is the claim.
+
+### Honesty / still refuses
+
+- Noise → Color; Vector Curves / Float Curve; linked Curves Fac; second Curves; kitchens.
+- Still-life 1px / SSS / sky-256 residue still document-only.
+- Next: Noise → Color, or loft EasyHDR full chain on official HDR. Not ReSTIR. Not Classroom time %.
 
 ## 8am PlugWalk (2026-08-29) — linked Sky Vector (Slice 2ar)
 

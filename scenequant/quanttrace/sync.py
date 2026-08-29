@@ -47,24 +47,26 @@
 #   type 0 = 2al/2aa. 1=PREETHAM 2=HOSEK 3=NISHITA/MULTIPLE 4=SINGLE.
 #   Path empty, world_color zeros. Unlinked Vector only.
 #   Slice 2ar: linked Sky Vector (TEX_COORD / Mapping) accepted.
-#   Noise / RGB Curves still refuse.
+#   Slice 2as: RGB Curves accepted (packed LUT). Noise still refuses.
 # Slice 2an: ShaderNodeTexImage → Background Color (world_color_image_* after
 #   world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical. Priority:
 #   TEX_ENVIRONMENT → TEX_SKY → TEX_IMAGE → RGB/Mix. Vector via world_tex_vector_*
-#   (same 2ac/2ae shapes). Noise / RGB Curves / multi-link Color still refuse.
+#   (same 2ac/2ae shapes). Noise / multi-link Color still refuse; RGB Curves → 2as.
 # Slice 2ao: peel unlinked Gamma + HueSat on world Color (one of each, either
 #   order walking toward the source). Identity (gamma=1, hue=0.5, sat=1, val=1,
 #   fac=1) keeps 2aa/2al/2am/2an bit-identical. Native applies loft order:
 #   Color source → Gamma → HSV → Background. Linked Gamma/Hue/Sat/Value/Fac,
-#   RGB Curves, Noise, Mix after HSV, second Gamma/HueSat still refuse.
+#   Noise, Mix after HSV, second Gamma/HueSat still refuse; RGB Curves → 2as.
 # Slice 2ap: also peel one unlinked BrightContrast (Bright+Contrast unlinked
 #   floats). Identity bright=0 contrast=0 skips native node — 2ao/2an/2am/2aa/
 #   2al bit-identical. Up to 3 hops (Gamma, HueSat, BrightContrast, any order).
 #   Native loft: Color → Gamma → HSV → BrightContrast → Background. Second
-#   BrightContrast / linked Bright/Contrast refuse. Noise / RGB Curves / Mix
-#   after HSV / second Gamma/HueSat still refuse; linked Sky Vector → 2ar.
-# Slice 2ar: linked Sky Vector (TEX_COORD / Mapping) on TEX_SKY;
-#   RGB Curves still refuse (curve LUT deferred).
+#   BrightContrast / linked Bright/Contrast refuse. Noise / Mix after HSV /
+#   second Gamma/HueSat still refuse; linked Sky Vector → 2ar; RGB Curves → 2as.
+# Slice 2ar: linked Sky Vector (TEX_COORD / Mapping) on TEX_SKY.
+# Slice 2as: ShaderNodeRGBCurve → world Color packed LUT (world_curves_*).
+#   n==0 skip; Fac==0 skip; official curvemapping_color_to_array (257).
+#   Noise / Vector Curves / Float Curve / second RGB Curves / linked Fac refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -2108,9 +2110,9 @@ def _pack_world_color_image_from_node(from_node) -> dict:
 
 
 def _world_gamma_hsv_identity():
-    """Slice 2ao/2ap/2aq identity — skip native Gamma/HSV/BrightContrast/Mix.
+    """Slice 2ao/2ap/2aq/2as identity — skip Gamma/HSV/BrightContrast/Mix/Curves.
 
-    Keeps 2aa/2al/2am/2an/2ao/2ap bit-identical when all identity.
+    Keeps 2aa/2al/2am/2an/2ao/2ap/2aq/2ar bit-identical when all identity.
     """
     return {
         "world_gamma": 1.0,
@@ -2126,6 +2128,12 @@ def _world_gamma_hsv_identity():
         "world_mix_chain_is_a": 1,
         "world_mix_clamp_factor": 0,
         "world_mix_clamp_result": 0,
+        "world_curves": None,
+        "world_curves_n": 0,
+        "world_curves_min_x": 0.0,
+        "world_curves_max_x": 1.0,
+        "world_curves_fac": 1.0,
+        "world_curves_extrapolate": 1,
     }
 
 
@@ -2299,27 +2307,101 @@ def _peel_world_mix(from_node, from_sock):
     )
 
 
-def _peel_world_gamma_hsv(from_node, from_sock):
-    """Peel one unlinked Gamma + HueSat + BrightContrast (any order, ≤3 hops).
+_RAMP_TABLE_SIZE = 256  # Cycles RAMP_TABLE_SIZE; table length = size + 1 = 257
 
-    Returns (from_node, from_sock, unlinked_rgb_or_None, gamma_hsv_bc_dict).
+
+def _pack_world_rgb_curves_lut(node) -> dict:
+    """Official Cycles curvemapping_color_to_array (rgb_curve=true).
+
+    DNA/cm order used by Cycles util.h: cm[0]=R, cm[1]=G, cm[2]=B, cm[3]=I.
+    bpy mapping.curves mirrors that DNA for ShaderNodeRGBCurve.
+    Call mapping.update() before evaluate (== BKE_curvemapping_changed_all + init).
+    Fac must be unlinked. Linked Fac refuses.
+    """
+    mapping = getattr(node, "mapping", None)
+    if mapping is None:
+        raise QuantTraceSyncError(
+            "world Background Color RGB Curves missing mapping (Slice 2as)"
+        )
+    curves = list(getattr(mapping, "curves", None) or [])
+    if len(curves) < 4:
+        raise QuantTraceSyncError(
+            f"world Background Color RGB Curves needs 4 curves got {len(curves)} "
+            "(Slice 2as)"
+        )
+    # Fac unlinked (Cycles folds fac==0; we still pack and let native skip).
+    fac = _require_unlinked_float(node, ("Fac", "Factor"), "RGBCurves.Fac")
+    # min/max of first/last point.x across 4 curves
+    min_x = float("inf")
+    max_x = float("-inf")
+    for cm in curves[:4]:
+        pts = list(getattr(cm, "points", None) or [])
+        if not pts:
+            raise QuantTraceSyncError(
+                "world Background Color RGB Curves empty curve (Slice 2as)"
+            )
+        min_x = min(min_x, float(pts[0].location[0]))
+        max_x = max(max_x, float(pts[-1].location[0]))
+    range_x = max_x - min_x
+    mapping.update()
+    mapR, mapG, mapB, mapI = curves[0], curves[1], curves[2], curves[3]
+    lut = []
+    n = _RAMP_TABLE_SIZE + 1
+    for i in range(n):
+        tval = min_x + (float(i) / float(_RAMP_TABLE_SIZE)) * range_x
+        ti = float(mapping.evaluate(mapI, tval))
+        lut.extend(
+            (
+                float(mapping.evaluate(mapR, ti)),
+                float(mapping.evaluate(mapG, ti)),
+                float(mapping.evaluate(mapB, ti)),
+            )
+        )
+    extend = str(getattr(mapping, "extend", "") or "")
+    extrapolate = 1 if extend == "EXTRAPOLATED" else 0
+    # Identity LUT smoke: mid sample ~ (0.5,0.5,0.5) when all curves identity.
+    mid = n // 2
+    print(
+        "QUANTTRACE_SLICE2AS_LUT",
+        "n", n,
+        "min_x", min_x, "max_x", max_x,
+        "fac", fac, "extrapolate", extrapolate,
+        "sample0", tuple(lut[0:3]),
+        "sample_mid", tuple(lut[mid * 3 : mid * 3 + 3]),
+        "sample_end", tuple(lut[-3:]),
+    )
+    return {
+        "world_curves": lut,
+        "world_curves_n": n,
+        "world_curves_min_x": float(min_x),
+        "world_curves_max_x": float(max_x),
+        "world_curves_fac": float(fac),
+        "world_curves_extrapolate": int(extrapolate),
+    }
+
+
+def _peel_world_gamma_hsv(from_node, from_sock):
+    """Peel one unlinked Gamma + HueSat + BrightContrast + RGB Curves (≤4 hops).
+
+    Returns (from_node, from_sock, unlinked_rgb_or_None, gamma_hsv_bc_curves_dict).
     Remaining source is resolved by the caller (TEX_ENVIRONMENT / TEX_SKY /
-    TEX_IMAGE / RGB/Mix/Value/Math). Second Gamma/HueSat/BrightContrast
-    refuses. Linked Gamma/Hue/Sat/Value/Fac/Bright/Contrast refuses. Native
-    applies loft order Color → Gamma → HSV → BrightContrast → Mix →
-    Background regardless of peel order (Slice 2aq). Caller peels Mix first.
+    TEX_IMAGE / RGB/Mix/Value/Math). Second Gamma/HueSat/BrightContrast/Curves
+    refuses. Linked Gamma/Hue/Sat/Value/Fac/Bright/Contrast/Curves.Fac refuses.
+    Native applies loft order Color → RGBCurves → Gamma → HSV → BrightContrast →
+    Mix → Background regardless of peel order (Slice 2as). Caller peels Mix first.
     """
     gh = dict(_world_gamma_hsv_identity())
     seen_gamma = False
     seen_hsv = False
     seen_bc = False
+    seen_curves = False
     unlinked_rgb = None
-    for _hop in range(3):
+    for _hop in range(4):
         ntype = getattr(from_node, "type", None) if from_node is not None else None
         if ntype == "GAMMA":
             if seen_gamma:
                 raise QuantTraceSyncError(
-                    "world Background Color second Gamma refused (Slice 2ap)"
+                    "world Background Color second Gamma refused (Slice 2as)"
                 )
             gh["world_gamma"] = _require_unlinked_float(
                 from_node, ("Gamma",), "Gamma.Gamma"
@@ -2332,7 +2414,7 @@ def _peel_world_gamma_hsv(from_node, from_sock):
         if ntype == "HUE_SAT":
             if seen_hsv:
                 raise QuantTraceSyncError(
-                    "world Background Color second HueSat refused (Slice 2ap)"
+                    "world Background Color second HueSat refused (Slice 2as)"
                 )
             gh["world_hsv_hue"] = _require_unlinked_float(
                 from_node, ("Hue",), "HueSat.Hue"
@@ -2355,7 +2437,7 @@ def _peel_world_gamma_hsv(from_node, from_sock):
             if seen_bc:
                 raise QuantTraceSyncError(
                     "world Background Color second Bright/Contrast refused "
-                    "(Slice 2ap)"
+                    "(Slice 2as)"
                 )
             gh["world_bright"] = _require_unlinked_float(
                 from_node, ("Bright", "Brightness"), "BrightContrast.Bright"
@@ -2368,19 +2450,50 @@ def _peel_world_gamma_hsv(from_node, from_sock):
             if unlinked_rgb is not None:
                 break
             continue
+        if ntype == "CURVE_RGB":
+            if seen_curves:
+                raise QuantTraceSyncError(
+                    "world Background Color second RGB Curves refused (Slice 2as)"
+                )
+            packed = _pack_world_rgb_curves_lut(from_node)
+            # Fac==0: Cycles folds — keep n==0 so native skips (bit-identical).
+            if float(packed["world_curves_fac"]) == 0.0:
+                packed = {
+                    "world_curves": None,
+                    "world_curves_n": 0,
+                    "world_curves_min_x": 0.0,
+                    "world_curves_max_x": 1.0,
+                    "world_curves_fac": 0.0,
+                    "world_curves_extrapolate": 1,
+                }
+            gh.update(packed)
+            seen_curves = True
+            from_node, from_sock, unlinked_rgb = _gamma_hsv_color_source(from_node)
+            if unlinked_rgb is not None:
+                break
+            continue
+        if ntype in ("CURVE_VEC", "CURVE_VECTOR", "CURVE_FLOAT"):
+            raise QuantTraceSyncError(
+                f"world Background Color {ntype!r} refused "
+                "(Slice 2as: ShaderNodeRGBCurve only; Vector/Float Curve still refuse)"
+            )
         break
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "CURVE_RGB":
+        # Hop cap exhausted with another Curves ahead — refuse.
         raise QuantTraceSyncError(
-            "world Background Color RGB Curves refused (Slice 2ar: curve LUT/SVM deferred; linked Sky Vector landed)"
+            "world Background Color RGB Curves hop refused (Slice 2as: ≤4 hops; "
+            "second Curves or Curves beyond Gamma/HSV/BC chain)"
         )
     if ntype in ("TEX_NOISE", "NOISE"):
         raise QuantTraceSyncError(
-            "world Background Color Noise refused (Slice 2ar)"
+            "world Background Color Noise refused (Slice 2as)"
         )
-    # Mix immediately on Background with both-constant A/B is 2al (folded by
-    # caller). Mix after HSV/BC/source with one constant side is peeled by
-    # _peel_world_mix before this function (Slice 2aq).
+    if ntype in ("CURVE_VEC", "CURVE_VECTOR", "CURVE_FLOAT"):
+        raise QuantTraceSyncError(
+            f"world Background Color {ntype!r} refused "
+            "(Slice 2as: ShaderNodeRGBCurve only)"
+        )
     return from_node, from_sock, unlinked_rgb, gh
 
 
@@ -2409,10 +2522,11 @@ def _world_info(scene) -> dict:
     same shapes as env 2ac/2ae. Slice 2ao/2ap/2aq: peel Mix (chain+constant)
     then unlinked Gamma + HueSat + BrightContrast (one of each, any order,
     ≤3 hops) then resolve remaining source as today. Native loft order Color
-    → Gamma → HSV → BrightContrast → Mix → Background. Noise / RGB Curves /
+    → RGBCurves → Gamma → HSV → BrightContrast → Mix → Background. Noise /
     linked Fac / both-sides-linked Mix (non-constant) / second Mix / linked
     Gamma/Hue/Sat/Value/Fac/Bright/Contrast / second Gamma/HueSat/BrightContrast
-    / VECTOR Mix refuse. Slice 2ar: linked Sky Vector accepted (TEX_COORD / Mapping). RGB Curves still refuse.
+    / VECTOR Mix / Vector Curves / Float Curve refuse. Slice 2ar: linked Sky
+    Vector accepted. Slice 2as: RGB Curves accepted (packed LUT, n==0 skip).
     Slice 2ac: Vector may be TEX_COORD Generated/Object/Camera/Window/Reflection
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
@@ -3726,6 +3840,12 @@ def make_qt_simple_scene_type():
             ("world_mix_chain_is_a", ctypes.c_int),
             ("world_mix_clamp_factor", ctypes.c_int),
             ("world_mix_clamp_result", ctypes.c_int),
+            ("world_curves", ctypes.POINTER(ctypes.c_float)),
+            ("world_curves_n", ctypes.c_int),
+            ("world_curves_min_x", ctypes.c_float),
+            ("world_curves_max_x", ctypes.c_float),
+            ("world_curves_fac", ctypes.c_float),
+            ("world_curves_extrapolate", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
@@ -4029,6 +4149,14 @@ def _fill_world_vec_ctypes(desc, packed):
     desc.world_mix_chain_is_a = 0 if _cia is None else int(_cia)
     desc.world_mix_clamp_factor = int(packed.get("world_mix_clamp_factor", 0) or 0)
     desc.world_mix_clamp_result = int(packed.get("world_mix_clamp_result", 0) or 0)
+    # Slice 2as defaults; pointer filled by to_ctypes / to_ctypes_scene.
+    desc.world_curves = None
+    desc.world_curves_n = 0
+    desc.world_curves_min_x = _wf("world_curves_min_x", 0.0)
+    desc.world_curves_max_x = _wf("world_curves_max_x", 1.0)
+    desc.world_curves_fac = _wf("world_curves_fac", 1.0)
+    _ex = packed.get("world_curves_extrapolate", 1)
+    desc.world_curves_extrapolate = 1 if _ex is None else int(_ex)
 
 def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     """Build a QT_SimpleScene + keep-alive buffers from pack_simple_scene output."""
@@ -4074,6 +4202,21 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     desc.world_color_image_path = wcip if wcip else None
     desc.world_color_image_colorspace = wcics if wcics else None
     _fill_world_vec_ctypes(desc, packed)
+    curves_list = packed.get("world_curves") or []
+    curves_n = int(packed.get("world_curves_n", 0) or 0)
+    curves_buf = None
+    if curves_list and curves_n > 0:
+        flat = [float(v) for v in curves_list]
+        if len(flat) < curves_n * 3:
+            raise QuantTraceSyncError(
+                f"world_curves len {len(flat)} < n*3={curves_n * 3} (Slice 2as)"
+            )
+        curves_buf = (ctypes.c_float * (curves_n * 3))(*flat[: curves_n * 3])
+        desc.world_curves = ctypes.cast(curves_buf, ctypes.POINTER(ctypes.c_float))
+        desc.world_curves_n = curves_n
+    else:
+        desc.world_curves = None
+        desc.world_curves_n = 0
     if exr_path:
         desc.exr_path = exr_path.encode("utf-8")
     else:
@@ -4087,7 +4230,7 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     tex_keep: list = []
     _fill_tex_ctypes(desc, packed, tex_keep)
     # Keep buffers alive with the struct.
-    desc._keep = (verts, tris, uvs_buf, tex_keep, wip, wics, wcip, wcics)
+    desc._keep = (verts, tris, uvs_buf, tex_keep, wip, wics, wcip, wcics, curves_buf)
     return desc
 
 
@@ -4415,6 +4558,12 @@ def make_qt_scene_types():
             ("world_mix_chain_is_a", ctypes.c_int),
             ("world_mix_clamp_factor", ctypes.c_int),
             ("world_mix_clamp_result", ctypes.c_int),
+            ("world_curves", ctypes.POINTER(ctypes.c_float)),
+            ("world_curves_n", ctypes.c_int),
+            ("world_curves_min_x", ctypes.c_float),
+            ("world_curves_max_x", ctypes.c_float),
+            ("world_curves_fac", ctypes.c_float),
+            ("world_curves_extrapolate", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
         ]
 
@@ -4502,6 +4651,21 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
     desc.world_color_image_path = wcip if wcip else None
     desc.world_color_image_colorspace = wcics if wcics else None
     _fill_world_vec_ctypes(desc, packed)
+    curves_list = packed.get("world_curves") or []
+    curves_n = int(packed.get("world_curves_n", 0) or 0)
+    if curves_list and curves_n > 0:
+        flat = [float(v) for v in curves_list]
+        if len(flat) < curves_n * 3:
+            raise QuantTraceSyncError(
+                f"world_curves len {len(flat)} < n*3={curves_n * 3} (Slice 2as)"
+            )
+        curves_buf = (ctypes.c_float * (curves_n * 3))(*flat[: curves_n * 3])
+        keep.append(curves_buf)
+        desc.world_curves = ctypes.cast(curves_buf, ctypes.POINTER(ctypes.c_float))
+        desc.world_curves_n = curves_n
+    else:
+        desc.world_curves = None
+        desc.world_curves_n = 0
     if exr_path:
         desc.exr_path = exr_path.encode("utf-8")
     else:
