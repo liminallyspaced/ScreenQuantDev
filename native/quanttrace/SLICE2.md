@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2af landed** (2026-08-28 8pm PlugWalk ET). Packed-only images materialize to `/tmp/quanttrace_packed/<name>_<sha1>.<ext>` via `_abspath_image` (filepath ABI unchanged; no new C++ path fields). base_packed 32²/4 Δmax=1.01e-6; 256²/128 Δmax=1.43e-6 PASS (0 px ≥1e-3). hdr_packed 32²/4 Δmax=6.13e-4; 256²/128 Δmax=2.01e-4 PASS. disk 2f regression 32²/4 Δmax=1.01e-6 PASS. `is_tracer=1`. Native `0.0.33-slice2af`. Addon `0.3.3`.
+Status: **Slice 2ag landed** (2026-08-28 9pm PlugWalk ET). Linked Mapping Location / Rotation / Scale from Combine XYZ (unlinked X/Y/Z defaults or Value→X/Y/Z) or single Value→VECTOR (float→float3 broadcast). Same float3 ABI as 2h (no new C++ fields). combxyz 32²/4 Δmax=2.26e-6; 256²/128 Δmax=1.67e-6 PASS. combxyz_value 32²/4 Δmax=2.26e-6 PASS. unlinked 2h regression 32²/4 Δmax=2.26e-6 PASS. `is_tracer=1`. Native `0.0.34-slice2ag`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -19,6 +19,45 @@ addon zip or public commit tree.
 ---
 
 
+
+
+## 9pm PlugWalk (2026-08-28) — linked Mapping L/R/S (Slice 2ag)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Blender 5.2 Mapping VECTOR: Location `is_unavailable` (keyed `inputs["Location"]` KeyError; iterate by name). Link Location while POINT then switch to VECTOR (link persists). Combine XYZ → Rotation/Scale OK under VECTOR. Value→VECTOR links (Cycles `NODE_CONVERT_FV` = `(v,v,v)`). VECTOR SVM ignores Location; still pack for ABI honesty. |
+| ABI | Unchanged `map_location` / `map_rotation` / `map_scale` float3 (mesh + world). No new link-mode flags — constants resolved at sync time (like 2af filepath materialize). |
+| Python | `_float3_from_mapping_lrs_sock` + `_constant_float_from_value_sock` in `sync.py`. `_mapping_constants` accepts unlinked defaults **or** Combine XYZ ← unlinked/Value X/Y/Z **or** Value→L/R/S. Still refuses TEX_COORD / TEX_IMAGE / nested Mapping into L/R/S; vector_type≠VECTOR refused. |
+| Native | Version stamp only → `0.0.34-slice2ag` (MappingNode set_location/rotation/scale unchanged). |
+| Version | `0.0.34-slice2ag` |
+| Tools | `tools/_quanttrace_slice2ag_scene.py`, `tools/_quanttrace_slice2ag_smoke.py`. Modes: `combxyz`, `combxyz_value`, `value_rot`, `unlinked`. |
+| Visibility | Same 8×8 sRGB checker + Mapping scale=(2,2,2) loc=(0.1,0.2,0) rot_z=0.15 as Slice 2h; Combined chromatic + non-constant. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| combxyz (Combine XYZ defaults → L+R+S) | 32² / 4 | **2.26e-6** | 1.29e-8 | 0 | **PASS** |
+| combxyz (Combine XYZ defaults → L+R+S) | 256² / 128 | **1.67e-6** | 6.05e-9 | 0 | **PASS** |
+| combxyz_value (Value→X/Y/Z → L+R+S) | 32² / 4 | **2.26e-6** | 1.29e-8 | 0 | **PASS** |
+| unlinked (2h regression) | 32² / 4 | **2.26e-6** | 1.29e-8 | 0 | **PASS** |
+
+Proof plate `docs/proof/quanttrace-linked-mapping-lrs-32-pair.png` (combxyz stock|session) + `/workspace/quanttrace-linked-mapping-lrs-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- TEX_COORD / TEX_IMAGE / nested Mapping → L/R/S still refuse. Linked world Strength, Sky/Nishita kitchens still refuse. TEX_IMAGE→L/R/S SVM graphs deferred.
+- Value→Rotation alone packs `(v,v,v)` (honest broadcast); not claimed as a primary gate this hour (`value_rot` tool mode exists).
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Linked world Strength, or TEX_IMAGE→L/R/S if needed. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
 
 ## 8pm PlugWalk (2026-08-28) — packed-only images (Slice 2af)
 
@@ -58,7 +97,7 @@ Packed cache paths under `/tmp/quanttrace_packed/`. Proof plate `docs/proof/quan
 
 ### Next
 
-Linked Mapping L/R/S, or linked world Strength. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
+Linked Mapping L/R/S landed 2ag. Next: linked world Strength. SSS 256 residue stays document-only unless a real root cause appears. Not ReSTIR. Not Classroom time %.
 
 ## 7pm PlugWalk (2026-08-28) — Env Object-with-pointer (Slice 2ae)
 

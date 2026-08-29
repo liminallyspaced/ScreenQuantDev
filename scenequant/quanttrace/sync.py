@@ -209,6 +209,98 @@ def _sock_default_float3(sock) -> Tuple[float, float, float]:
     return (float(dv[0]), float(dv[1]), float(dv[2]))
 
 
+def _constant_float_from_value_sock(sock, label: str) -> float:
+    """Unlinked float default, or single VALUE node with constant output (Slice 2ag)."""
+    if sock is None:
+        raise QuantTraceSyncError(f"{label} missing")
+    if not getattr(sock, "is_linked", False):
+        return float(getattr(sock, "default_value", 0.0) or 0.0)
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"{label} has multiple links (Slice 2ag: Value or unlinked only)"
+        )
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype != "VALUE":
+        raise QuantTraceSyncError(
+            f"{label} linked from {ntype!r} refused "
+            "(Slice 2ag: Value node or unlinked float only)"
+        )
+    if from_sock is None:
+        raise QuantTraceSyncError(f"{label} Value link has no from_socket")
+    return float(getattr(from_sock, "default_value", 0.0) or 0.0)
+
+
+def _float3_from_mapping_lrs_sock(sock, name: str) -> Tuple[float, float, float]:
+    """Resolve Mapping Location/Rotation/Scale to float3 (unlinked or linked constants).
+
+    Slice 2ag accepts:
+      - unlinked socket default (Slice 2h)
+      - Combine XYZ ← unlinked X/Y/Z defaults or Value→X/Y/Z
+      - single Value → VECTOR (Blender/Cycles float→float3 = (v,v,v))
+    Location may be is_unavailable under VECTOR (Blender 5.2); still pack for ABI.
+    VECTOR SVM ignores Location; Rotation + Scale matter.
+    """
+    if sock is None:
+        raise QuantTraceSyncError(f"Mapping missing {name}")
+    if not getattr(sock, "is_linked", False):
+        return _sock_default_float3(sock)
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"Mapping.{name} has multiple links (Slice 2ag)"
+        )
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    sname = getattr(from_sock, "name", "") if from_sock is not None else ""
+    if ntype == "COMBXYZ":
+        if sname not in ("Vector", "vector", ""):
+            raise QuantTraceSyncError(
+                f"Mapping.{name} must come from Combine XYZ Vector "
+                f"(got {sname!r})"
+            )
+        inputs = getattr(from_node, "inputs", None)
+        if inputs is None:
+            raise QuantTraceSyncError(f"Mapping.{name} Combine XYZ has no inputs")
+        getter = getattr(inputs, "get", None)
+        x_s = getter("X") if callable(getter) else None
+        y_s = getter("Y") if callable(getter) else None
+        z_s = getter("Z") if callable(getter) else None
+        if x_s is None or y_s is None or z_s is None:
+            # Fall back to positional (X,Y,Z order).
+            try:
+                x_s = x_s or inputs[0]
+                y_s = y_s or inputs[1]
+                z_s = z_s or inputs[2]
+            except (IndexError, TypeError, KeyError) as e:
+                raise QuantTraceSyncError(
+                    f"Mapping.{name} Combine XYZ missing X/Y/Z"
+                ) from e
+        return (
+            _constant_float_from_value_sock(
+                x_s, f"Mapping.{name}/CombineXYZ.X"
+            ),
+            _constant_float_from_value_sock(
+                y_s, f"Mapping.{name}/CombineXYZ.Y"
+            ),
+            _constant_float_from_value_sock(
+                z_s, f"Mapping.{name}/CombineXYZ.Z"
+            ),
+        )
+    if ntype == "VALUE":
+        # Cycles NODE_CONVERT_FV: float → float3(v,v,v).
+        v = float(getattr(from_sock, "default_value", 0.0) or 0.0)
+        return (v, v, v)
+    raise QuantTraceSyncError(
+        f"Mapping.{name} is linked from {ntype!r} "
+        "(Slice 2ag needs Combine XYZ or Value constants; "
+        "TEX_COORD/TEX_IMAGE/nested Mapping refused)"
+    )
+
+
 def _tex_coord_space_from_vector_link(vec_sock) -> str:
     """Return 'UV', 'Generated', 'Object', 'Camera', 'Window', or 'Reflection'.
 
@@ -404,11 +496,11 @@ def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
                                             Tuple[float, float, float],
                                             int,
                                             str]:
-    """Validate MAPPING: Vector-type, Vector←TEX_COORD UV/Generated/Object/Camera/Window/Reflection, unlinked L/R/S."""
+    """Validate MAPPING: VECTOR type, Vector←TEX_COORD, L/R/S unlinked or Slice 2ag constants."""
     vtype = str(getattr(map_node, "vector_type", "POINT") or "POINT").upper()
     if vtype != "VECTOR":
         raise QuantTraceSyncError(
-            f"Mapping vector_type={vtype!r} refused (Slice 2h needs VECTOR)"
+            f"Mapping vector_type={vtype!r} refused (Slice 2h/2ag needs VECTOR)"
         )
     vec_in = _mapping_input_by_name(map_node, "Vector")
     if vec_in is None or not getattr(vec_in, "is_linked", False):
@@ -419,19 +511,12 @@ def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
     loc_s = _mapping_input_by_name(map_node, "Location")
     rot_s = _mapping_input_by_name(map_node, "Rotation")
     scl_s = _mapping_input_by_name(map_node, "Scale")
-    for name, sock in (("Location", loc_s), ("Rotation", rot_s), ("Scale", scl_s)):
-        if sock is None:
-            raise QuantTraceSyncError(f"Mapping missing {name}")
-        if getattr(sock, "is_linked", False):
-            raise QuantTraceSyncError(
-                f"Mapping.{name} is linked (Slice 2h needs unlinked constants)"
-            )
     # NODE_MAPPING_TYPE_VECTOR == 2 (POINT=0, TEXTURE=1, VECTOR=2, NORMAL=3)
-    # VECTOR SVM ignores Location; still pack DNA default for ABI honesty.
+    # VECTOR SVM ignores Location; still pack for ABI honesty (Slice 2ag).
     return (
-        _sock_default_float3(loc_s),
-        _sock_default_float3(rot_s),
-        _sock_default_float3(scl_s),
+        _float3_from_mapping_lrs_sock(loc_s, "Location"),
+        _float3_from_mapping_lrs_sock(rot_s, "Rotation"),
+        _float3_from_mapping_lrs_sock(scl_s, "Scale"),
         2,
         space,
     )
@@ -1261,7 +1346,8 @@ def _world_info(scene) -> dict:
                 msg = str(e)
                 if "Slice 2h" in msg or "Slice 2" in msg:
                     raise QuantTraceSyncError(
-                        msg.replace("Slice 2h", "Slice 2ae")
+                        msg.replace("Slice 2ag", "Slice 2ae")
+                        .replace("Slice 2h", "Slice 2ae")
                         .replace("Slice 2k", "Slice 2ae")
                         .replace("Slice 2l", "Slice 2ae")
                         .replace("Slice 2m", "Slice 2ae")

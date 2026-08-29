@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.33-slice2af` — packed-only images (`/tmp/quanttrace_packed/`). Addon still `0.3.3`.
+**Current native:** `0.0.34-slice2ag` — linked Mapping L/R/S (Combine XYZ / Value). Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.33-slice2af` (packed-only images).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.34-slice2ag` (linked Mapping L/R/S).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -49,8 +49,9 @@ this tree never feeds Auto clocks.
 | **2ad — BLENDER_OBJECT/BLENDER_WORLD Normal** | **PASS** | BLENDER_OBJECT 32²/4 Δmax **5.59e-9**; 256²/128 Δmax **7.45e-9**. BLENDER_WORLD 256²/128 Δmax **7.45e-9**. Object 2z 32²/4 Δmax **3.58e-7**. Native `0.0.31-slice2ad`. |
 | **2ae — Env Object-with-pointer** | **PASS** | Pointer 32²/4 Δmax **6.74e-4**; 256²/128 Δmax **2.12e-4**. empty-ref 32²/4 Δmax **6.13e-4**. Native `0.0.32-slice2ae`. |
 | **2af — packed-only images** | **PASS** | base_packed 32²/4 Δmax **1.01e-6**; 256²/128 Δmax **1.43e-6**. hdr_packed 32²/4 Δmax **6.13e-4**; 256²/128 Δmax **2.01e-4**. disk 32²/4 Δmax **1.01e-6**. Native `0.0.33-slice2af`. |
+| **2ag — linked Mapping L/R/S** | **PASS** | combxyz 32²/4 Δmax **2.26e-6**; 256²/128 Δmax **1.67e-6**. combxyz_value 32²/4 Δmax **2.26e-6**. unlinked 2h 32²/4 Δmax **2.26e-6**. Native `0.0.34-slice2ag`. |
 
-Kitchens / linked Thin Wall (BOOLEAN) / linked Strength / linked Mapping L/R/S still refuse with a named `QuantTraceSyncError`. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y.
+Kitchens / linked Thin Wall (BOOLEAN) / linked Strength still refuse with a named `QuantTraceSyncError`. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y.
 
 ## Build (Linux) — hello stub (default)
 
