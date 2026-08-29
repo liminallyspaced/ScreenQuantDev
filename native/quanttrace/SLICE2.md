@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2aj landed** (2026-08-29 12am PlugWalk ET). Fold ShaderNodeMix FLOAT / MixRGB → world Background Strength into existing `world_strength` float (Python-only; Factor+A/B unlinked/Value/RGB/shallow Math/Mix). mix_float Fac=0.5 A=0.4 B=1.0 → 0.7 32²/4 Δmax=4.25e-4; 256²/128 Δmax=1.20e-4 PASS. mix_unlinked / mix_rgb / math_mul 2ai / value 2ah 32²/4 Δmax=4.25e-4 PASS. unlinked 2aa 32²/4 Δmax=6.13e-4 PASS. Stock mix 0.7 vs unlinked 1.0 Δmax=0.289 (lever live). mix_tex (TEX_IMAGE→A) refuses. `is_tracer=1`. Native `0.0.37-slice2aj`. Addon `0.3.3`.
+Status: **Slice 2ak landed** (2026-08-29 1am PlugWalk ET). Fold ShaderNodeMapRange FLOAT LINEAR + ShaderNodeClamp MINMAX/RANGE → world Background Strength into existing `world_strength` float (Python-only; no world_color ABI — Mix→Color deferred). map_range Value 0.25 From 0..1 To 0.4..1.6 → 0.7 32²/4 Δmax=4.25e-4; 256²/128 Δmax=1.20e-4 PASS. clamp Value 1.5 Min 0.2 Max 0.7 32²/4 Δmax=4.25e-4 PASS. mix_float 2aj / math_mul 2ai / value 2ah 32²/4 Δmax=4.25e-4 PASS. unlinked 2aa Strength 1.0 32²/4 Δmax=6.13e-4 PASS. Stock map_range 0.7 vs unlinked 1.0 Δmax=0.289 (lever live). map_tex (TEX_IMAGE→Value) refuses. `is_tracer=1`. Native `0.0.38-slice2ak`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -18,6 +18,52 @@ addon zip or public commit tree.
 
 ---
 
+
+
+
+## 1am PlugWalk (2026-08-29) — Map Range/Clamp → world Strength (Slice 2ak)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Retarget: Mix/Math → Background Color was the planned sibling of 2aj, but native ABI has **no** `world_color` float3 (Color is unlinked-black or `world_image_path` TEX_ENVIRONMENT). Do not invent a half ABI this hour. Slice 2ak is Map Range + Clamp → existing `world_strength` float instead.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Blender 5.2 Map Range FLOAT sockets are `Value` / `From Min` / `From Max` / `To Min` / `To Max` (identifiers with spaces). Interpolation LINEAR (STEPPED/SMOOTHSTEP/SMOOTHERSTEP refuse). `clamp` RNA True → Cycles `MapRangeNode::expand` inserts ClampNode RANGE on To Min/Max. Clamp sockets `Value`/`Min`/`Max`; `clamp_type` MINMAX or RANGE (RANGE swaps if Min>Max). Fold at sync into existing `world_strength` float. Strength sock default left at 1.0 while Map Range folds to 0.7 so ignoring the link fails the gate. |
+| ABI | Unchanged `world_strength` float. No new C++ fields — constant resolved at sync time (like 2ai/2aj). No `world_color` float3. |
+| Python | `_world_strength_from_sock` + `_fold_world_strength_map_range` / `_fold_world_strength_clamp` in `sync.py`. Inputs reuse `_world_strength_const_input` (unlinked/Value/Math/Mix/RGB/shallow Map Range/Clamp). TEX_IMAGE / Noise / RGB Curves / VECTOR Map Range / non-LINEAR still refuse Slice 2ak. Color links still TEX_ENVIRONMENT only. |
+| Native | Version stamp only → `0.0.38-slice2ak` (Background strength path unchanged). |
+| Version | `0.0.38-slice2ak` |
+| Tools | `tools/_quanttrace_slice2ak_scene.py`, `tools/_quanttrace_slice2ak_smoke.py`. Modes: `map_range`, `clamp`, `map_tex` (refuse), `mix_float`, `math_mul`, `value`, `unlinked`. Reuses 2aa HDR equirect cube. |
+| Visibility | Same OIIO linear EXR gradient as 2aa; Combined chromatic + non-constant. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| map_range (Value 0.25, From 0..1, To 0.4..1.6 LINEAR clamp → Strength 0.7; sock default 1.0) | 32² / 4 | **4.25e-4** | 2.79e-6 | 0 | **PASS** |
+| map_range (Value 0.25, From 0..1, To 0.4..1.6 LINEAR clamp → Strength 0.7; sock default 1.0) | 256² / 128 | **1.20e-4** | 5.84e-7 | 0 | **PASS** |
+| clamp (Value 1.5 Min 0.2 Max 0.7 MINMAX → Strength 0.7; sock default 1.0) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| mix_float (2aj regression, Fac 0.5 A 0.4 B 1.0) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| math_mul (2ai regression, 0.5 × 1.4) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| value (2ah regression, Value 0.7) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| unlinked (2aa regression, Strength 1.0) | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+
+Live graph (stock map_range 0.7 vs stock unlinked 1.0) 32²/4: Δmax=**0.289** (1024 px ≥1e-3, MAE 0.0947). Packed `world_strength=0.7` while Strength socket default stayed 1.0. map_tex (TEX_IMAGE → Map Range.Value) raises Slice 2ak. Proof plate `docs/proof/quanttrace-maprange-strength-32-pair.png` (map_range stock|session) + `/workspace/quanttrace-maprange-strength-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- TEX_IMAGE / Noise / RGB Curves / VECTOR Map Range / non-LINEAR interpolation → Strength still refuse. Color links (Sky/Nishita/TEX_IMAGE/RGB/Mix → Background Color) still refuse — Mix→Color needs a new `world_color` float3 ABI, not invented this hour. TEX_IMAGE→L/R/S SVM graphs deferred.
+- HDR Δmax remains ~1e-4–7e-4 class (BackgroundLight MIS map), under the 1e-3 gate with 0 px ≥1e-3 on the claim cases.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+TEX_IMAGE→L/R/S, or Sky/Nishita/TEX_IMAGE → Background Color, or Mix/Math → Color (needs new `world_color` float3 ABI). SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
 
 
 
@@ -101,7 +147,7 @@ Live graph (stock mix_float 0.7 vs stock unlinked 1.0) 32²/4: Δmax=**0.289** (
 
 ### Next
 
-TEX_IMAGE→L/R/S, or Sky/Nishita/TEX_IMAGE → Background Color, or Mix/Math → Color. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
+Done 1am: Map Range/Clamp → Strength. Mix→Color still needs a new world_color float3 ABI. See 1am section.
 
 ## 10pm PlugWalk (2026-08-28) — linked world Strength (Slice 2ah)
 

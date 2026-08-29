@@ -39,6 +39,7 @@
 # Slice 2ah: world Background Strength linked from ShaderNodeValue (same float ABI).
 # Slice 2ai: ShaderNodeMath ADD/SUB/MUL/DIV/POWER → Strength (fold into float).
 # Slice 2aj: ShaderNodeMix FLOAT / MixRGB constant → Strength (fold into float).
+# Slice 2ak: ShaderNodeMapRange FLOAT LINEAR + ShaderNodeClamp → Strength (fold into float).
 #   TEX_IMAGE / color-linked Mix / RGB Curves / Noise / Sky/Nishita kitchens still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
@@ -1206,7 +1207,7 @@ _WORLD_STRENGTH_MATH_OPS = frozenset(
 _WORLD_STRENGTH_MIX_OPS = frozenset(
     {"MIX", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE"}
 )
-_WORLD_STRENGTH_FOLD_MAX_DEPTH = 2  # Value|unlinked|Math|Mix one nest OK
+_WORLD_STRENGTH_FOLD_MAX_DEPTH = 2  # Value|unlinked|Math|Mix|MapRange|Clamp one nest OK
 
 
 def _color_to_float(val) -> float:
@@ -1289,10 +1290,24 @@ def _world_strength_const_input(sock, label: str, *, depth: int) -> float:
                 f"{_WORLD_STRENGTH_FOLD_MAX_DEPTH})"
             )
         return _fold_world_strength_mix(from_node, depth=depth)
+    if ntype == "MAP_RANGE":
+        if depth >= _WORLD_STRENGTH_FOLD_MAX_DEPTH:
+            raise QuantTraceSyncError(
+                f"{label} Map Range nest too deep (Slice 2ak max "
+                f"{_WORLD_STRENGTH_FOLD_MAX_DEPTH})"
+            )
+        return _fold_world_strength_map_range(from_node, depth=depth)
+    if ntype == "CLAMP":
+        if depth >= _WORLD_STRENGTH_FOLD_MAX_DEPTH:
+            raise QuantTraceSyncError(
+                f"{label} Clamp nest too deep (Slice 2ak max "
+                f"{_WORLD_STRENGTH_FOLD_MAX_DEPTH})"
+            )
+        return _fold_world_strength_clamp(from_node, depth=depth)
     raise QuantTraceSyncError(
         f"{label} linked from {ntype!r} refused "
-        "(Slice 2aj: Value/Math/Mix/RGB/unlinked float only; "
-        "TEX_IMAGE/RGB Curves/Noise/texture-driven Mix still refuse)"
+        "(Slice 2ak: Value/Math/Mix/RGB/Map Range/Clamp/unlinked float only; "
+        "TEX_IMAGE/RGB Curves/Noise/texture-driven graphs still refuse)"
     )
 
 
@@ -1491,16 +1506,130 @@ def _fold_world_strength_mix(node, *, depth: int = 0) -> float:
     return float(result)
 
 
+def _fold_world_strength_map_range(node, *, depth: int = 0) -> float:
+    """Fold ShaderNodeMapRange FLOAT LINEAR with constant sockets (Slice 2ak).
+
+    Matches Cycles svm_node_map_range LINEAR, then optional RANGE clamp on
+    To Min/To Max when node.clamp is set (MapRangeNode::expand inserts ClampNode).
+    VECTOR / STEPPED / SMOOTHSTEP / SMOOTHERSTEP refuse.
+    """
+    data_type = str(getattr(node, "data_type", "FLOAT") or "FLOAT")
+    if data_type != "FLOAT":
+        raise QuantTraceSyncError(
+            f"world Background Strength Map Range data_type {data_type!r} refused "
+            "(Slice 2ak: FLOAT LINEAR only)"
+        )
+    interp = str(getattr(node, "interpolation_type", "LINEAR") or "LINEAR")
+    if interp != "LINEAR":
+        raise QuantTraceSyncError(
+            f"world Background Strength Map Range interpolation {interp!r} refused "
+            "(Slice 2ak: LINEAR only; STEPPED/SMOOTHSTEP/SMOOTHERSTEP still refuse)"
+        )
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(
+            "world Background Strength Map Range has no inputs (Slice 2ak)"
+        )
+    value_sock = _sock_ident_or_name(inputs, "Value")
+    from_min_sock = _sock_ident_or_name(inputs, "From Min")
+    from_max_sock = _sock_ident_or_name(inputs, "From Max")
+    to_min_sock = _sock_ident_or_name(inputs, "To Min")
+    to_max_sock = _sock_ident_or_name(inputs, "To Max")
+    if None in (value_sock, from_min_sock, from_max_sock, to_min_sock, to_max_sock):
+        try:
+            enabled = [s for s in inputs if getattr(s, "enabled", True)]
+            value_sock = value_sock or enabled[0]
+            from_min_sock = from_min_sock or enabled[1]
+            from_max_sock = from_max_sock or enabled[2]
+            to_min_sock = to_min_sock or enabled[3]
+            to_max_sock = to_max_sock or enabled[4]
+        except (IndexError, TypeError, KeyError) as e:
+            raise QuantTraceSyncError(
+                "world Background Strength Map Range missing Value/From Min/"
+                "From Max/To Min/To Max (Slice 2ak)"
+            ) from e
+    value = _world_strength_const_input(
+        value_sock, "world Background Strength Map Range.Value", depth=depth + 1
+    )
+    from_min = _world_strength_const_input(
+        from_min_sock, "world Background Strength Map Range.From Min", depth=depth + 1
+    )
+    from_max = _world_strength_const_input(
+        from_max_sock, "world Background Strength Map Range.From Max", depth=depth + 1
+    )
+    to_min = _world_strength_const_input(
+        to_min_sock, "world Background Strength Map Range.To Min", depth=depth + 1
+    )
+    to_max = _world_strength_const_input(
+        to_max_sock, "world Background Strength Map Range.To Max", depth=depth + 1
+    )
+    if abs(from_max - from_min) < 1e-12:
+        result = 0.0
+    else:
+        factor = (value - from_min) / (from_max - from_min)
+        result = to_min + factor * (to_max - to_min)
+    if bool(getattr(node, "clamp", False)):
+        # Cycles MapRangeNode::expand → ClampNode RANGE on To Min / To Max.
+        if to_min > to_max:
+            result = min(to_min, max(to_max, result))
+        else:
+            result = min(to_max, max(to_min, result))
+    return float(result)
+
+
+def _fold_world_strength_clamp(node, *, depth: int = 0) -> float:
+    """Fold ShaderNodeClamp MINMAX/RANGE with constant Value/Min/Max (Slice 2ak)."""
+    ctype = str(getattr(node, "clamp_type", "MINMAX") or "MINMAX")
+    if ctype not in ("MINMAX", "RANGE"):
+        raise QuantTraceSyncError(
+            f"world Background Strength Clamp clamp_type {ctype!r} refused "
+            "(Slice 2ak: MINMAX/RANGE only)"
+        )
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(
+            "world Background Strength Clamp has no inputs (Slice 2ak)"
+        )
+    value_sock = _sock_ident_or_name(inputs, "Value")
+    min_sock = _sock_ident_or_name(inputs, "Min")
+    max_sock = _sock_ident_or_name(inputs, "Max")
+    if None in (value_sock, min_sock, max_sock):
+        try:
+            value_sock = value_sock or inputs[0]
+            min_sock = min_sock or inputs[1]
+            max_sock = max_sock or inputs[2]
+        except (IndexError, TypeError, KeyError) as e:
+            raise QuantTraceSyncError(
+                "world Background Strength Clamp missing Value/Min/Max (Slice 2ak)"
+            ) from e
+    value = _world_strength_const_input(
+        value_sock, "world Background Strength Clamp.Value", depth=depth + 1
+    )
+    mn = _world_strength_const_input(
+        min_sock, "world Background Strength Clamp.Min", depth=depth + 1
+    )
+    mx = _world_strength_const_input(
+        max_sock, "world Background Strength Clamp.Max", depth=depth + 1
+    )
+    if ctype == "RANGE" and mn > mx:
+        mn, mx = mx, mn
+    # Cycles util clamp(value, min, max) == min(max(value, min), max); no swap on MINMAX.
+    return float(min(mx, max(mn, value)))
+
+
 def _world_strength_from_sock(sock) -> float:
-    """Resolve Background.Strength to a constant float (Slice 2ah/2ai/2aj).
+    """Resolve Background.Strength to a constant float (Slice 2ah/2ai/2aj/2ak).
 
     Accepts unlinked default_value, ShaderNodeValue, ShaderNodeMath
-    (ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER), or ShaderNodeMix / MixRGB whose
+    (ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER), ShaderNodeMix / MixRGB whose
     Factor + A/B fold to constants (unlinked floats / Value / RGB / shallow
-    Math/Mix). FLOAT mix type is the primary path; constant RGBA / MixRGB
-    folds via per-channel blend then RGB average (NODE_CONVERT_CF).
+    Math/Mix), ShaderNodeMapRange FLOAT LINEAR (Value/From Min/Max/To Min/Max
+    constant; clamp RNA → RANGE clamp on To Min/Max), or ShaderNodeClamp
+    MINMAX/RANGE. FLOAT mix type is the primary Mix path; constant RGBA /
+    MixRGB folds via per-channel blend then RGB average (NODE_CONVERT_CF).
     Multi-link, TEX_IMAGE / color-linked Mix / RGB Curves / Noise /
-    VECTOR Mix / texture-driven graphs / kitchens refuse.
+    VECTOR Mix / VECTOR Map Range / non-LINEAR Map Range / texture-driven
+    graphs / kitchens refuse.
     """
     if sock is None:
         return 0.0
@@ -1525,15 +1654,20 @@ def _world_strength_from_sock(sock) -> float:
         return _fold_world_strength_math(from_node, depth=0)
     if ntype in ("MIX", "MIX_RGB"):
         return _fold_world_strength_mix(from_node, depth=0)
+    if ntype == "MAP_RANGE":
+        return _fold_world_strength_map_range(from_node, depth=0)
+    if ntype == "CLAMP":
+        return _fold_world_strength_clamp(from_node, depth=0)
     raise QuantTraceSyncError(
         f"world Background Strength linked from {ntype!r} refused "
-        "(Slice 2aj: ShaderNodeValue / ShaderNodeMath / ShaderNodeMix / "
-        "MixRGB / unlinked float only; TEX_IMAGE/RGB Curves/Noise still refuse)"
+        "(Slice 2ak: ShaderNodeValue / ShaderNodeMath / ShaderNodeMix / "
+        "MixRGB / Map Range FLOAT LINEAR / Clamp / unlinked float only; "
+        "TEX_IMAGE/RGB Curves/Noise still refuse)"
     )
 
 
 def _world_info(scene) -> dict:
-    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah/2ai/2aj).
+    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah/2ai/2aj/2ak).
 
     Returns dict:
       world_strength: float
@@ -1548,9 +1682,10 @@ def _world_info(scene) -> dict:
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
     refuse with Slice 2ac in the error.
-    Slice 2ah/2ai/2aj: Strength may be unlinked default_value, ShaderNodeValue,
-    ShaderNodeMath (ADD/SUB/MUL/DIV/POWER), or ShaderNodeMix FLOAT / MixRGB
-    whose Factor+A/B fold to constants (Value/unlinked/RGB/shallow Math/Mix).
+    Slice 2ah/2ai/2aj/2ak: Strength may be unlinked default_value, ShaderNodeValue,
+    ShaderNodeMath (ADD/SUB/MUL/DIV/POWER), ShaderNodeMix FLOAT / MixRGB
+    whose Factor+A/B fold to constants (Value/unlinked/RGB/shallow Math/Mix),
+    ShaderNodeMapRange FLOAT LINEAR, or ShaderNodeClamp MINMAX/RANGE.
     TEX_IMAGE / color-linked Mix / RGB Curves / Noise → Strength still refuse.
     """
     empty = {

@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.37-slice2aj` — Mix → world Background Strength (fold into float). Addon still `0.3.3`.
+**Current native:** `0.0.38-slice2ak` — Map Range/Clamp → world Background Strength (fold into float). Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.37-slice2aj` (Mix → world Strength).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.38-slice2ak` (Map Range/Clamp → world Strength).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -53,8 +53,9 @@ this tree never feeds Auto clocks.
 | **2ah — linked world Strength** | **PASS** | Value 0.7 32²/4 Δmax **4.25e-4**; 256²/128 Δmax **1.20e-4**. unlinked 2aa 32²/4 Δmax **6.13e-4**. 2ac Mapping 32²/4 Δmax **6.75e-4**. Native `0.0.35-slice2ah`. |
 | **2ai — Math → world Strength** | **PASS** | math_mul 0.5×1.4 32²/4 Δmax **4.25e-4**; 256²/128 Δmax **1.20e-4**. math_add 32²/4 Δmax **4.25e-4**. value 2ah 32²/4 Δmax **4.25e-4**. unlinked 2aa 32²/4 Δmax **6.13e-4**. Native `0.0.36-slice2ai`. |
 | **2aj — Mix → world Strength** | **PASS** | mix_float Fac 0.5 A 0.4 B 1.0 32²/4 Δmax **4.25e-4**; 256²/128 Δmax **1.20e-4**. mix_unlinked / mix_rgb / math_mul 2ai / value 2ah 32²/4 Δmax **4.25e-4**. unlinked 2aa 32²/4 Δmax **6.13e-4**. Native `0.0.37-slice2aj`. |
+| **2ak — Map Range/Clamp → world Strength** | **PASS** | map_range Value 0.25 From 0..1 To 0.4..1.6 32²/4 Δmax **4.25e-4**; 256²/128 Δmax **1.20e-4**. clamp 32²/4 Δmax **4.25e-4**. mix_float / math_mul / value 32²/4 Δmax **4.25e-4**. unlinked 2aa Strength 1.0 32²/4 Δmax **6.13e-4**. Native `0.0.38-slice2ak`. |
 
-Kitchens / linked Thin Wall (BOOLEAN) / TEX_IMAGE·color-linked Mix → world Strength still refuse with a named `QuantTraceSyncError`. Mix FLOAT / MixRGB constant → world Strength is Slice 2aj. Math → world Strength is Slice 2ai. Linked world Strength (Value node) is Slice 2ah. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y.
+Kitchens / linked Thin Wall (BOOLEAN) / TEX_IMAGE → world Strength still refuse with a named `QuantTraceSyncError`. Map Range FLOAT LINEAR / Clamp → world Strength is Slice 2ak. Mix FLOAT / MixRGB constant → world Strength is Slice 2aj. Math → world Strength is Slice 2ai. Linked world Strength (Value node) is Slice 2ah. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y. Mix→Color needs a new world_color ABI (not present).
 
 ## Build (Linux) — hello stub (default)
 
