@@ -40,7 +40,11 @@
  * Slice 2am: Sky Texture → world Background Color (world_sky_* after world_color).
  *   type 0 = 2al/2aa bit-identical. 1=PREETHAM 2=HOSEK 3=NISHITA/MULTIPLE
  *   4=SINGLE_SCATTERING (Blender 5.2 RNA). Path empty, world_color zeros.
- *   Unlinked Vector only. Linked Sky Vector / TEX_IMAGE→Color still refuse.
+ *   Unlinked Vector only. Linked Sky Vector still refuse.
+ * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
+ *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
+ *   Priority: env path → sky → color-image → world_color RGB. Vector via
+ *   world_tex_vector_mode + world_map_* + world_ob_* (same as 2ac/2ae).
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  *   Empty Object ref (2l) stays use_transform=false / NODE_TEXCO_OBJECT.
  *   Pointer set → NODE_TEXCO_OBJECT_WITH_TRANSFORM + packed inverse of ob_tfm.
@@ -147,6 +151,10 @@ typedef struct QT_SimpleScene {
   int world_sky_sun_disc;
   float world_sky_sun_size, world_sky_sun_intensity, world_sky_sun_elevation, world_sky_sun_rotation;
   float world_sky_altitude, world_sky_air_density, world_sky_aerosol_density, world_sky_ozone_density;
+  /* Slice 2an: Image Texture → Background Color (NULL/empty = not 2an) */
+  const char *world_color_image_path;
+  const char *world_color_image_colorspace; /* OCIO name; empty = node default */
+  int world_color_image_projection; /* 0=FLAT, 1=BOX, 2=SPHERE, 3=TUBE */
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -799,6 +807,10 @@ typedef struct QT_Scene {
   int world_sky_sun_disc;
   float world_sky_sun_size, world_sky_sun_intensity, world_sky_sun_elevation, world_sky_sun_rotation;
   float world_sky_altitude, world_sky_air_density, world_sky_aerosol_density, world_sky_ozone_density;
+  /* Slice 2an: Image Texture → Background Color (NULL/empty = not 2an) */
+  const char *world_color_image_path;
+  const char *world_color_image_colorspace; /* OCIO name; empty = node default */
+  int world_color_image_projection; /* 0=FLAT, 1=BOX, 2=SPHERE, 3=TUBE */
   const char *exr_path;
 } QT_Scene;
 

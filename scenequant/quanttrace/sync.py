@@ -46,7 +46,11 @@
 # Slice 2am: ShaderNodeTexSky → Background Color (world_sky_* after world_color).
 #   type 0 = 2al/2aa. 1=PREETHAM 2=HOSEK 3=NISHITA/MULTIPLE 4=SINGLE.
 #   Path empty, world_color zeros. Unlinked Vector only.
-#   Linked Sky Vector / TEX_IMAGE→Color / Noise / RGB Curves still refuse.
+#   Linked Sky Vector / Noise / RGB Curves still refuse.
+# Slice 2an: ShaderNodeTexImage → Background Color (world_color_image_* after
+#   world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical. Priority:
+#   TEX_ENVIRONMENT → TEX_SKY → TEX_IMAGE → RGB/Mix. Vector via world_tex_vector_*
+#   (same 2ac/2ae shapes). Noise / RGB Curves / multi-link Color still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -1786,7 +1790,7 @@ def _pack_world_sky_from_node(node) -> dict:
         raise QuantTraceSyncError(
             "world Background Color TEX_SKY Vector linked refused "
             "(Slice 2am: unlinked Vector / ShaderNodeTexSky only; "
-            "TEX_COORD/Noise/RGB Curves/TEX_IMAGE→Color still refuse)"
+            "TEX_COORD/Noise/RGB Curves still refuse)"
         )
     rna = str(getattr(node, "sky_type", "") or "").upper()
     if rna in ("NISHITA", "MULTIPLE_SCATTERING"):
@@ -1833,6 +1837,7 @@ def _world_color_from_linked(from_node, from_sock):
 
     TEX_ENVIRONMENT is not folded here — caller keeps the env path and
     leaves world_color at (0,0,0). TEX_SKY is packed by the caller (Slice 2am).
+    TEX_IMAGE is packed by the caller (Slice 2an) — not refused here.
     """
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "RGB":
@@ -1852,14 +1857,153 @@ def _world_color_from_linked(from_node, from_sock):
         return _fold_world_color_mix(from_node, depth=0)
     raise QuantTraceSyncError(
         f"world Background Color linked from {ntype!r} refused "
-        "(Slice 2al: RGB/Mix/MixRGB/Value/Math/unlinked or TEX_ENVIRONMENT; "
-        "Slice 2am TEX_SKY; TEX_IMAGE/Noise/RGB Curves/spatially-varying Mix "
-        "still refuse)"
+        "(Slice 2an: TEX_IMAGE/TEX_ENVIRONMENT/TEX_SKY/RGB/Mix/Value/Math; "
+        "Noise/RGB Curves/spatially-varying Mix still refuse)"
     )
 
 
+
+def _world_color_image_empty():
+    """Slice 2an zeros — empty path keeps 2aa/2al/2am bit-identical."""
+    return {
+        "world_color_image_path": "",
+        "world_color_image_colorspace": "",
+        "world_color_image_projection": 0,
+    }
+
+
+def _pack_world_color_image_from_node(from_node) -> dict:
+    """Pack ShaderNodeTexImage → Background Color (Slice 2an).
+
+    Returns world_color_image_* plus world_tex_vector_mode / world_map_* /
+    world_ob_ref (same Vector shapes as env 2ac/2ae). Path empty refused.
+    """
+    img = getattr(from_node, "image", None)
+    path = _abspath_image(img)
+    if not path:
+        raise QuantTraceSyncError(
+            "world Background Color TEX_IMAGE has no disk filepath and no "
+            "packed pixels (Slice 2af / Slice 2an)"
+        )
+    proj_rna = str(getattr(from_node, "projection", "FLAT") or "").upper()
+    if proj_rna == "FLAT":
+        proj = 0
+    elif proj_rna == "BOX":
+        proj = 1
+    elif proj_rna == "SPHERE":
+        proj = 2
+    elif proj_rna == "TUBE":
+        proj = 3
+    else:
+        raise QuantTraceSyncError(
+            f"world Background Color TEX_IMAGE projection {proj_rna!r} refused "
+            "(Slice 2an: FLAT/BOX/SPHERE/TUBE)"
+        )
+    cs = ""
+    if img is not None:
+        cs_settings = getattr(img, "colorspace_settings", None)
+        if cs_settings is not None:
+            cs = str(getattr(cs_settings, "name", "") or "")
+
+    tex_vector_mode = 0  # QT_TEX_VECTOR_UNLINKED → LINK_TEXTURE_UV
+    map_location = (0.0, 0.0, 0.0)
+    map_rotation = (0.0, 0.0, 0.0)
+    map_scale = (1.0, 1.0, 1.0)
+    map_type = 2
+    world_ob_ref = None
+    vec_sock = from_node.inputs.get("Vector") if from_node is not None else None
+    if vec_sock is not None and getattr(vec_sock, "is_linked", False):
+        vlinks = list(getattr(vec_sock, "links", None) or [])
+        if len(vlinks) != 1:
+            raise QuantTraceSyncError(
+                "world Background Color TEX_IMAGE Vector has multiple links "
+                "(Slice 2an)"
+            )
+        vsrc = vlinks[0]
+        vnode = getattr(vsrc, "from_node", None)
+        vsock = getattr(vsrc, "from_socket", None)
+        vtype = getattr(vnode, "type", None) if vnode is not None else None
+        vname = getattr(vsock, "name", "") if vsock is not None else ""
+        if vtype == "TEX_COORD":
+            key = str(vname).strip().lower()
+            if key == "uv":
+                tex_vector_mode = 1
+            elif key == "generated":
+                tex_vector_mode = 3
+            elif key == "object":
+                world_ob_ref = getattr(vnode, "object", None)
+                tex_vector_mode = 5
+            elif key == "camera":
+                tex_vector_mode = 7
+            elif key == "window":
+                tex_vector_mode = 9
+            elif key == "reflection":
+                tex_vector_mode = 11
+            else:
+                raise QuantTraceSyncError(
+                    f"world Background Color TEX_IMAGE Vector TEX_COORD output "
+                    f"{vname!r} refused (Slice 2an)"
+                )
+        elif vtype == "MAPPING":
+            if vname not in ("Vector", "vector"):
+                raise QuantTraceSyncError(
+                    "world Background Color TEX_IMAGE Vector must come from "
+                    "Mapping Vector (Slice 2an)"
+                )
+            try:
+                map_location, map_rotation, map_scale, map_type, space = (
+                    _mapping_constants(vnode)
+                )
+            except QuantTraceSyncError as e:
+                msg = str(e)
+                if "Slice 2" in msg:
+                    raise QuantTraceSyncError(
+                        msg.replace("Slice 2ag", "Slice 2an")
+                        .replace("Slice 2h", "Slice 2an")
+                        .replace("Slice 2k", "Slice 2an")
+                        .replace("Slice 2l", "Slice 2an")
+                        .replace("Slice 2m", "Slice 2an")
+                        .replace("Slice 2n", "Slice 2an")
+                        .replace("Slice 2ac", "Slice 2an")
+                        .replace("Slice 2ae", "Slice 2an")
+                        .replace("Slice 2ab", "Slice 2an")
+                    ) from e
+                raise QuantTraceSyncError(f"{msg} (Slice 2an)") from e
+            if space == "Generated":
+                tex_vector_mode = 4
+            elif space == "Object":
+                vec_in = _mapping_input_by_name(vnode, "Vector")
+                world_ob_ref = _tex_coord_object_from_vec_sock(vec_in)
+                tex_vector_mode = 6
+            elif space == "Camera":
+                tex_vector_mode = 8
+            elif space == "Window":
+                tex_vector_mode = 10
+            elif space == "Reflection":
+                tex_vector_mode = 12
+            else:
+                tex_vector_mode = 2  # UV Mapping
+        else:
+            raise QuantTraceSyncError(
+                f"world Background Color TEX_IMAGE Vector from {vtype!r} "
+                "refused (Slice 2an: TEX_COORD or Mapping←TEX_COORD only)"
+            )
+
+    return {
+        "world_color_image_path": path,
+        "world_color_image_colorspace": cs,
+        "world_color_image_projection": proj,
+        "world_tex_vector_mode": tex_vector_mode,
+        "world_map_location": map_location,
+        "world_map_rotation": map_rotation,
+        "world_map_scale": map_scale,
+        "world_map_type": map_type,
+        "world_ob_ref": world_ob_ref,
+    }
+
+
 def _world_info(scene) -> dict:
-    """Pack world Background + optional Environment Texture / Sky (2aa/2al/2am).
+    """Pack world Background + Env / Sky / ImageTexture Color (2aa/2al/2am/2an).
 
     Returns dict:
       world_strength: float
@@ -1867,17 +2011,20 @@ def _world_info(scene) -> dict:
       world_image_path: str (empty = use world_color, Slice 2b/2al)
       world_image_colorspace: str
       world_projection: int (0=EQUIRECTANGULAR, 1=MIRROR_BALL)
-      world_tex_vector_mode: int (QT_TEX_VECTOR_*; 0 = unlinked LINK_POSITION)
+      world_tex_vector_mode: int (QT_TEX_VECTOR_*; 0 = unlinked)
       world_map_location / rotation / scale / type: Mapping constants (Slice 2ac)
       world_sky_*: Slice 2am Sky Texture (type 0 = none)
+      world_color_image_*: Slice 2an Image Texture → Color (empty path = none)
 
     Empty path keeps locked-cube black worlds bit-identical when world_color is 0
-    and world_sky_type is 0.
+    and world_sky_type is 0 and world_color_image_path is empty.
     Slice 2al: unlinked Color (incl. non-black), ShaderNodeRGB, MixRGB / Mix
     FLOAT constants, Value/Math → Color as grey. TEX_ENVIRONMENT still wins
     (world_color stays 0,0,0). Slice 2am: ShaderNodeTexSky (unlinked Vector)
-    packs world_sky_* (path empty, color zeros). TEX_IMAGE/Noise/RGB Curves /
-    spatially-varying Mix / linked Sky Vector refuse.
+    packs world_sky_* (path empty, color zeros). Slice 2an: ShaderNodeTexImage
+    Color → Background Color (path empty + color zeros + sky_type 0); Vector
+    same shapes as env 2ac/2ae. Noise / RGB Curves / spatially-varying Mix /
+    linked Sky Vector refuse.
     Slice 2ac: Vector may be TEX_COORD Generated/Object/Camera/Window/Reflection
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
@@ -1900,6 +2047,7 @@ def _world_info(scene) -> dict:
         "world_map_scale": (1.0, 1.0, 1.0),
         "world_map_type": 2,
         **_world_sky_empty(),
+        **_world_color_image_empty(),
     }
     world = getattr(scene, "world", None)
     if world is None:
@@ -1931,11 +2079,13 @@ def _world_info(scene) -> dict:
             "world_strength": strength,
             "world_color": world_color,
         }
-    # Color linked — TEX_ENVIRONMENT (2aa), TEX_SKY (2am), or RGB/Mix (2al).
+    # Color linked — TEX_ENVIRONMENT (2aa), TEX_SKY (2am), TEX_IMAGE (2an),
+    # or RGB/Mix (2al).
     links = list(getattr(color_sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
-            "world Background Color multi-link refused (Slice 2aa/2al/2am)"
+            "world Background Color multi-link refused "
+            "(Slice 2aa/2al/2am/2an)"
         )
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
@@ -1947,6 +2097,14 @@ def _world_info(scene) -> dict:
             "world_strength": strength,
             "world_color": (0.0, 0.0, 0.0),
             **sky,
+        }
+    if ntype == "TEX_IMAGE":
+        ci = _pack_world_color_image_from_node(from_node)
+        return {
+            **empty,
+            "world_strength": strength,
+            "world_color": (0.0, 0.0, 0.0),
+            **ci,
         }
     if ntype != "TEX_ENVIRONMENT":
         world_color = _world_color_from_linked(from_node, from_sock)
@@ -2075,6 +2233,7 @@ def _world_info(scene) -> dict:
         "world_map_type": map_type,
         "world_ob_ref": world_ob_ref,
         **_world_sky_empty(),
+        **_world_color_image_empty(),
     }
 
 
@@ -3141,6 +3300,9 @@ def make_qt_simple_scene_type():
             ("world_sky_air_density", ctypes.c_float),
             ("world_sky_aerosol_density", ctypes.c_float),
             ("world_sky_ozone_density", ctypes.c_float),
+            ("world_color_image_path", ctypes.c_char_p),
+            ("world_color_image_colorspace", ctypes.c_char_p),
+            ("world_color_image_projection", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
@@ -3415,6 +3577,11 @@ def _fill_world_vec_ctypes(desc, packed):
     desc.world_sky_air_density = float(packed.get("world_sky_air_density", 0.0) or 0.0)
     desc.world_sky_aerosol_density = float(packed.get("world_sky_aerosol_density", 0.0) or 0.0)
     desc.world_sky_ozone_density = float(packed.get("world_sky_ozone_density", 0.0) or 0.0)
+    # Slice 2an: Image Texture → world Color (strings filled by callers into
+    # desc + keep-alive; projection int here).
+    desc.world_color_image_projection = int(
+        packed.get("world_color_image_projection", 0) or 0
+    )
 
 def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     """Build a QT_SimpleScene + keep-alive buffers from pack_simple_scene output."""
@@ -3455,6 +3622,10 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     desc.world_image_path = wip if wip else None
     desc.world_image_colorspace = wics if wics else None
     desc.world_projection = int(packed.get("world_projection", 0) or 0)
+    wcip = (packed.get("world_color_image_path") or "").encode("utf-8")
+    wcics = (packed.get("world_color_image_colorspace") or "").encode("utf-8")
+    desc.world_color_image_path = wcip if wcip else None
+    desc.world_color_image_colorspace = wcics if wcics else None
     _fill_world_vec_ctypes(desc, packed)
     if exr_path:
         desc.exr_path = exr_path.encode("utf-8")
@@ -3469,7 +3640,7 @@ def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     tex_keep: list = []
     _fill_tex_ctypes(desc, packed, tex_keep)
     # Keep buffers alive with the struct.
-    desc._keep = (verts, tris, uvs_buf, tex_keep, wip, wics)
+    desc._keep = (verts, tris, uvs_buf, tex_keep, wip, wics, wcip, wcics)
     return desc
 
 
@@ -3781,6 +3952,9 @@ def make_qt_scene_types():
             ("world_sky_air_density", ctypes.c_float),
             ("world_sky_aerosol_density", ctypes.c_float),
             ("world_sky_ozone_density", ctypes.c_float),
+            ("world_color_image_path", ctypes.c_char_p),
+            ("world_color_image_colorspace", ctypes.c_char_p),
+            ("world_color_image_projection", ctypes.c_int),
             ("exr_path", ctypes.c_char_p),
         ]
 
@@ -3861,6 +4035,12 @@ def to_ctypes_scene(packed: dict, QT_Mesh, QT_Light, QT_Scene, exr_path=None):
     desc.world_image_path = wip if wip else None
     desc.world_image_colorspace = wics if wics else None
     desc.world_projection = int(packed.get("world_projection", 0) or 0)
+    wcip = (packed.get("world_color_image_path") or "").encode("utf-8")
+    wcics = (packed.get("world_color_image_colorspace") or "").encode("utf-8")
+    keep.append(wcip)
+    keep.append(wcics)
+    desc.world_color_image_path = wcip if wcip else None
+    desc.world_color_image_colorspace = wcics if wcics else None
     _fill_world_vec_ctypes(desc, packed)
     if exr_path:
         desc.exr_path = exr_path.encode("utf-8")

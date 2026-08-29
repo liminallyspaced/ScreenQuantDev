@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2am landed** (2026-08-29 3am PlugWalk ET). Sky Texture → world Background Color (`world_sky_*` after `world_color`). Nishita/MULTIPLE_SCATTERING default RNA 32²/4 Δmax=1.91e-6 PASS; 256²/128 Δmax=0.00172 (3 sun-disc px) not claimed PASS. nishita_elev 0.6 rad 32²/4 Δmax=1.91e-6 PASS. rgb 2al / hdr 2aa 32²/4 PASS. Stock nishita vs black Δmax=12.0 (lever live). Linked Sky Vector refuses. `is_tracer=1`. Native `0.0.40-slice2am`. Addon `0.3.3`.
+Status: **Slice 2an landed** (2026-08-29 4am PlugWalk ET). TEX_IMAGE → world Background Color (`world_color_image_*` after `world_sky_ozone_density`). Generated FLAT claim 32²/4 Δmax=9.73e-4 PASS / 256²/128 Δmax=3.01e-4 PASS. Mapping rot_z=0.15 32²/4 Δmax=0.00115 (1 px) not claimed PASS. Unlinked / rgb / hdr / nishita 32²/4 PASS. Stock teximage vs black Δmax=0.716 (lever live). Noise refuses. `is_tracer=1`. Native `0.0.41-slice2an`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -22,6 +22,53 @@ addon zip or public commit tree.
 
 
 
+
+
+## 4am PlugWalk (2026-08-29) — TEX_IMAGE → world Color (Slice 2an)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Retarget: 2am packed Sky/Nishita Color and refused TEX_IMAGE→Color. Loft EasyHDR-style graphs and many artist worlds feed a 2D Image Texture into Background Color (not Environment Texture). This hour accepts that graph.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Cycles `ImageTextureNode` Vector default is `LINK_TEXTURE_UV` (cite `shader_nodes.cpp`); on world that can be spatially flat — claim plate uses TEX_COORD Generated. Projection enum FLAT/BOX/SPHERE/TUBE = NODE_IMAGE_PROJ_*. BackgroundLight: ImageTexture is **not** scanned by `device_update_background` AUTOMATIC (only EnvironmentTexture + SkyTexture); map_res=0 falls through to default 1024×512 — match env/color factory 1024. |
+| ABI | `world_color_image_path` / `world_color_image_colorspace` / `world_color_image_projection` after `world_sky_ozone_density` on `QT_SimpleScene` + `QT_Scene`. Empty path = 2aa/2al/2am bit-identical. |
+| Python | `_world_info` packs TEX_IMAGE Color; Vector like env 2ac/2ae. Path empty + color zeros + sky_type 0. Noise / RGB Curves / multi-link refuse Slice 2an. |
+| Native | Priority env → sky → ImageTextureNode Color→Background Color → world_color RGB. BackgroundLight when has_env \|\| has_sky \|\| has_color_image \|\| color_nonzero. |
+| Version | `0.0.41-slice2an` |
+| Tools | `_quanttrace_slice2an_scene/smoke.py` (8×8 sRGB checker; modes teximage / mapping / unlinked / rgb / hdr / nishita / noise / black) |
+
+### Measured — TEX_IMAGE Generated FLAT (claim)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **9.73e-4** | 2.79e-6 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **3.01e-4** | 6.40e-7 | 0 / 65536 | **PASS** |
+
+### Measured — secondary / regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| teximage_mapping rot_z=0.15 | 0.00115 | 3.05e-6 | 1 | FAIL (not claimed) |
+| teximage_unlinked | 4.69e-5 | 1.89e-7 | 0 | **PASS** |
+| rgb 2al | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| nishita 2am | 1.91e-6 | 1.87e-8 | 0 | **PASS** |
+| Stock teximage vs black | 0.716 | 0.170 | 1024 | live |
+
+### Honesty / still refuses
+
+- Linked Sky Vector / Noise / RGB Curves / BOX blend / tiled UDIM / loft EasyHDR Gamma/HueSat/Mix chain / kitchens still refuse.
+- Still-life / SSS / sky-256 sun-disc residue still documented.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Linked Sky Vector, PREETHAM/HOSEK 256 gate, loft EasyHDR Gamma/HueSat/Mix → Color when Color is spatially varying, or Mix/Math → Color. Not ReSTIR. Not Classroom time %.
 
 
 ## 3am PlugWalk (2026-08-29) — Sky/Nishita → world Color (Slice 2am)
@@ -64,8 +111,7 @@ Live graph (stock nishita vs stock black world) 32²/4: Δmax=**12.0** (1024 px 
 
 ### Next
 
-TEX_IMAGE → Color, or linked Sky Vector / Mapping. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
-
+Landed as Slice 2an (TEX_IMAGE → Color). Linked Sky Vector / PREETHAM-HOSEK 256 / EasyHDR chain still open. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
 
 
 ## 2am PlugWalk (2026-08-29) — world Background Color RGB/Mix (Slice 2al)

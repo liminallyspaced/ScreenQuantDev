@@ -40,6 +40,11 @@
  * Slice 2am: SkyTextureNode → Background Color (world_sky_type != 0).
  *   Path empty, do not mix world_color into the sky graph. BackgroundLight
  *   when has_env || has_sky || color_nonzero. Unlinked Vector (GENERATED).
+ * Slice 2an: ImageTextureNode → Background Color (world_color_image_path).
+ *   Priority: env → sky → color-image → world_color RGB. Vector via
+ *   world_tex_vector_mode (0 = LINK_TEXTURE_UV ImageTexture default).
+ *   BackgroundLight when has_env || has_sky || has_color_image || color_nonzero.
+ *   map_resolution 1024 like env/color (ImageTexture not scanned for AUTOMATIC).
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
@@ -567,6 +572,9 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->world_sky_air_density = s->world_sky_air_density;
     out->world_sky_aerosol_density = s->world_sky_aerosol_density;
     out->world_sky_ozone_density = s->world_sky_ozone_density;
+    out->world_color_image_path = s->world_color_image_path;
+    out->world_color_image_colorspace = s->world_color_image_colorspace;
+    out->world_color_image_projection = s->world_color_image_projection;
     out->exr_path = s->exr_path;
 }
 
@@ -1372,7 +1380,8 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
     cam->update(scene);
 
     /* World Background: black+strength (Slice 2b), constant Color (Slice 2al),
-     * Environment Texture (Slice 2aa/2ac/2ae), or Sky Texture (Slice 2am).
+     * Environment Texture (Slice 2aa/2ac/2ae), Sky Texture (Slice 2am), or
+     * Image Texture → Color (Slice 2an).
      * Slice 2aa: Vector unlinked LINK_POSITION. Slice 2ac: TEX_COORD (+ Mapping).
      * Slice 2ae: Object-with-pointer (world_ob_use_transform + world_ob_tfm).
      * Slice 2al: empty world_image_path uses world_color RGB (default 0,0,0
@@ -1380,22 +1389,29 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
      * Color; do not mix world_color into the env graph.
      * Slice 2am: world_sky_type != 0 builds SkyTextureNode; path empty, do not
      * mix world_color into the sky graph. Vector unlinked LINK_TEXTURE_GENERATED.
-     * BackgroundLight + MIS when has_env || has_sky || color_nonzero (Blender
-     * world.cycles sample_map 1024 / sampling AUTOMATIC). Empty-path black stays
-     * without BackgroundLight (Slice 2b). */
+     * Slice 2an: nonempty world_color_image_path builds ImageTextureNode Color →
+     * Background Color (Color→Color, no NODE_CONVERT_CF). Projection FLAT/BOX/
+     * SPHERE/TUBE. Vector: mode 0 leaves LINK_TEXTURE_UV (ImageTextureNode
+     * default; cite shader_nodes.cpp). Else same TEX_COORD (+ Mapping) as 2ac.
+     * Priority: has_env → has_sky → has_color_image → world_color RGB.
+     * BackgroundLight + MIS when has_env || has_sky || has_color_image ||
+     * color_nonzero. Env/Color/ImageTexture: map_res 1024. Sky AUTOMATIC 0.
+     * Empty-path black stays without BackgroundLight (Slice 2b). */
     {
         unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
         BackgroundNode *bg = graph->create_node<BackgroundNode>();
         const bool has_env = desc->world_image_path && desc->world_image_path[0];
         const bool has_sky = !has_env && desc->world_sky_type != 0;
-        const float3 wcol = (has_env || has_sky) ?
+        const bool has_color_image = !has_env && !has_sky &&
+            desc->world_color_image_path && desc->world_color_image_path[0];
+        const float3 wcol = (has_env || has_sky || has_color_image) ?
             make_float3(0.0f, 0.0f, 0.0f) :
             make_float3(desc->world_color[0],
                         desc->world_color[1],
                         desc->world_color[2]);
         bg->set_color(wcol);
         bg->set_strength(desc->world_strength);
-        const bool color_nonzero = !has_env && !has_sky &&
+        const bool color_nonzero = !has_env && !has_sky && !has_color_image &&
             (wcol.x != 0.0f || wcol.y != 0.0f || wcol.z != 0.0f);
         if (has_env) {
             EnvironmentTextureNode *env = graph->create_node<EnvironmentTextureNode>();
@@ -1500,15 +1516,98 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
             sky->set_ozone_density(desc->world_sky_ozone_density);
             graph->connect(sky->output("Color"), bg->input("Color"));
         }
+        else if (has_color_image) {
+            /* Slice 2an: ImageTextureNode Color → Background Color.
+             * Cite shader_nodes.cpp NODE_DEFINE(ImageTextureNode):
+             * Vector default LINK_TEXTURE_UV; projection FLAT.
+             * Color→Color (no NODE_CONVERT_CF). Do not mix world_color. */
+            ImageTextureNode *img = graph->create_node<ImageTextureNode>();
+            img->set_filename(ustring(desc->world_color_image_path));
+            if (desc->world_color_image_colorspace &&
+                desc->world_color_image_colorspace[0]) {
+                img->set_colorspace(ustring(desc->world_color_image_colorspace));
+            }
+            img->set_interpolation(INTERPOLATION_LINEAR);
+            img->set_extension(EXTENSION_REPEAT);
+            img->set_alpha_type(IMAGE_ALPHA_AUTO);
+            const int iproj = desc->world_color_image_projection;
+            NodeImageProjection proj = NODE_IMAGE_PROJ_FLAT;
+            if (iproj == 1) {
+                proj = NODE_IMAGE_PROJ_BOX;
+            }
+            else if (iproj == 2) {
+                proj = NODE_IMAGE_PROJ_SPHERE;
+            }
+            else if (iproj == 3) {
+                proj = NODE_IMAGE_PROJ_TUBE;
+            }
+            img->set_projection(proj);
+            /* Vector: mode 0 leaves LINK_TEXTURE_UV (ImageTexture default).
+             * Else TEX_COORD (+ optional Mapping), same as env 2ac/2ae. */
+            const int wmode = desc->world_tex_vector_mode;
+            if (tex_mode_has_texcoord(wmode)) {
+                TextureCoordinateNode *texcoord =
+                    graph->create_node<TextureCoordinateNode>();
+                const char *coord_sock = "UV";
+                if (tex_mode_is_reflection(wmode)) {
+                    coord_sock = "Reflection";
+                }
+                else if (tex_mode_is_window(wmode)) {
+                    coord_sock = "Window";
+                }
+                else if (tex_mode_is_camera(wmode)) {
+                    coord_sock = "Camera";
+                }
+                else if (tex_mode_is_object(wmode)) {
+                    coord_sock = "Object";
+                }
+                else if (tex_mode_is_generated(wmode)) {
+                    coord_sock = "Generated";
+                }
+                if (tex_mode_is_object(wmode) && desc->world_ob_use_transform) {
+                    texcoord->set_use_transform(true);
+                    texcoord->set_ob_tfm(tfm_from_12(desc->world_ob_tfm));
+                }
+                if (tex_mode_has_mapping(wmode)) {
+                    MappingNode *mapping = graph->create_node<MappingNode>();
+                    mapping->set_mapping_type(
+                        static_cast<NodeMappingType>(desc->world_map_type));
+                    mapping->set_location(make_float3(
+                        desc->world_map_location[0],
+                        desc->world_map_location[1],
+                        desc->world_map_location[2]));
+                    mapping->set_rotation(make_float3(
+                        desc->world_map_rotation[0],
+                        desc->world_map_rotation[1],
+                        desc->world_map_rotation[2]));
+                    mapping->set_scale(make_float3(
+                        desc->world_map_scale[0],
+                        desc->world_map_scale[1],
+                        desc->world_map_scale[2]));
+                    graph->connect(texcoord->output(coord_sock),
+                                   mapping->input("Vector"));
+                    graph->connect(mapping->output("Vector"),
+                                   img->input("Vector"));
+                }
+                else {
+                    graph->connect(texcoord->output(coord_sock),
+                                   img->input("Vector"));
+                }
+            }
+            /* else mode 0: leave Vector unlinked → LINK_TEXTURE_UV. */
+            graph->connect(img->output("Color"), bg->input("Color"));
+        }
         graph->connect(bg->output("Background"), graph->output()->input("Surface"));
         scene->default_background->set_graph(std::move(graph));
         scene->default_background->tag_update(scene);
 
-        if (has_env || has_sky || color_nonzero) {
+        if (has_env || has_sky || has_color_image || color_nonzero) {
             BackgroundLight *bg_light = scene->create_node<BackgroundLight>();
             bg_light->set_use_mis(true);
-            /* Env/Color: factory 1024 (2aa/2al). Sky AUTOMATIC leaves 0 so
-             * Cycles uses SkyTextureNode environment_res (512x256 + sun guiding). */
+            /* Env/Color/ImageTexture: factory 1024 (2aa/2al/2an). Sky AUTOMATIC
+             * leaves 0 so Cycles uses SkyTextureNode environment_res
+             * (512x256 + sun guiding). ImageTexture is not scanned by
+             * device_update_background AUTOMATIC — 0 would still default 1024. */
             bg_light->set_map_resolution(has_sky ? 0 : 1024);
             {
                 array<Node *> used;
