@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.50-slice2aw" in hello_c, "hello.c version string 0.0.50-slice2aw")
+    check("0.0.51-slice2ax" in hello_c, "hello.c version string 0.0.51-slice2ax")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -765,7 +765,7 @@ def main():
     check("set_thin_wall" in bridge, "bridge sets thin_wall")
     check("set_transmission_weight" in bridge, "bridge sets transmission_weight")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.50-slice2aw" in hello, "hello version is 0.0.50-slice2aw")
+    check("0.0.51-slice2ax" in hello, "hello version is 0.0.51-slice2ax")
     ytools = _read("tools/_quanttrace_slice2y_scene.py")
     check("ThinWall" in ytools and "Thin Wall" in ytools, "slice2y scene wires Thin Wall")
     ysmoke = _read("tools/_quanttrace_slice2y_smoke.py")

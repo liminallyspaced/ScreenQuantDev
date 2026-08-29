@@ -64,6 +64,9 @@
 #   world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical. Priority:
 #   TEX_ENVIRONMENT → TEX_SKY → TEX_IMAGE → RGB/Mix. Vector via world_tex_vector_*
 #   (same 2ac/2ae shapes). Noise / multi-link Color still refuse; RGB Curves → 2as.
+# Slice 2ax: peel REROUTE + unlinked Gamma + HueSat on Principled Base Color
+#   (base_gamma / base_hsv_*). Identity skips native nodes (2f bit-identical).
+#   Mix on Base Color still refuses (named Slice 2ax). Object+material in errors.
 # Slice 2ao: peel unlinked Gamma + HueSat on world Color (one of each, either
 #   order walking toward the source). Identity (gamma=1, hue=0.5, sat=1, val=1,
 #   fac=1) keeps 2aa/2al/2am/2an bit-identical. Native applies loft order:
@@ -940,7 +943,243 @@ def _input_by_names(bsdf, *names):
     return None, None
 
 
-def _principled_from_material(mat) -> dict:
+
+def _base_gamma_hsv_identity():
+    """Slice 2ax identity — skip Gamma/HSV on Principled Base Color (2f bit-identical)."""
+    return {
+        "base_gamma": 1.0,
+        "base_hsv_hue": 0.5,
+        "base_hsv_sat": 1.0,
+        "base_hsv_val": 1.0,
+        "base_hsv_fac": 1.0,
+    }
+
+
+def _peel_reroute(from_node, from_sock):
+    """Follow REROUTE until the real source (no ABI; loft uses REROUTE freely)."""
+    for _ in range(64):
+        ntype = getattr(from_node, "type", None) if from_node is not None else None
+        if ntype != "REROUTE":
+            return from_node, from_sock
+        inputs = getattr(from_node, "inputs", None)
+        if inputs is None or len(inputs) < 1:
+            return from_node, from_sock
+        rin = inputs[0]
+        if not getattr(rin, "is_linked", False):
+            return from_node, from_sock
+        links = list(getattr(rin, "links", None) or [])
+        if len(links) != 1:
+            return from_node, from_sock
+        from_node = getattr(links[0], "from_node", None)
+        from_sock = getattr(links[0], "from_socket", None)
+    return from_node, from_sock
+
+
+def _mat_refuse_ctx(object_name: str, mat) -> str:
+    mat_name = getattr(mat, "name", "") if mat is not None else ""
+    ob = object_name or "?"
+    mn = mat_name or "?"
+    return f"object={ob!r} material={mn!r}"
+
+
+def _require_unlinked_float_mesh(node, names, label: str, ctx: str) -> float:
+    """Unlinked float for Base Color Gamma/HueSat. None-check — never `or` (hue 0 valid)."""
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color {label} has no inputs (Slice 2ax)"
+        )
+    sock = _sock_ident_or_name(inputs, *names)
+    if sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color {label} missing (Slice 2ax)"
+        )
+    if getattr(sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color {label} is linked refused "
+            f"(Slice 2ax: texture-driven Gamma/Hue/Sat/Value/Fac still refuse)"
+        )
+    v = getattr(sock, "default_value", None)
+    if v is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color {label} has no default_value (Slice 2ax)"
+        )
+    return float(v)
+
+
+def _gamma_hsv_color_source_mesh(node, ctx: str):
+    """Color input of Gamma/HueSat: (from_node, from_sock, unlinked_rgb_or_None)."""
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Gamma/HueSat has no inputs (Slice 2ax)"
+        )
+    color_in = _sock_ident_or_name(inputs, "Color")
+    if color_in is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Gamma/HueSat missing Color (Slice 2ax)"
+        )
+    if not getattr(color_in, "is_linked", False):
+        col = getattr(color_in, "default_value", (0.8, 0.8, 0.8, 1.0))
+        rgb = (float(col[0]), float(col[1]), float(col[2]))
+        return None, None, rgb
+    links = list(getattr(color_in, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Gamma/HueSat Color multi-link refused "
+            f"(Slice 2ax)"
+        )
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    return fn, fs, None
+
+
+def _peel_base_color_gamma_hsv(from_node, from_sock, ctx: str):
+    """Peel one unlinked Gamma + HueSat on Principled Base Color (≤2 hops).
+
+    Returns (from_node, from_sock, unlinked_rgb_or_None, gamma_hsv_dict).
+    Mix / Noise / second Gamma/HueSat refuse (Mix named Slice 2ax).
+    Always peel REROUTE before classifying (caller peels first hop too).
+    """
+    gh = dict(_base_gamma_hsv_identity())
+    seen_gamma = False
+    seen_hsv = False
+    unlinked_rgb = None
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    for _hop in range(2):
+        ntype = getattr(from_node, "type", None) if from_node is not None else None
+        if ntype == "GAMMA":
+            if seen_gamma:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color second Gamma refused (Slice 2ax)"
+                )
+            gh["base_gamma"] = _require_unlinked_float_mesh(
+                from_node, ("Gamma",), "Gamma.Gamma", ctx
+            )
+            seen_gamma = True
+            from_node, from_sock, unlinked_rgb = _gamma_hsv_color_source_mesh(
+                from_node, ctx
+            )
+            if unlinked_rgb is not None:
+                break
+            continue
+        if ntype == "HUE_SAT":
+            if seen_hsv:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color second HueSat refused (Slice 2ax)"
+                )
+            gh["base_hsv_hue"] = _require_unlinked_float_mesh(
+                from_node, ("Hue",), "HueSat.Hue", ctx
+            )
+            gh["base_hsv_sat"] = _require_unlinked_float_mesh(
+                from_node, ("Saturation",), "HueSat.Saturation", ctx
+            )
+            gh["base_hsv_val"] = _require_unlinked_float_mesh(
+                from_node, ("Value",), "HueSat.Value", ctx
+            )
+            gh["base_hsv_fac"] = _require_unlinked_float_mesh(
+                from_node, ("Fac", "Factor"), "HueSat.Fac", ctx
+            )
+            seen_hsv = True
+            from_node, from_sock, unlinked_rgb = _gamma_hsv_color_source_mesh(
+                from_node, ctx
+            )
+            if unlinked_rgb is not None:
+                break
+            continue
+        break
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype in ("MIX", "MIX_RGB"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color from {ntype!r} refused "
+            f"(Slice 2ax: Mix→Base Color next; linked-Fac/Curves loft shape)"
+        )
+    if ntype in ("TEX_NOISE", "NOISE"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Noise refused (Slice 2ax)"
+        )
+    return from_node, from_sock, unlinked_rgb, gh
+
+
+def _base_color_tex_and_gh(sock, *, object_name: str = "", mat=None):
+    """Principled Base Color: peel REROUTE + Gamma/HueSat then TEX_IMAGE or constant.
+
+    Returns (tex_info, gamma_hsv_dict, base_color_rgb_or_None).
+    base_color_rgb_or_None is set when the remaining source is an unlinked Color
+    default after peels (constant Base Color with Gamma/HSV). None means keep
+    Principled socket default (TEX_IMAGE path or unlinked Principled).
+    """
+    ctx = _mat_refuse_ctx(object_name, mat)
+    empty = _empty_tex_info()
+    gh = dict(_base_gamma_hsv_identity())
+    if sock is None or not getattr(sock, "is_linked", False):
+        return empty, gh, None
+    links = list(getattr(sock, "links", None) or [])
+    if not links:
+        return empty, gh, None
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color has multiple links (Slice 2ax)"
+        )
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    from_node, from_sock, unlinked_rgb, gh = _peel_base_color_gamma_hsv(
+        from_node, from_sock, ctx
+    )
+    if unlinked_rgb is not None:
+        return empty, gh, unlinked_rgb
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype == "TEX_IMAGE":
+        sock_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
+        if sock_name not in ("Color", "color"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color must come from Image Texture Color "
+                f"(Slice 2ax; got {sock_name!r})"
+            )
+        # Reuse Vector/path packing by building a one-link sock view via the
+        # existing helper: temporarily require the link shape. Call the body
+        # of _tex_image_from_sock by faking through a thin wrapper.
+        return _tex_image_from_tex_node(from_node, from_sock, "Base Color", ctx), gh, None
+    if ntype in ("MIX", "MIX_RGB"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color from {ntype!r} refused "
+            f"(Slice 2ax: Mix→Base Color next)"
+        )
+    if ntype in ("TEX_NOISE", "NOISE"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Noise refused (Slice 2ax)"
+        )
+    raise QuantTraceSyncError(
+        f"{ctx} Principled.Base Color from {ntype!r} refused "
+        f"(Slice 2ax: TEX_IMAGE / unlinked Gamma/HueSat / constant only)"
+    )
+
+
+def _tex_image_from_tex_node(from_node, from_sock, sock_label: str, ctx: str = ""):
+    """Pack TEX_IMAGE node already resolved (after REROUTE/Gamma/HueSat peel)."""
+    # Delegate to _tex_image_from_sock by synthesizing a sock-like with one link.
+    class _L:
+        pass
+    class _S:
+        pass
+    link = _L()
+    link.from_node = from_node
+    link.from_sock = from_sock
+    sock = _S()
+    sock.links = [link]
+    try:
+        return _tex_image_from_sock(sock, sock_label)
+    except QuantTraceSyncError as e:
+        msg = str(e)
+        if ctx and not msg.startswith(ctx):
+            raise QuantTraceSyncError(f"{ctx} {msg}") from e
+        raise
+
+
+def _principled_from_material(mat, *, object_name: str = "") -> dict:
     """Return principled dict (constants + optional TEX_IMAGE on Base/Rough/Metal/IOR/Alpha/Trans/Spec/Coat/Sheen/EmitStr/EmitColor)."""
     empty = {
         "base_color": (0.8, 0.8, 0.8),
@@ -983,9 +1222,12 @@ def _principled_from_material(mat) -> dict:
         "thin_wall": 0,
         "transmission_weight": 0.0,
         "tex_ob_ref": None,
+        **_base_gamma_hsv_identity(),
     }
     if mat is None:
-        raise QuantTraceSyncError("mesh has no material")
+        raise QuantTraceSyncError(
+            f"{_mat_refuse_ctx(object_name, mat)} mesh has no material"
+        )
     if not getattr(mat, "use_nodes", False) or mat.node_tree is None:
         diff = getattr(mat, "diffuse_color", (0.8, 0.8, 0.8, 1.0))
         empty["base_color"] = (float(diff[0]), float(diff[1]), float(diff[2]))
@@ -996,7 +1238,9 @@ def _principled_from_material(mat) -> dict:
             bsdf = node
             break
     if bsdf is None:
-        raise QuantTraceSyncError("material has no Principled BSDF (Slice 2b)")
+        raise QuantTraceSyncError(
+            f"{_mat_refuse_ctx(object_name, mat)} material has no Principled BSDF (Slice 2b)"
+        )
     base_tex = _empty_tex_info()
     rough_tex = _empty_tex_info()
     metal_tex = _empty_tex_info()
@@ -1025,9 +1269,14 @@ def _principled_from_material(mat) -> dict:
     aniso_tex = _empty_tex_info()
     aniso_rot_tex = _empty_tex_info()
     tangent_tex = _empty_tex_info()
+    # Slice 2ax: Base Color peels REROUTE + Gamma/HueSat then TEX_IMAGE/constant.
+    _bc_name, base_sock = _input_by_names(bsdf, "Base Color")
+    base_tex, base_gh, peeled_rgb = _base_color_tex_and_gh(
+        base_sock, object_name=object_name, mat=mat
+    )
     # 5.x names first; legacy Transmission / Specular / Coat / Sheen / Emission accepted.
+    # Base Color handled above (2ax) — do not call TEX_IMAGE-only packer on it.
     allowed = (
-        ("Base Color", ("Base Color",), "base"),
         ("Roughness", ("Roughness",), "rough"),
         ("Metallic", ("Metallic",), "metal"),
         ("IOR", ("IOR",), "ior"),
@@ -1061,9 +1310,7 @@ def _principled_from_material(mat) -> dict:
         if sock is None or not getattr(sock, "is_linked", False):
             continue
         tex = _tex_image_from_sock(sock, label)
-        if kind == "base":
-            base_tex = tex
-        elif kind == "rough":
+        if kind == "rough":
             rough_tex = tex
         elif kind == "metal":
             metal_tex = tex
@@ -1142,14 +1389,19 @@ def _principled_from_material(mat) -> dict:
     )
     # Coat Normal stays Normal-Map-only (2t). Bump on Coat Normal still refuses.
     normal_info = _principled_normal_dispatch(bsdf.inputs.get("Normal"))
-    base = bsdf.inputs["Base Color"].default_value
+    if peeled_rgb is not None:
+        base_rgb = peeled_rgb
+    else:
+        base = bsdf.inputs["Base Color"].default_value
+        base_rgb = (float(base[0]), float(base[1]), float(base[2]))
     return {
-        "base_color": (float(base[0]), float(base[1]), float(base[2])),
+        "base_color": base_rgb,
         "roughness": float(bsdf.inputs["Roughness"].default_value),
         "metallic": float(bsdf.inputs["Metallic"].default_value),
         "ior": float(bsdf.inputs["IOR"].default_value),
         "alpha": float(bsdf.inputs["Alpha"].default_value),
         **base_tex,
+        **base_gh,
         **_prefix_tex(rough_tex, "rough_"),
         **_prefix_tex(metal_tex, "metal_"),
         **normal_info,
@@ -2932,7 +3184,7 @@ def classify_simple(scene) -> dict:
     mats = list(getattr(mesh_obj.data, "materials", []) or [])
     mat = mats[0] if mats else None
     # Probe principled + world early.
-    _principled_from_material(mat)
+    _principled_from_material(mat, object_name=getattr(mesh_obj, "name", "") or "")
     _world_info(scene)
     return {
         "mesh": mesh_obj,
@@ -3183,6 +3435,22 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "transmission_weight": float(
             pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
         ),
+        # Slice 2ax: None-check — do not use `or` (gamma 1.0 / hue 0.5 / fac 1.0 identity).
+        "base_gamma": float(
+            pr["base_gamma"] if pr.get("base_gamma") is not None else 1.0
+        ),
+        "base_hsv_hue": float(
+            pr["base_hsv_hue"] if pr.get("base_hsv_hue") is not None else 0.5
+        ),
+        "base_hsv_sat": float(
+            pr["base_hsv_sat"] if pr.get("base_hsv_sat") is not None else 1.0
+        ),
+        "base_hsv_val": float(
+            pr["base_hsv_val"] if pr.get("base_hsv_val") is not None else 1.0
+        ),
+        "base_hsv_fac": float(
+            pr["base_hsv_fac"] if pr.get("base_hsv_fac") is not None else 1.0
+        ),
     }
     out.update(_pack_tex_ob_fields(pr, depsgraph=depsgraph))
     return out
@@ -3253,7 +3521,9 @@ def pack_simple_scene(scene, depsgraph=None) -> dict:
     mesh_tfm = _matrix_3x4(mesh_obj.matrix_world)
     verts = _world_verts(verts, mesh_tfm)
     mesh_tfm = _identity_3x4()
-    pr = _principled_from_material(mat)
+    pr = _principled_from_material(
+        mat, object_name=getattr(mesh_obj, "name", "") or ""
+    )
     base, rough, metal, ior, alpha = (
         pr["base_color"], pr["roughness"], pr["metallic"], pr["ior"], pr["alpha"]
     )
@@ -3380,7 +3650,9 @@ def classify_scene(scene, depsgraph=None) -> dict:
     for mesh_obj in meshes:
         mlist = list(getattr(mesh_obj.data, "materials", []) or [])
         mat = mlist[0] if mlist else None
-        _principled_from_material(mat)
+        _principled_from_material(
+            mat, object_name=getattr(mesh_obj, "name", "") or ""
+        )
         mats.append(mat)
     _world_info(scene)
     return {
@@ -3425,7 +3697,9 @@ def pack_scene(scene, depsgraph=None) -> dict:
                 eval_obj = mesh_obj
         verts, tris = _mesh_arrays(eval_obj)
         tfm = _matrix_3x4(eval_obj.matrix_world)
-        pr = _principled_from_material(mat)
+        pr = _principled_from_material(
+            mat, object_name=getattr(mesh_obj, "name", "") or ""
+        )
         base, rough, metal, ior, alpha = (
             pr["base_color"], pr["roughness"], pr["metallic"], pr["ior"], pr["alpha"]
         )
@@ -3874,6 +4148,17 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     tfm = packed.get("tex_ob_tfm") or _identity_3x4()
     for i, v in enumerate(tfm):
         desc.tex_ob_tfm[i] = float(v)
+    # Slice 2ax: identity defaults. Do not use `or` — hue 0.0 / gamma 1.0 valid.
+    def _bf(key, default):
+        v = packed.get(key, default)
+        if v is None:
+            return float(default)
+        return float(v)
+    desc.base_gamma = _bf("base_gamma", 1.0)
+    desc.base_hsv_hue = _bf("base_hsv_hue", 0.5)
+    desc.base_hsv_sat = _bf("base_hsv_sat", 1.0)
+    desc.base_hsv_val = _bf("base_hsv_val", 1.0)
+    desc.base_hsv_fac = _bf("base_hsv_fac", 1.0)
 
 
 def make_qt_simple_scene_type():
@@ -4188,6 +4473,11 @@ def make_qt_simple_scene_type():
             ("transmission_weight", ctypes.c_float),
             ("tex_ob_use_transform", ctypes.c_int),
             ("tex_ob_tfm", ctypes.c_float * 12),
+            ("base_gamma", ctypes.c_float),
+            ("base_hsv_hue", ctypes.c_float),
+            ("base_hsv_sat", ctypes.c_float),
+            ("base_hsv_val", ctypes.c_float),
+            ("base_hsv_fac", ctypes.c_float),
         ]
 
     return QT_SimpleScene
@@ -4592,6 +4882,11 @@ def make_qt_scene_types():
             ("transmission_weight", ctypes.c_float),
             ("tex_ob_use_transform", ctypes.c_int),
             ("tex_ob_tfm", ctypes.c_float * 12),
+            ("base_gamma", ctypes.c_float),
+            ("base_hsv_hue", ctypes.c_float),
+            ("base_hsv_sat", ctypes.c_float),
+            ("base_hsv_val", ctypes.c_float),
+            ("base_hsv_fac", ctypes.c_float),
         ]
 
     class QT_Light(ctypes.Structure):

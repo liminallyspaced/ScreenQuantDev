@@ -55,6 +55,10 @@
  *   → HSV (if hsv not identity) → Background Color. Cite shader_nodes.h
  *   GammaNode / HSVNode (set_color, set_gamma / set_hue,set_saturation,
  *   set_value,set_fac). If only HSV skip Gamma; if only Gamma skip HSV.
+ * Slice 2ax: GammaNode + HSVNode on Principled Base Color (base_gamma /
+ *   base_hsv_* after tex_ob_tfm). Identity skips — 2f TEX_IMAGE bit-identical.
+ *   Color → Gamma (if gamma!=1) → HSV (if not identity) → Base Color. Cite
+ *   same GammaNode/HSVNode as world 2ao. Mix on Base Color still refuses.
  * Slice 2ap: BrightContrastNode on world Color (world_bright / world_contrast).
  *   Identity (bright=0, contrast=0) skips — 2ao/2an/2am/2aa/2al bit-identical.
  *   Loft: Color → Gamma → HSV → BrightContrast → Background. Cite
@@ -291,6 +295,12 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->world_hsv_sat = 1.0f;
     d->world_hsv_val = 1.0f;
     d->world_hsv_fac = 1.0f;
+    /* Slice 2ax identity — memset left base_gamma=0 / hue=0 is NOT identity. */
+    d->base_gamma = 1.0f;
+    d->base_hsv_hue = 0.5f;
+    d->base_hsv_sat = 1.0f;
+    d->base_hsv_val = 1.0f;
+    d->base_hsv_fac = 1.0f;
     /* Slice 2ap identity — bright=0 contrast=0 (memset is fine; set explicit). */
     d->world_bright = 0.0f;
     d->world_contrast = 0.0f;
@@ -564,6 +574,12 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->transmission_weight = s->transmission_weight;
     mesh->tex_ob_use_transform = s->tex_ob_use_transform;
     std::memcpy(mesh->tex_ob_tfm, s->tex_ob_tfm, sizeof(mesh->tex_ob_tfm));
+    /* Slice 2ax: Base Color Gamma/HSV (identity skip keeps 2f bit-identical). */
+    mesh->base_gamma = s->base_gamma;
+    mesh->base_hsv_hue = s->base_hsv_hue;
+    mesh->base_hsv_sat = s->base_hsv_sat;
+    mesh->base_hsv_val = s->base_hsv_val;
+    mesh->base_hsv_fac = s->base_hsv_fac;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1029,11 +1045,50 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * mode 6: TextureCoordinate Object → Mapping → Image Vector.
      * mode 7: TextureCoordinate Camera → Image Vector (NODE_TEXCO_CAMERA).
      * mode 8: TextureCoordinate Camera → Mapping → Image Vector. */
-    if (m->image_path && m->image_path[0]) {
-        ImageTextureNode *img = wire_tex_image(
-            graph.get(), m, m->image_path, m->image_colorspace, m->tex_vector_mode,
-            m->map_location, m->map_rotation, m->map_scale, m->map_type);
-        graph->connect(img->output("Color"), bsdf->input("Base Color"));
+    /* Slice 2ax: Color source → Gamma (if gamma!=1) → HSV (if not identity)
+     * → Principled Base Color. Identity skips nodes so 2f TEX_IMAGE cubes
+     * stay bit-identical. Cite shader_nodes.h GammaNode/HSVNode (same as
+     * world 2ao). Loft mesh order: TEX_IMAGE → [Gamma] → HueSat → Base Color. */
+    {
+        const float3 bcol = make_float3(m->base_color[0], m->base_color[1], m->base_color[2]);
+        const bool use_gamma = (m->base_gamma != 1.0f);
+        const bool use_hsv = !(m->base_hsv_hue == 0.5f && m->base_hsv_sat == 1.0f &&
+                               m->base_hsv_val == 1.0f && m->base_hsv_fac == 1.0f);
+        ShaderOutput *cur = nullptr;
+        if (m->image_path && m->image_path[0]) {
+            ImageTextureNode *img = wire_tex_image(
+                graph.get(), m, m->image_path, m->image_colorspace, m->tex_vector_mode,
+                m->map_location, m->map_rotation, m->map_scale, m->map_type);
+            cur = img->output("Color");
+        }
+        if (use_gamma) {
+            GammaNode *g = graph->create_node<GammaNode>();
+            g->set_gamma(m->base_gamma);
+            if (cur) {
+                graph->connect(cur, g->input("Color"));
+            }
+            else {
+                g->set_color(bcol);
+            }
+            cur = g->output("Color");
+        }
+        if (use_hsv) {
+            HSVNode *h = graph->create_node<HSVNode>();
+            h->set_hue(m->base_hsv_hue);
+            h->set_saturation(m->base_hsv_sat);
+            h->set_value(m->base_hsv_val);
+            h->set_fac(m->base_hsv_fac);
+            if (cur) {
+                graph->connect(cur, h->input("Color"));
+            }
+            else {
+                h->set_color(bcol);
+            }
+            cur = h->output("Color");
+        }
+        if (cur) {
+            graph->connect(cur, bsdf->input("Base Color"));
+        }
     }
     if (m->rough_image_path && m->rough_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(

@@ -1,6 +1,13 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2aw landed** (2026-08-29 1pm PlugWalk ET). Pack caps raised: `QT_MAX_MESHES` **2048** / `QT_MAX_LIGHTS` **128** (was 32/16). Caps are **validation only** — `QT_Scene.meshes` / `lights` stay heap pointers from ctypes (no fixed C array / stack / BSS blowup). Synthetic 64-cube grid `pack_scene` accepts; optional tiny Session 32²/4 (pack-only gate; no loft Δmax claim). Loft EasyHDR `_world_info` still PACKS from 2av. Official loft still refuses Principled.Base Color non-TEX_IMAGE (count OK). `is_tracer=1`. Native `0.0.50-slice2aw`. Addon `0.3.3`.
+Status: **Slice 2ax landed** (2026-08-29 2pm PlugWalk ET). Peel REROUTE + unlinked Gamma + HueSat on Principled Base Color (`base_gamma` / `base_hsv_*` after `tex_ob_tfm`). Identity skips native Gamma/HSV — 2f TEX_IMAGE cubes bit-identical. Native wires Color → Gamma → HSV → Base Color (cite shader_nodes.h; mesh analog of world 2ao). Mix on Base Color still refuses (named Slice 2ax with object+material). Loft pack probe only — no loft Session Δmax claim. `is_tracer=1`. Native `0.0.51-slice2ax`. Addon `0.3.3`.
+
+## Slice 2ax — Gamma/HueSat → Principled Base Color (2026-08-29 2pm ET)
+
+Mesh analog of world Slice 2ao. ABI appends `base_gamma` / `base_hsv_hue` / `base_hsv_sat` / `base_hsv_val` / `base_hsv_fac` after `tex_ob_tfm` on `QT_Mesh` + `QT_SimpleScene` mesh section. Packer peels REROUTE then one unlinked Gamma + one HueSat (either order) then TEX_IMAGE Color or constant Color default. Identity (gamma=1, hue=0.5, sat=1, val=1, fac=1) skips native nodes. Linked Hue/Sat/Value/Fac/Gamma, second Gamma/HueSat, Noise, Mix on Base Color refuse (Mix named Slice 2ax; object+material in error). Native `make_principled`: Color source → GammaNode → HSVNode → Base Color.
+
+Gate PASS: hsv 32²/4 Δmax=1.61e-6 / 256²/128 Δmax=8.94e-7 (0 px ≥ 1e-3). gamma_hsv 32²/4 Δmax=8.94e-7. tex 2f 32²/4 Δmax=1.01e-6. Stock hsv vs tex-only Δmax=0.635. Loft PACK_FAIL Mix on `Cube`/`Metal_Sheet_2x2_uhwnbcqew` — pack probe only.
+
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 

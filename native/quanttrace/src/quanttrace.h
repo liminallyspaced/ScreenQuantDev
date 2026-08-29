@@ -62,6 +62,12 @@
  *   Native already set_mapping_type. TEXTURE/NORMAL still refuse.
  * Slice 2aw: QT_MAX_MESHES 2048 / QT_MAX_LIGHTS 128 (was 32/16). Caps are
  *   validation only — QT_Scene.meshes/lights stay heap pointers.
+ * Slice 2ax: Gamma + HueSat on Principled Base Color (base_gamma +
+ *   base_hsv_* after tex_ob_tfm on QT_Mesh / QT_SimpleScene mesh section).
+ *   Identity (gamma=1, hue=0.5, sat=1, val=1, fac=1) skips native nodes —
+ *   2f TEX_IMAGE cubes stay bit-identical. Color → Gamma → HSV → Base Color
+ *   (cite shader_nodes.h GammaNode/HSVNode; same as world 2ao). Mix on Base
+ *   Color still refuses (named Slice 2ax).
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
@@ -495,6 +501,12 @@ typedef struct QT_SimpleScene {
   /* Slice 2ab: TEX_COORD Object pointer (mesh-level). 0 = 2l empty-ref. */
   int tex_ob_use_transform; /* 0 = empty Object (bit-identical 2l). 1 = pointer */
   float tex_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
+  /* Slice 2ax: Gamma + HSV on Principled Base Color. Identity skips nodes. */
+  float base_gamma;     /* default 1.0; skip GammaNode when ==1 */
+  float base_hsv_hue;   /* default 0.5 */
+  float base_hsv_sat;   /* default 1.0 */
+  float base_hsv_val;   /* default 1.0 */
+  float base_hsv_fac;   /* default 1.0; skip HSVNode when identity */
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -791,6 +803,12 @@ typedef struct QT_Mesh {
   /* Slice 2ab: TEX_COORD Object pointer (mesh-level). 0 = 2l empty-ref. */
   int tex_ob_use_transform; /* 0 = empty Object (bit-identical 2l). 1 = pointer */
   float tex_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
+  /* Slice 2ax: Gamma + HSV on Principled Base Color. Identity skips nodes. */
+  float base_gamma;     /* default 1.0; skip GammaNode when ==1 */
+  float base_hsv_hue;   /* default 0.5 */
+  float base_hsv_sat;   /* default 1.0 */
+  float base_hsv_val;   /* default 1.0 */
+  float base_hsv_fac;   /* default 1.0; skip HSVNode when identity */
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
