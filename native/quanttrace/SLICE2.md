@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ag landed** (2026-08-28 9pm PlugWalk ET). Linked Mapping Location / Rotation / Scale from Combine XYZ (unlinked X/Y/Z defaults or Value→X/Y/Z) or single Value→VECTOR (float→float3 broadcast). Same float3 ABI as 2h (no new C++ fields). combxyz 32²/4 Δmax=2.26e-6; 256²/128 Δmax=1.67e-6 PASS. combxyz_value 32²/4 Δmax=2.26e-6 PASS. unlinked 2h regression 32²/4 Δmax=2.26e-6 PASS. `is_tracer=1`. Native `0.0.34-slice2ag`. Addon `0.3.3`.
+Status: **Slice 2ah landed** (2026-08-28 10pm PlugWalk ET). Linked world Background Strength from ShaderNodeValue (same `world_strength` float ABI; Python-only resolve). Value 0.7 32²/4 Δmax=4.25e-4; 256²/128 Δmax=1.20e-4 PASS. unlinked 2aa 32²/4 Δmax=6.13e-4 PASS. 2ac Mapping 32²/4 Δmax=6.75e-4 PASS. Stock Value 0.7 vs unlinked 1.0 Δmax=0.289 (lever live). `is_tracer=1`. Native `0.0.35-slice2ah`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -20,6 +20,45 @@ addon zip or public commit tree.
 
 
 
+
+## 10pm PlugWalk (2026-08-28) — linked world Strength (Slice 2ah)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Background.Strength is a float. ShaderNodeValue output `default_value` is the constant Cycles uses. Socket default left at 1.0 while Value=0.7 so a packer that ignores the link would fail Session vs stock. Math/TEX_IMAGE/Mix deferred. Color links unchanged. |
+| ABI | Unchanged `world_strength` float. No new C++ fields — constant resolved at sync time (like 2ag L/R/S). |
+| Python | `_world_strength_from_sock` in `sync.py`. `_world_info` accepts unlinked default **or** single ShaderNodeValue. Multi-link / TEX_IMAGE / Mix / RGB Curves / Noise / Math still refuse Slice 2ah. Sky/Nishita Color kitchens still refuse. |
+| Native | Version stamp only → `0.0.35-slice2ah` (Background strength path unchanged). |
+| Version | `0.0.35-slice2ah` |
+| Tools | `tools/_quanttrace_slice2ah_scene.py`, `tools/_quanttrace_slice2ah_smoke.py`. Modes: `value`, `unlinked`. Reuses 2aa HDR equirect cube. |
+| Visibility | Same OIIO linear EXR gradient as 2aa; Combined chromatic + non-constant. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| value (Value 0.7 → Strength; sock default 1.0) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| value (Value 0.7 → Strength; sock default 1.0) | 256² / 128 | **1.20e-4** | 5.70e-7 | 0 | **PASS** |
+| unlinked (2aa regression, Strength 1.0) | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+| mapping (2ac regression, rot_z=0.7) | 32² / 4 | **6.75e-4** | 4.24e-6 | 0 | **PASS** |
+
+Live graph (stock Value 0.7 vs stock unlinked 1.0) 32²/4: Δmax=**0.289** (1024 px ≥1e-3, MAE 0.0947). Packed `world_strength=0.7` while Strength socket default stayed 1.0. Mix RGB → Strength still raises Slice 2ah. Proof plate `docs/proof/quanttrace-linked-world-strength-32-pair.png` (value stock|session) + `/workspace/quanttrace-linked-world-strength-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- TEX_IMAGE / Mix / RGB Curves / Noise / Math → Strength still refuse. Color links (Sky/Nishita/TEX_IMAGE/RGB/Mix → Background Color) still refuse. TEX_IMAGE→L/R/S SVM graphs deferred.
+- HDR Δmax remains ~1e-4–7e-4 class (BackgroundLight MIS map), under the 1e-3 gate with 0 px ≥1e-3 on the claim cases.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+TEX_IMAGE→L/R/S, or Mix/Math → Strength, or Sky/Nishita/TEX_IMAGE → Background Color. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
 
 ## 9pm PlugWalk (2026-08-28) — linked Mapping L/R/S (Slice 2ag)
 

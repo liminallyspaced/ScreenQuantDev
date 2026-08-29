@@ -35,7 +35,9 @@
 # Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
 #   Empty Object ref stays Slice 2l (use_transform=0). Mesh-level one pointer.
 # Slice 2af: packed-only images materialize to /tmp/quanttrace_packed/ (filepath ABI).
-#   Linked Mapping L/R/S / linked world Strength / Sky/Nishita still refuse.
+# Slice 2ag: Mapping L/R/S linked Combine XYZ / Value (same float3 ABI).
+# Slice 2ah: world Background Strength linked from ShaderNodeValue (same float ABI).
+#   TEX_IMAGE/Mix/RGB/Noise/Math → Strength / Sky/Nishita kitchens still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -1195,8 +1197,40 @@ def _mesh_arrays(obj) -> Tuple[List[float], List[int]]:
     return verts, tris
 
 
+
+def _world_strength_from_sock(sock) -> float:
+    """Resolve Background.Strength to a constant float (Slice 2ah).
+
+    Accepts unlinked default_value or a single ShaderNodeValue. Multi-link,
+    TEX_IMAGE / Mix / RGB Curves / Noise / Math / kitchens refuse.
+    """
+    if sock is None:
+        return 0.0
+    if not getattr(sock, "is_linked", False):
+        return float(getattr(sock, "default_value", 0.0) or 0.0)
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            "world Background Strength multi-link refused (Slice 2ah)"
+        )
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype != "VALUE":
+        raise QuantTraceSyncError(
+            f"world Background Strength linked from {ntype!r} refused "
+            "(Slice 2ah: ShaderNodeValue or unlinked float only; "
+            "TEX_IMAGE/Mix/RGB Curves/Noise/Math still refuse)"
+        )
+    if from_sock is None:
+        raise QuantTraceSyncError(
+            "world Background Strength Value link has no from_socket (Slice 2ah)"
+        )
+    return float(getattr(from_sock, "default_value", 0.0) or 0.0)
+
+
 def _world_info(scene) -> dict:
-    """Pack world Background + optional Environment Texture (Slice 2aa/2ac).
+    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah).
 
     Returns dict:
       world_strength: float
@@ -1211,6 +1245,8 @@ def _world_info(scene) -> dict:
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
     refuse with Slice 2ac in the error.
+    Slice 2ah: Strength may be unlinked default_value or a single
+    ShaderNodeValue. TEX_IMAGE/Mix/RGB/Noise/Math → Strength still refuse.
     """
     empty = {
         "world_strength": 0.0,
@@ -1240,9 +1276,7 @@ def _world_info(scene) -> dict:
     if bg is None:
         return empty
     strength_sock = bg.inputs.get("Strength")
-    if strength_sock is not None and getattr(strength_sock, "is_linked", False):
-        raise QuantTraceSyncError("world Background Strength linked (Slice 2ac)")
-    strength = float(strength_sock.default_value) if strength_sock is not None else 0.0
+    strength = _world_strength_from_sock(strength_sock)
     color_sock = bg.inputs.get("Color")
     if color_sock is None or not getattr(color_sock, "is_linked", False):
         if color_sock is not None:
