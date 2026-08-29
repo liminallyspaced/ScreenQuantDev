@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2au landed** (2026-08-29 11am PlugWalk ET). MULTIPLY(TEX_ENVIRONMENT/TEX_IMAGE/TEX_SKY.Color, 0) → 0.0 (either order; proven const 0; texture not evaluated). Same `world_strength` float ABI; no new C++ fields. Loft EasyHDR MUL×0 now folds; outer DIV/ADD → Strength **20**. env_mul0 (×0 only) 32²/4 Δmax=3.58e-7 PASS. env_mul0_add20 loft ops 32²/4 Δmax=6.17e-3 (16 px) FAIL / 256²/128 Δmax=2.34e-2 (70 px) FAIL — **same residue as unlinked Strength 20** HDR-MIS (not a fold error; 2aa at Strength 1.0 was 6.13e-4 PASS). math_nest3/math_mul/hdr/rgb/rgb_mix/rgb_curves/nishita/teximage 32²/4 PASS (2at bit-identical). Non-zero tex MUL / ADD(env.Color) / 4-deep Math refuse. After 2au loft `_world_info` refuses **Mapping vector_type='POINT'**. `is_tracer=1`. Native `0.0.48-slice2au`. Addon `0.3.3`.
+Status: **Slice 2av landed** (2026-08-29 12pm PlugWalk ET). Mapping `vector_type='POINT'` accepted on env/sky/teximage Vector (and mesh TEX_IMAGE). NODE_MAPPING_TYPE_POINT=0 / VECTOR=2; TEXTURE/NORMAL still refuse. Native already `set_mapping_type(world_map_type)` — ctypes `or 2` was zeroing POINT=0, now None-checked. POINT loc=(0.15,0,0) rot_z=0.7 32²/4 Δmax=5.66e-4 PASS / 256²/128 Δmax=8.00e-5 PASS. Stock POINT vs VECTOR Δmax=0.098 (graph live). Loft EasyHDR `_world_info` **PACKS** (strength 20, map_type 0, tex_mode 4, mix MULTIPLY fac=0). `pack_scene` refuses **need 1..32 meshes, got 1200**. `is_tracer=1`. Native `0.0.49-slice2av`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -28,6 +28,57 @@ addon zip or public commit tree.
 
 
 
+
+
+## 12pm PlugWalk (2026-08-29) — Mapping POINT → env Vector (Slice 2av)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Kitchen-first: after 2au, official loft EasyHDR `_world_info` refused **Mapping vector_type='POINT'**. World DNA: TEX_COORD Generated → Mapping POINT (loc=0 rot=0 scale=1) → Env Vector. Color: Env → Gamma 1 → HSV identity → Mix MULTIPLY fac=0 other=const → Background. Strength already 2au fold=20. Cite Cycles `svm/mapping_util.h`: POINT = rotate(vector*scale)+location; VECTOR omits location. Loft Mapping is identity POINT (loc 0) — claim plate uses **non-zero Location** so POINT ≠ VECTOR.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | NODE_MAPPING_TYPE_POINT=0 TEXTURE=1 VECTOR=2 NORMAL=3. POINT uses Location; VECTOR SVM ignores it. Loft EasyHDR Mapping is POINT identity. |
+| ABI | Same `world_map_type` int. ctypes `int(x or 2)` treated POINT=0 as missing — now None-checked so 0 survives. |
+| Python | `_mapping_constants` accepts POINT (map_type 0) or VECTOR (2). TEXTURE/NORMAL still refuse Slice 2av. Shared helper: env/sky/teximage + mesh TEX_IMAGE. |
+| Native | Version stamp `0.0.49-slice2av`. `set_mapping_type` already wired. |
+| Tools | `_quanttrace_slice2av_scene/smoke.py` |
+
+### Measured — point (claim)
+
+HDR equirect + TEX_COORD Generated → Mapping(POINT, loc=(0.15,0,0), rot_z=0.7, scale=1) → Env Vector. Persistent off. Tabulated Sobol. Packed `world_map_type=0`, `world_tex_vector_mode=4`.
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **5.66e-4** | 4.01e-6 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **8.00e-5** | 8.16e-7 | 0 / 65536 | **PASS** |
+
+### Measured — identity / regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| vector 2ac (VECTOR identity) | 6.75e-4 | 4.24e-6 | 0 | **PASS** |
+| point_identity (loft Mapping loc/rot 0 scale 1) | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| env_mul0 2au | 3.58e-7 | 2.36e-9 | 0 | **PASS** |
+| math_nest3 2at | 2.16e-4 | 8.07e-7 | 0 | **PASS** |
+| rgb_curves 2as | 5.96e-7 | 2.50e-9 | 0 | **PASS** |
+| rgb_mix 2aq | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| nishita 2am | 1.91e-6 | 1.87e-8 | 0 | **PASS** |
+| teximage 2an | 9.73e-4 | 2.79e-6 | 0 | **PASS** |
+| Stock POINT vs VECTOR (same rot, loc 0.15 vs ignored) | 0.098 | 0.0118 | 1022 | live |
+
+Proof plate `docs/proof/quanttrace-env-point-32-pair.png` + `/workspace/quanttrace-env-point-32-pair.png`. F12 not run this hour; Session is the claim. TEXTURE Mapping refuses Slice 2av.
+
+### Honesty / still refuses
+
+- After 2av, loft EasyHDR `_world_info` **PACKS** (strength 20, map_type 0, tex_mode 4 Generated+Mapping, mix MULTIPLY fac=0, gamma/HSV identity). `pack_scene` refuses **need 1..32 meshes, got 1200**. Do not claim loft Session match.
+- Mapping TEXTURE / NORMAL still refuse.
+- env_mul0_add20 32/256 FAIL is HDR-MIS at Strength 20 (matches unlinked 20), not a fold/mapping bug.
+- Still-life 1px / SSS / sky-256 residue still document-only.
+- Next: raise mesh cap / kitchens, or Mapping TEXTURE, or Noise→Color. Not ReSTIR. Not Classroom time %.
 
 ## 11am PlugWalk (2026-08-29) — TEX_ENVIRONMENT×0 → world Strength (Slice 2au)
 

@@ -5,7 +5,7 @@
 # for quanttrace_render_scene_rgba / quanttrace_render_qt_scene_rgba.
 # Slice 2c/2d: up to 32 meshes + 16 AREA/POINT/SUN/SPOT lights, constant Principled.
 # Slice 2f: TEX_IMAGE → Principled Base Color (default UV; disk or packed).
-# Slice 2h: TEX_COORD UV (+ optional Mapping Vector-type constants) → TEX_IMAGE Vector.
+# Slice 2h: TEX_COORD UV (+ optional Mapping POINT/VECTOR constants) → TEX_IMAGE Vector.
 # Slice 2i: TEX_IMAGE → Principled Roughness / Metallic (same Vector rules as Base Color).
 # Slice 2j: Principled.Normal ← Normal Map (Tangent) ← TEX_IMAGE Color (same Vector rules).
 # Slice 2k: TEX_COORD Generated (+ optional Mapping Vector-type) → TEX_IMAGE Vector.
@@ -43,7 +43,11 @@
 # Slice 2au: MULTIPLY(TEX_ENVIRONMENT/TEX_IMAGE/TEX_SKY.Color, 0) or
 #   MULTIPLY(0, tex.Color) → 0.0 (proven const 0; do not evaluate the texture).
 #   Outer DIV/ADD then fold as today. Non-zero tex Math / ADD/SUB/DIV/POWER
-#   with a tex Color input still refuse. Mapping POINT deferred.
+#   with a tex Color input still refuse.
+# Slice 2av: Mapping vector_type POINT accepted (world env/sky/teximage Vector
+#   and mesh TEX_IMAGE). NODE_MAPPING_TYPE_POINT=0; VECTOR=2 still. TEXTURE/
+#   NORMAL still refuse. POINT uses Location (rotate(vector*scale)+location);
+#   VECTOR ignores Location. Native already set_mapping_type(world_map_type).
 # Slice 2aj: ShaderNodeMix FLOAT / MixRGB constant → Strength (fold into float).
 # Slice 2ak: ShaderNodeMapRange FLOAT LINEAR + ShaderNodeClamp → Strength (fold into float).
 # Slice 2al: world Background Color constant ABI (world_color float3).
@@ -535,11 +539,23 @@ def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
                                             Tuple[float, float, float],
                                             int,
                                             str]:
-    """Validate MAPPING: VECTOR type, Vector←TEX_COORD, L/R/S unlinked or Slice 2ag constants."""
+    """Validate MAPPING: POINT or VECTOR, Vector←TEX_COORD, L/R/S unlinked or 2ag constants.
+
+    NODE_MAPPING_TYPE_POINT=0, TEXTURE=1, VECTOR=2, NORMAL=3
+    (cycles-src/src/kernel/svm/types.h + mapping_util.h).
+    POINT: rotate(vector * scale) + location.
+    VECTOR: rotate(vector * scale) — Location packed for ABI, SVM ignores it.
+    TEXTURE / NORMAL still refuse Slice 2av.
+    """
     vtype = str(getattr(map_node, "vector_type", "POINT") or "POINT").upper()
-    if vtype != "VECTOR":
+    if vtype == "POINT":
+        map_type = 0
+    elif vtype == "VECTOR":
+        map_type = 2
+    else:
         raise QuantTraceSyncError(
-            f"Mapping vector_type={vtype!r} refused (Slice 2h/2ag needs VECTOR)"
+            f"Mapping vector_type={vtype!r} refused "
+            "(Slice 2av accepts POINT or VECTOR; TEXTURE/NORMAL still refuse)"
         )
     vec_in = _mapping_input_by_name(map_node, "Vector")
     if vec_in is None or not getattr(vec_in, "is_linked", False):
@@ -550,13 +566,11 @@ def _mapping_constants(map_node) -> Tuple[Tuple[float, float, float],
     loc_s = _mapping_input_by_name(map_node, "Location")
     rot_s = _mapping_input_by_name(map_node, "Rotation")
     scl_s = _mapping_input_by_name(map_node, "Scale")
-    # NODE_MAPPING_TYPE_VECTOR == 2 (POINT=0, TEXTURE=1, VECTOR=2, NORMAL=3)
-    # VECTOR SVM ignores Location; still pack for ABI honesty (Slice 2ag).
     return (
         _float3_from_mapping_lrs_sock(loc_s, "Location"),
         _float3_from_mapping_lrs_sock(rot_s, "Rotation"),
         _float3_from_mapping_lrs_sock(scl_s, "Scale"),
-        2,
+        map_type,
         space,
     )
 
@@ -2625,7 +2639,8 @@ def _world_info(scene) -> dict:
     / MULTIPLY(0, tex.Color) → 0.0 (TEX_ENVIRONMENT / TEX_IMAGE / TEX_SKY
     Color; proven const 0). 4-deep Math / TEX_IMAGE / color-linked Mix /
     RGB Curves / Noise / non-zero tex Math / ADD/SUB/DIV/POWER with a tex
-    Color input still refuse. Mapping POINT deferred.
+    Color input still refuse. Slice 2av: Mapping POINT accepted (map_type 0);
+    VECTOR still map_type 2. TEXTURE/NORMAL still refuse.
     """
     empty = {
         "world_strength": 0.0,
@@ -4187,7 +4202,8 @@ def _fill_world_vec_ctypes(desc, packed):
         desc.world_map_rotation[i] = float(v)
     for i, v in enumerate(packed.get("world_map_scale") or (1.0, 1.0, 1.0)):
         desc.world_map_scale[i] = float(v)
-    desc.world_map_type = int(packed.get("world_map_type", 2) or 2)
+    _wmt = packed.get("world_map_type", 2)
+    desc.world_map_type = int(_wmt if _wmt is not None else 2)  # POINT=0 is valid
     desc.world_ob_use_transform = int(packed.get("world_ob_use_transform", 0) or 0)
     tfm = packed.get("world_ob_tfm") or _identity_3x4()
     for i, v in enumerate(tfm):

@@ -57,6 +57,9 @@
  * Slice 2au: TEX_ENVIRONMENT×0 MULTIPLY now accepted (folds to 0.0; then
  *   outer DIV/ADD). Same world_strength float ABI; no new C fields.
  *   Non-zero tex Math / ADD/SUB/DIV/POWER with tex Color still refuse.
+ * Slice 2av: Mapping vector_type POINT accepted on env/sky/teximage Vector
+ *   (and mesh TEX_IMAGE). Same world_map_type int ABI; 0=POINT 2=VECTOR.
+ *   Native already set_mapping_type. TEXTURE/NORMAL still refuse.
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
