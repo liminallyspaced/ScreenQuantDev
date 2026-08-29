@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2at landed** (2026-08-29 10am PlugWalk ET). 3-deep constant Math nest → world Strength (`_WORLD_STRENGTH_FOLD_MAX_DEPTH` 2→3; same `world_strength` float ABI). Loft EasyHDR first refuse was nest-too-deep (MATH×3). Identity 0–2-deep bit-identical. math_nest3 (0.5×1.4)/1+0=0.7 32²/4 Δmax=2.16e-4 PASS / 256²/128 Δmax=1.21e-4 PASS. 2ai math_mul / 2as rgb_curves / 2aq rgb_mix / 2al rgb / 2aa hdr / 2am nishita / 2an teximage 32²/4 PASS. Stock vs unlinked Strength Δmax=0.257 (live). 4-deep Math + TEX_ENVIRONMENT→Math refuse. `is_tracer=1`. Native `0.0.47-slice2at`. Addon `0.3.3`.
+Status: **Slice 2au landed** (2026-08-29 11am PlugWalk ET). MULTIPLY(TEX_ENVIRONMENT/TEX_IMAGE/TEX_SKY.Color, 0) → 0.0 (either order; proven const 0; texture not evaluated). Same `world_strength` float ABI; no new C++ fields. Loft EasyHDR MUL×0 now folds; outer DIV/ADD → Strength **20**. env_mul0 (×0 only) 32²/4 Δmax=3.58e-7 PASS. env_mul0_add20 loft ops 32²/4 Δmax=6.17e-3 (16 px) FAIL / 256²/128 Δmax=2.34e-2 (70 px) FAIL — **same residue as unlinked Strength 20** HDR-MIS (not a fold error; 2aa at Strength 1.0 was 6.13e-4 PASS). math_nest3/math_mul/hdr/rgb/rgb_mix/rgb_curves/nishita/teximage 32²/4 PASS (2at bit-identical). Non-zero tex MUL / ADD(env.Color) / 4-deep Math refuse. After 2au loft `_world_info` refuses **Mapping vector_type='POINT'**. `is_tracer=1`. Native `0.0.48-slice2au`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -27,6 +27,66 @@ addon zip or public commit tree.
 ---
 
 
+
+
+## 11am PlugWalk (2026-08-29) — TEX_ENVIRONMENT×0 → world Strength (Slice 2au)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Kitchen-first: after 2at, official loft EasyHDR `_world_info` refused **TEX_ENVIRONMENT.Color → Strength Math** (innermost MUL). World DNA MATH×3 is MUL(env.Color, 0) → DIV/100 → ADD+20 → Strength. Algebra: 0 * x = 0 for any finite x — do not evaluate the texture. Cycles Color→float (NODE_CONVERT_CF average) is irrelevant at ×0. Mapping POINT was not reached because Strength packed first.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | loft EasyHDR Strength MUL(env.Color, 0) is a constant 0. Fold that leaf; outer DIV/ADD already 2at. |
+| ABI | No new C fields. Same `world_strength` float. |
+| Python | `_fold_world_strength_math` MULTIPLY: tex-Color leaf vs proven const 0 (either order) → 0.0. Helper `_is_tex_color_strength_leaf`. Non-zero tex MUL / ADD/SUB/DIV/POWER with tex Color still refuse Slice 2au. 0–2-deep and 2at 3-deep constant graphs bit-identical. |
+| Native | Version stamp only `0.0.48-slice2au`. Strength still a folded float. |
+| Tools | `_quanttrace_slice2au_scene/smoke.py` |
+
+### Measured — env_mul0_add20 (loft ops; claim graph)
+
+HDR equirect + Strength ← ADD(DIVIDE(MULTIPLY(env.Color, 0), 100), 20)=20. Socket default left 1.0. Camera 1.8×. Persistent off. Tabulated Sobol. Packed `world_strength=20`, `world_image_path` nonempty, `world_color` zeros (env wins Color).
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **6.17e-3** | 3.70e-5 | 16 / 1024 | **FAIL** |
+| Session | 256² / 128 | **2.34e-2** | 8.88e-6 | 70 / 65536 | **FAIL** |
+
+Honesty: unlinked Strength 20 + same HDR 32²/4 Δmax=**6.17e-3** (16 px) — **identical** residue. HDR-MIS class at Strength 20 (2aa Strength 1.0 was 6.13e-4 PASS). Fold is not the mismatch. Mean stock/session ratio 1.000000. Do not claim PASS for this res.
+
+### Measured — env_mul0 (×0 only; fold proof)
+
+MULTIPLY(env.Color, 0) → Strength 0. AREA still lights the cube.
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **3.58e-7** | 2.36e-9 | 0 / 1024 | **PASS** |
+
+### Measured — identity / regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| math_nest3 2at (3-deep identity) | 2.16e-4 | 8.07e-7 | 0 | **PASS** |
+| math_mul 2ai (2-deep identity) | 4.25e-4 | 2.78e-6 | 0 | **PASS** |
+| rgb_curves 2as | 5.96e-7 | 2.50e-9 | 0 | **PASS** |
+| rgb_mix 2aq | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| rgb 2al | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| nishita 2am | 1.91e-6 | 1.87e-8 | 0 | **PASS** |
+| teximage 2an | 9.73e-4 | 2.79e-6 | 0 | **PASS** |
+| Stock env_mul0_add20 vs unlinked Strength 1.0 | 16.287 | 5.90 | 1024 | live |
+
+Proof plate `docs/proof/quanttrace-env-mul0-32-pair.png` + `/workspace/quanttrace-env-mul0-32-pair.png`. F12 not run this hour; Session is the claim.
+
+### Honesty / still refuses
+
+- After 2au, loft EasyHDR `_world_info` refuses **Mapping vector_type='POINT' refused (Slice 2ae/2ag needs VECTOR)** (env Vector; Strength packed). Do not claim loft Session match.
+- MULTIPLY(env.Color, non-zero) / ADD/SUBTRACT/DIVIDE/POWER with a tex Color input / both-sides-tex / Noise / RGB Curves on Strength / Vector / Alpha / 4-deep Math still refuse.
+- env_mul0_add20 32/256 FAIL is HDR-MIS at Strength 20 (matches unlinked 20), not a fold bug.
+- Still-life 1px / SSS / sky-256 residue still document-only.
+- Next: Mapping POINT or Noise→Color. Not ReSTIR. Not Classroom time %.
 
 ## 10am PlugWalk (2026-08-29) — 3-deep Math → world Strength (Slice 2at)
 

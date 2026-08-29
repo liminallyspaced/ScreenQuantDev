@@ -67,6 +67,8 @@
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  * Slice 2at: 3-deep constant Math nest → world Strength (fold max 3; no new
  *   ABI). Identity 0–2-deep bit-identical. Version 0.0.47-slice2at.
+ * Slice 2au: TEX_ENVIRONMENT×0 now accepted (MULTIPLY tex.Color × 0 → 0.0;
+ *   same world_strength float ABI). Version 0.0.48-slice2au.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,

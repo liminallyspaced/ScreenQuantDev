@@ -39,7 +39,11 @@
 # Slice 2ah: world Background Strength linked from ShaderNodeValue (same float ABI).
 # Slice 2ai: ShaderNodeMath ADD/SUB/MUL/DIV/POWER → Strength (fold into float).
 # Slice 2at: 3-deep constant Math nest → Strength (fold max depth 3; 2ai was 2).
-#   Identity: 0–2-deep still bit-identical. 4-deep / TEX_ENVIRONMENT→Math refuse.
+#   Identity: 0–2-deep still bit-identical. 4-deep still refuses.
+# Slice 2au: MULTIPLY(TEX_ENVIRONMENT/TEX_IMAGE/TEX_SKY.Color, 0) or
+#   MULTIPLY(0, tex.Color) → 0.0 (proven const 0; do not evaluate the texture).
+#   Outer DIV/ADD then fold as today. Non-zero tex Math / ADD/SUB/DIV/POWER
+#   with a tex Color input still refuse. Mapping POINT deferred.
 # Slice 2aj: ShaderNodeMix FLOAT / MixRGB constant → Strength (fold into float).
 # Slice 2ak: ShaderNodeMapRange FLOAT LINEAR + ShaderNodeClamp → Strength (fold into float).
 # Slice 2al: world Background Color constant ABI (world_color float3).
@@ -51,6 +55,7 @@
 #   Slice 2ar: linked Sky Vector (TEX_COORD / Mapping) accepted.
 #   Slice 2as: RGB Curves accepted (packed LUT). Noise still refuses.
 #   Slice 2at: 3-deep constant Math → Strength (fold max 3). Noise still refuses.
+#   Slice 2au: TEX_ENVIRONMENT×0 MULTIPLY folds to 0.0 (then outer DIV/ADD).
 # Slice 2an: ShaderNodeTexImage → Background Color (world_color_image_* after
 #   world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical. Priority:
 #   TEX_ENVIRONMENT → TEX_SKY → TEX_IMAGE → RGB/Mix. Vector via world_tex_vector_*
@@ -1345,8 +1350,51 @@ def _world_strength_math_input(sock, label: str, *, depth: int) -> float:
     return _world_strength_const_input(sock, label, depth=depth)
 
 
+_TEX_COLOR_STRENGTH_TYPES = frozenset(
+    {"TEX_ENVIRONMENT", "TEX_IMAGE", "TEX_SKY"}
+)
+
+
+def _is_tex_color_strength_leaf(sock) -> bool:
+    """True iff sock is a single Color link from ENV / IMAGE / SKY (Slice 2au).
+
+    Color socket by name or identifier only — Vector / Alpha still refuse.
+    """
+    if sock is None or not getattr(sock, "is_linked", False):
+        return False
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        return False
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype not in _TEX_COLOR_STRENGTH_TYPES:
+        return False
+    if from_sock is None:
+        return False
+    name = str(getattr(from_sock, "name", "") or "")
+    ident = str(getattr(from_sock, "identifier", "") or "")
+    return name == "Color" or ident == "Color"
+
+
+def _tex_color_strength_leaf_type(sock):
+    """Node type of a tex-Color leaf, or None."""
+    if not _is_tex_color_strength_leaf(sock):
+        return None
+    links = list(getattr(sock, "links", None) or [])
+    from_node = getattr(links[0], "from_node", None)
+    return getattr(from_node, "type", None) if from_node is not None else None
+
+
 def _fold_world_strength_math(node, *, depth: int = 0) -> float:
-    """Fold ShaderNodeMath ADD/SUB/MUL/DIV/POWER with constant inputs (2ai)."""
+    """Fold ShaderNodeMath ADD/SUB/MUL/DIV/POWER with constant inputs (2ai/2au).
+
+    Slice 2au: MULTIPLY(tex.Color, 0) or MULTIPLY(0, tex.Color) → 0.0 when
+    tex is TEX_ENVIRONMENT / TEX_IMAGE / TEX_SKY and the other operand is a
+    proven constant 0 (|c| < 1e-12). 0 * x = 0 for any finite x — the
+    texture is not evaluated. Non-zero tex MULTIPLY and ADD/SUB/DIV/POWER
+    with a tex Color input still refuse (Slice 2au).
+    """
     op = str(getattr(node, "operation", "") or "")
     if op not in _WORLD_STRENGTH_MATH_OPS:
         raise QuantTraceSyncError(
@@ -1370,6 +1418,38 @@ def _fold_world_strength_math(node, *, depth: int = 0) -> float:
                 "world Background Strength Math missing Value/Value_001 "
                 "(Slice 2ai)"
             ) from e
+    a_tex = _is_tex_color_strength_leaf(a_sock)
+    b_tex = _is_tex_color_strength_leaf(b_sock)
+    if a_tex and b_tex:
+        raise QuantTraceSyncError(
+            "world Background Strength Math both-sides "
+            "TEX_ENVIRONMENT/TEX_IMAGE/TEX_SKY Color refused (Slice 2au)"
+        )
+    if a_tex or b_tex:
+        ntype = _tex_color_strength_leaf_type(a_sock if a_tex else b_sock)
+        if op != "MULTIPLY":
+            raise QuantTraceSyncError(
+                f"world Background Strength Math {op} {ntype}.Color "
+                "refused (Slice 2au: only MULTIPLY ×0 folds; "
+                "ADD/SUBTRACT/DIVIDE/POWER with a tex Color input still refuse)"
+            )
+        const_sock = b_sock if a_tex else a_sock
+        const_label = (
+            "world Background Strength Math.Value_001"
+            if a_tex
+            else "world Background Strength Math.Value"
+        )
+        # Proven const 0 only. Do not swallow unrelated QuantTraceSyncError
+        # (Noise, nest-too-deep, Vector, Alpha, unfoldable graphs).
+        c = _world_strength_const_input(
+            const_sock, const_label, depth=depth + 1
+        )
+        if abs(c) < 1e-12:
+            return 0.0
+        raise QuantTraceSyncError(
+            f"world Background Strength Math MULTIPLY {ntype}.Color "
+            "× non-zero refused (Slice 2au: spatially varying; only ×0 folds)"
+        )
     a = _world_strength_const_input(
         a_sock, "world Background Strength Math.Value", depth=depth + 1
     )
@@ -1647,7 +1727,7 @@ def _fold_world_strength_clamp(node, *, depth: int = 0) -> float:
 
 
 def _world_strength_from_sock(sock) -> float:
-    """Resolve Background.Strength to a constant float (Slice 2ah/2ai/2aj/2ak).
+    """Resolve Background.Strength to a constant float (Slice 2ah/2ai/2aj/2ak/2at/2au).
 
     Accepts unlinked default_value, ShaderNodeValue, ShaderNodeMath
     (ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER, nest depth ≤3 — Slice 2at; 2ai was 2),
@@ -1656,9 +1736,12 @@ def _world_strength_from_sock(sock) -> float:
     (Value/From Min/Max/To Min/Max constant; clamp RNA → RANGE clamp on To
     Min/Max), or ShaderNodeClamp MINMAX/RANGE. FLOAT mix type is the primary
     Mix path; constant RGBA / MixRGB folds via per-channel blend then RGB
-    average (NODE_CONVERT_CF). Multi-link, TEX_IMAGE / color-linked Mix /
-    RGB Curves / Noise / VECTOR Mix / VECTOR Map Range / non-LINEAR Map Range
-    / texture-driven graphs / 4-deep Math / kitchens refuse.
+    average (NODE_CONVERT_CF). Slice 2au: MULTIPLY(TEX_ENVIRONMENT.Color, 0)
+    or MULTIPLY(0, tex.Color) folds to 0.0 (TEX_IMAGE / TEX_SKY Color too;
+    proven const 0; texture is not evaluated). Multi-link, TEX_IMAGE /
+    color-linked Mix / RGB Curves / Noise / VECTOR Mix / VECTOR Map Range /
+    non-LINEAR Map Range / non-zero tex Math / ADD/SUB/DIV/POWER with a tex
+    Color input / 4-deep Math / kitchens refuse.
     """
     if sock is None:
         return 0.0
@@ -2534,12 +2617,15 @@ def _world_info(scene) -> dict:
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
     refuse with Slice 2ac in the error.
-    Slice 2ah/2ai/2aj/2ak/2at: Strength may be unlinked default_value,
+    Slice 2ah/2ai/2aj/2ak/2at/2au: Strength may be unlinked default_value,
     ShaderNodeValue, ShaderNodeMath (ADD/SUB/MUL/DIV/POWER, nest ≤3),
     ShaderNodeMix FLOAT / MixRGB whose Factor+A/B fold to constants
     (Value/unlinked/RGB/shallow Math/Mix), ShaderNodeMapRange FLOAT LINEAR,
-    or ShaderNodeClamp MINMAX/RANGE. 4-deep Math / TEX_IMAGE / color-linked
-    Mix / RGB Curves / Noise / TEX_ENVIRONMENT → Strength still refuse.
+    or ShaderNodeClamp MINMAX/RANGE. Slice 2au folds MULTIPLY(tex.Color, 0)
+    / MULTIPLY(0, tex.Color) → 0.0 (TEX_ENVIRONMENT / TEX_IMAGE / TEX_SKY
+    Color; proven const 0). 4-deep Math / TEX_IMAGE / color-linked Mix /
+    RGB Curves / Noise / non-zero tex Math / ADD/SUB/DIV/POWER with a tex
+    Color input still refuse. Mapping POINT deferred.
     """
     empty = {
         "world_strength": 0.0,

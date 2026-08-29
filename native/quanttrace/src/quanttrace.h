@@ -53,7 +53,10 @@
  *   Mix → Background.
  * Slice 2at: 3-deep constant Math → world Strength (same world_strength float
  *   ABI; no new C fields). Fold max depth 3 (2ai was 2). Identity 0–2-deep
- *   graphs bit-identical. 4-deep Math / TEX_ENVIRONMENT→Math still refuse.
+ *   graphs bit-identical. 4-deep Math still refuses.
+ * Slice 2au: TEX_ENVIRONMENT×0 MULTIPLY now accepted (folds to 0.0; then
+ *   outer DIV/ADD). Same world_strength float ABI; no new C fields.
+ *   Non-zero tex Math / ADD/SUB/DIV/POWER with tex Color still refuse.
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
