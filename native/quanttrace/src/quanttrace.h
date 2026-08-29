@@ -40,7 +40,10 @@
  * Slice 2am: Sky Texture → world Background Color (world_sky_* after world_color).
  *   type 0 = 2al/2aa bit-identical. 1=PREETHAM 2=HOSEK 3=NISHITA/MULTIPLE
  *   4=SINGLE_SCATTERING (Blender 5.2 RNA). Path empty, world_color zeros.
- *   Unlinked Vector only. Linked Sky Vector still refuse.
+ *   Mode 0: Vector unlinked (LINK_TEXTURE_GENERATED).
+ * Slice 2ar: linked Sky Vector via world_tex_vector_mode + world_map_* +
+ *   world_ob_* (TEX_COORD / Mapping, same as env 2ac/2ae). Mode 0 keeps
+ *   2am bit-identical. RGB Curves still refuse (curve LUT/SVM deferred).
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via

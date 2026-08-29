@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.44-slice2aq` — Mix after world Color chain → Background (`world_mix_*`). Addon still `0.3.3`.
+**Current native:** `0.0.45-slice2ar` — linked Sky Vector (TEX_COORD / Mapping on PREETHAM). Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.44-slice2aq` (Mix after world Color chain).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.45-slice2ar` (linked Sky Vector).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -59,9 +59,10 @@ this tree never feeds Auto clocks.
 | **2an — TEX_IMAGE → world Color** | **PASS** | Generated FLAT 32²/4 Δmax **9.73e-4**; 256²/128 Δmax **3.01e-4**. Mapping rot_z=0.15 32²/4 Δmax **0.00115** (1 px) not claimed PASS. Unlinked / rgb / hdr / nishita 32²/4 PASS. Native `0.0.41-slice2an`. |
 | **2ap — Bright/Contrast → world Color** | **PASS** | rgb_bc 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **5.96e-7**. rgb_gamma_hsv_bc loft 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **5.96e-7**. hdr_bc Bright=0.08 Contrast=0.05 32²/4 Δmax **9.08e-4**; 256²/128 Δmax **1.98e-4**. rgb_gamma/rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.43-slice2ap`. |
 | **2aq — Mix → world Color** | **PASS** | rgb_mix 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **5.96e-7**. rgb_hsv_mix 32²/4 Δmax **7.15e-7**; 256²/128 Δmax **4.77e-7**. rgb_gamma_hsv_mix 32²/4 Δmax **7.15e-7**; 256²/128 Δmax **4.77e-7**. hdr_mix fac=0.25 32²/4 Δmax **4.88e-4**; 256²/128 Δmax **1.58e-4**. rgb_bc/rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.44-slice2aq`. |
+| **2ar — linked Sky Vector** | **PASS** | sky_map PREETHAM+Mapping rot_z=0.7 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **4.77e-7**. sky_gen 32²/4 Δmax **9.54e-7**. preetham/nishita/rgb_mix/rgb/hdr/teximage 32²/4 PASS. RGB Curves refuse. Native `0.0.45-slice2ar`. |
 | **2ao — Gamma/HueSat → world Color** | **PASS** | rgb_gamma 32²/4 Δmax **4.77e-7**; 256²/128 Δmax **5.96e-7**. rgb_gamma_hsv loft 32²/4 Δmax **7.15e-7**; 256²/128 Δmax **4.77e-7**. rgb_hsv 32²/4 Δmax **5.96e-7**. hdr_gamma 32²/4 Δmax **9.73e-4**; 256²/128 Δmax **1.91e-4**. rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.42-slice2ao`. |
 
-Kitchens / linked Thin Wall (BOOLEAN) / TEX_IMAGE → world Strength still refuse with a named `QuantTraceSyncError`. Map Range FLOAT LINEAR / Clamp → world Strength is Slice 2ak. Mix FLOAT / MixRGB constant → world Strength is Slice 2aj. Math → world Strength is Slice 2ai. Linked world Strength (Value node) is Slice 2ah. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y. World Color RGB/Mix is Slice 2al. Sky/Nishita (unlinked Vector) is Slice 2am. TEX_IMAGE→Color is Slice 2an. Gamma/HueSat on world Color is Slice 2ao. Bright/Contrast on world Color is Slice 2ap. Linked Sky Vector / Noise / RGB Curves / Mix after HSV still refuse.
+Kitchens / linked Thin Wall (BOOLEAN) / TEX_IMAGE → world Strength still refuse with a named `QuantTraceSyncError`. Map Range FLOAT LINEAR / Clamp → world Strength is Slice 2ak. Mix FLOAT / MixRGB constant → world Strength is Slice 2aj. Math → world Strength is Slice 2ai. Linked world Strength (Value node) is Slice 2ah. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y. World Color RGB/Mix is Slice 2al. Sky/Nishita (unlinked Vector) is Slice 2am. TEX_IMAGE→Color is Slice 2an. Gamma/HueSat on world Color is Slice 2ao. Bright/Contrast on world Color is Slice 2ap. Mix after Color chain is Slice 2aq. Linked Sky Vector (PREETHAM/HOSEK) is Slice 2ar. Noise / RGB Curves still refuse (Nishita Vector hidden — Blender ignores link).
 
 ## Build (Linux) — hello stub (default)
 

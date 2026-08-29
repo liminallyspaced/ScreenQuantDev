@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2aq landed** (2026-08-29 7am PlugWalk ET). Mix after world Color chain → Background Color (`world_mix_*` after `world_contrast`). Identity skip (mix_type=0) keeps 2ap/2ao/2an/2am/2aa/2al bit-identical. rgb_mix 32²/4 Δmax=5.96e-7 PASS / 256²/128 Δmax=5.96e-7 PASS. rgb_hsv_mix 32²/4 Δmax=7.15e-7 PASS / 256²/128 Δmax=4.77e-7 PASS. rgb_gamma_hsv_mix loft-ish 32²/4 Δmax=7.15e-7 PASS / 256²/128 Δmax=4.77e-7 PASS. hdr_mix fac=0.25 other=(0.05,0.05,0.08) 32²/4 Δmax=4.88e-4 PASS / 256²/128 Δmax=1.58e-4 PASS. rgb_bc/rgb/hdr/nishita/teximage 32²/4 PASS. Stock rgb_mix vs unlinked RGB Δmax=0.5 (lever live). Noise refuses. `is_tracer=1`. Native `0.0.44-slice2aq`. Addon `0.3.3`.
+Status: **Slice 2ar landed** (2026-08-29 8am PlugWalk ET). Linked Sky Vector → Background Color (`world_tex_vector_mode` + Mapping on `SkyTextureNode`; PREETHAM claim). Identity skip (mode 0) keeps 2aq/2ap/2ao/2an/2am/2aa/2al bit-identical. sky_map (PREETHAM + Mapping rot_z=0.7) 32²/4 Δmax=5.96e-7 PASS / 256²/128 Δmax=4.77e-7 PASS. sky_gen / preetham / nishita / rgb_mix / rgb / hdr / teximage 32²/4 PASS. Stock sky_map vs unlinked PREETHAM Δmax=0.643 (lever live). RGB Curves refuses (curve LUT/SVM deferred). Nishita linked Vector ignored by Blender (is_unavailable) — not a claim. `is_tracer=1`. Native `0.0.45-slice2ar`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -25,6 +25,65 @@ addon zip or public commit tree.
 
 
 ---
+
+## 8am PlugWalk (2026-08-29) — linked Sky Vector (Slice 2ar)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Retarget: 2aq honesty next was linked Sky Vector or RGB Curves. RGB Curves needs `SOCKET_COLOR_ARRAY` curve LUT packing (Cycles `RGBCurvesNode` / `CurvesNode`) — deferred this hour. Linked Sky Vector reuses `world_tex_vector_mode` + `world_map_*` + `world_ob_*` already used by env 2ac/2ae and TEX_IMAGE 2an.
+
+Honesty note: Blender 5.2 hides Sky Vector for MULTIPLE_SCATTERING/SINGLE (`is_unavailable=True`); stock Cycles **ignores** the link (map vs unlinked Nishita Δmax=0). Claim plate uses **PREETHAM** where Vector is live.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Cycles `SkyTextureNode` Vector default `LINK_TEXTURE_GENERATED` (cite `shader_nodes.cpp` NODE_DEFINE). Same TEX_COORD / Mapping modes as EnvironmentTexture 2ac/2ae. RGB Curves: `RGBCurvesNode` + `SOCKET_COLOR_ARRAY(curves)` — deferred. |
+| ABI | No new fields. Reuse `world_tex_vector_mode` / `world_map_*` / `world_ob_*` on sky path. Mode 0 = leave Vector unlinked (2am bit-identical). |
+| Python | `_pack_world_sky_from_node` accepts Vector ← TEX_COORD or Mapping(VECTOR)←TEX_COORD; unlinked stays mode 0. RGB Curves / Noise still refuse. |
+| Native | When `has_sky` and `tex_mode_has_texcoord(wmode)`: TextureCoordinate (+ optional Mapping) → `sky->input("Vector")`. Else leave unlinked. Version `0.0.45-slice2ar`. |
+| Version | `0.0.45-slice2ar` |
+| Tools | `_quanttrace_slice2ar_scene/smoke.py` (modes sky_map / sky_gen / preetham / nishita / rgb_mix / rgb / hdr / teximage / rgb_curves / noise) |
+
+### Measured — sky_map PREETHAM + Mapping (claim)
+
+TEX_COORD Generated → Mapping(VECTOR, rot_z=0.7) → Sky Vector → Background.
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **5.96e-7** | 8.40e-9 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **4.77e-7** | 7.09e-9 | 0 / 65536 | **PASS** |
+
+### Measured — sky_gen PREETHAM (secondary claim)
+
+TEX_COORD Generated → Sky Vector (no Mapping).
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **9.54e-7** | 8.65e-9 | 0 / 1024 | **PASS** |
+
+### Measured — secondary / regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| preetham unlinked | 9.54e-7 | 8.65e-9 | 0 | **PASS** |
+| nishita 2am | 1.91e-6 | 1.87e-8 | 0 | **PASS** |
+| rgb_mix 2aq | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| rgb 2al | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| teximage 2an Generated FLAT | 9.73e-4 | 2.79e-6 | 0 | **PASS** |
+| Stock sky_map vs preetham unlinked | 0.643 | 5.64e-3 | 41 | live |
+
+Identity skip: nishita / rgb_mix / rgb / hdr / teximage / preetham packed `world_tex_vector_mode=0` (or prior modes unchanged); Δmax matches prior slices within noise. Proof plate `docs/proof/quanttrace-sky-vector-32-pair.png` (sky_map stock\|session) + `/workspace/quanttrace-sky-vector-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty / still refuses
+
+- RGB Curves (`CURVE_RGB`) — curve LUT/SVM packing deferred; refuse message names Slice 2ar.
+- Noise; kitchens / still-life 1px / SSS residue still document-only.
+- Linked Sky Vector on Nishita/MULTIPLE: Blender ignores (Vector unavailable) — do not claim; use PREETHAM/HOSEK where Vector is live.
+- Next-after-2ar notes: RGB Curves → world Color, HOSEK linked Vector gate, or loft EasyHDR full chain on official HDR. Not ReSTIR. Not Classroom time %.
+
+
 
 ## 7am PlugWalk (2026-08-29) — Mix → world Color (Slice 2aq)
 

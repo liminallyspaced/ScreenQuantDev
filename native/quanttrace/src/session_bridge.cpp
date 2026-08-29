@@ -39,7 +39,11 @@
  *   BackgroundLight when has_env || color_nonzero (black empty-path stays 2b).
  * Slice 2am: SkyTextureNode → Background Color (world_sky_type != 0).
  *   Path empty, do not mix world_color into the sky graph. BackgroundLight
- *   when has_env || has_sky || color_nonzero. Unlinked Vector (GENERATED).
+ *   when has_env || has_sky || color_nonzero. Mode 0 Vector unlinked
+ *   (LINK_TEXTURE_GENERATED).
+ * Slice 2ar: linked Sky Vector via world_tex_vector_mode + world_map_* +
+ *   world_ob_* (same TEX_COORD / Mapping shapes as env 2ac/2ae). Mode 0
+ *   keeps 2am bit-identical. RGB Curves still refuse (curve LUT deferred).
  * Slice 2an: ImageTextureNode → Background Color (world_color_image_path).
  *   Priority: env → sky → color-image → world_color RGB. Vector via
  *   world_tex_vector_mode (0 = LINK_TEXTURE_UV ImageTexture default).
@@ -1557,7 +1561,9 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
      * stays bit-identical black). Env path keeps Color black — ENV node feeds
      * Color; do not mix world_color into the env graph.
      * Slice 2am: world_sky_type != 0 builds SkyTextureNode; path empty, do not
-     * mix world_color into the sky graph. Vector unlinked LINK_TEXTURE_GENERATED.
+     * mix world_color into the sky graph. Mode 0 Vector unlinked
+     * LINK_TEXTURE_GENERATED. Slice 2ar: non-zero world_tex_vector_mode wires
+     * TEX_COORD (+ Mapping) → Sky Vector (same as env 2ac/2ae).
      * Slice 2an: nonempty world_color_image_path builds ImageTextureNode Color →
      * Background Color (Color→Color, no NODE_CONVERT_CF). Projection FLAT/BOX/
      * SPHERE/TUBE. Vector: mode 0 leaves LINK_TEXTURE_UV (ImageTextureNode
@@ -1662,7 +1668,10 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
             /* Slice 2am: SkyTextureNode Color → Background Color.
              * Cite shader_nodes.cpp NODE_DEFINE(SkyTextureNode). Default
              * SOCKET is NODE_SKY_MULTIPLE_SCATTERING (Blender RNA NISHITA /
-             * MULTIPLE_SCATTERING). Vector unlinked → LINK_TEXTURE_GENERATED.
+             * MULTIPLE_SCATTERING). Mode 0: Vector unlinked →
+             * LINK_TEXTURE_GENERATED (2am bit-identical).
+             * Slice 2ar: world_tex_vector_mode non-zero wires TEX_COORD
+             * (+ optional Mapping) → Sky Vector — same modes as env 2ac/2ae.
              * Do not invert sun_rotation; simplify_settings wraps it. */
             SkyTextureNode *sky = graph->create_node<SkyTextureNode>();
             NodeSkyType st = NODE_SKY_MULTIPLE_SCATTERING;
@@ -1689,6 +1698,58 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
             sky->set_air_density(desc->world_sky_air_density);
             sky->set_aerosol_density(desc->world_sky_aerosol_density);
             sky->set_ozone_density(desc->world_sky_ozone_density);
+            /* Slice 2ar: linked Sky Vector (reuse world_tex_vector_mode). */
+            const int wmode = desc->world_tex_vector_mode;
+            if (tex_mode_has_texcoord(wmode)) {
+                TextureCoordinateNode *texcoord =
+                    graph->create_node<TextureCoordinateNode>();
+                const char *coord_sock = "UV";
+                if (tex_mode_is_reflection(wmode)) {
+                    coord_sock = "Reflection";
+                }
+                else if (tex_mode_is_window(wmode)) {
+                    coord_sock = "Window";
+                }
+                else if (tex_mode_is_camera(wmode)) {
+                    coord_sock = "Camera";
+                }
+                else if (tex_mode_is_object(wmode)) {
+                    coord_sock = "Object";
+                }
+                else if (tex_mode_is_generated(wmode)) {
+                    coord_sock = "Generated";
+                }
+                if (tex_mode_is_object(wmode) && desc->world_ob_use_transform) {
+                    texcoord->set_use_transform(true);
+                    texcoord->set_ob_tfm(tfm_from_12(desc->world_ob_tfm));
+                }
+                if (tex_mode_has_mapping(wmode)) {
+                    MappingNode *mapping = graph->create_node<MappingNode>();
+                    mapping->set_mapping_type(
+                        static_cast<NodeMappingType>(desc->world_map_type));
+                    mapping->set_location(make_float3(
+                        desc->world_map_location[0],
+                        desc->world_map_location[1],
+                        desc->world_map_location[2]));
+                    mapping->set_rotation(make_float3(
+                        desc->world_map_rotation[0],
+                        desc->world_map_rotation[1],
+                        desc->world_map_rotation[2]));
+                    mapping->set_scale(make_float3(
+                        desc->world_map_scale[0],
+                        desc->world_map_scale[1],
+                        desc->world_map_scale[2]));
+                    graph->connect(texcoord->output(coord_sock),
+                                   mapping->input("Vector"));
+                    graph->connect(mapping->output("Vector"),
+                                   sky->input("Vector"));
+                }
+                else {
+                    graph->connect(texcoord->output(coord_sock),
+                                   sky->input("Vector"));
+                }
+            }
+            /* else mode 0: leave Vector unlinked → LINK_TEXTURE_GENERATED. */
             connect_world_color_chain(graph.get(), sky->output("Color"),
                                        wcol, bg, desc);
         }

@@ -46,7 +46,8 @@
 # Slice 2am: ShaderNodeTexSky → Background Color (world_sky_* after world_color).
 #   type 0 = 2al/2aa. 1=PREETHAM 2=HOSEK 3=NISHITA/MULTIPLE 4=SINGLE.
 #   Path empty, world_color zeros. Unlinked Vector only.
-#   Linked Sky Vector / Noise / RGB Curves still refuse.
+#   Slice 2ar: linked Sky Vector (TEX_COORD / Mapping) accepted.
+#   Noise / RGB Curves still refuse.
 # Slice 2an: ShaderNodeTexImage → Background Color (world_color_image_* after
 #   world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical. Priority:
 #   TEX_ENVIRONMENT → TEX_SKY → TEX_IMAGE → RGB/Mix. Vector via world_tex_vector_*
@@ -61,7 +62,9 @@
 #   2al bit-identical. Up to 3 hops (Gamma, HueSat, BrightContrast, any order).
 #   Native loft: Color → Gamma → HSV → BrightContrast → Background. Second
 #   BrightContrast / linked Bright/Contrast refuse. Noise / RGB Curves / Mix
-#   after HSV / second Gamma/HueSat / linked Sky Vector still refuse.
+#   after HSV / second Gamma/HueSat still refuse; linked Sky Vector → 2ar.
+# Slice 2ar: linked Sky Vector (TEX_COORD / Mapping) on TEX_SKY;
+#   RGB Curves still refuse (curve LUT deferred).
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -1779,12 +1782,23 @@ def _world_sky_empty():
 
 
 def _pack_world_sky_from_node(node) -> dict:
-    """Pack ShaderNodeTexSky RNA into world_sky_* (Slice 2am).
+    """Pack ShaderNodeTexSky RNA into world_sky_* + Vector (Slice 2am / 2ar).
 
-    Unlinked Vector only. Blender 5.2 sky_type default is MULTIPLE_SCATTERING
-    (legacy RNA NISHITA maps here). dust_density is the older name for
-    aerosol_density.
+    Slice 2am: unlinked Vector (mode 0 → LINK_TEXTURE_GENERATED).
+    Slice 2ar: Vector ← TEX_COORD (Generated/Object/Camera/Window/Reflection/UV)
+    or Mapping(VECTOR) ← TEX_COORD, same modes as env 2ac/2ae / TEX_IMAGE 2an.
+    Returns world_sky_* plus world_tex_vector_mode / world_map_* / world_ob_ref.
+    Blender 5.2 sky_type default is MULTIPLE_SCATTERING (legacy RNA NISHITA).
+    dust_density is the older name for aerosol_density.
+    RGB Curves / Noise still refuse elsewhere.
     """
+    tex_vector_mode = 0  # QT_TEX_VECTOR_UNLINKED → LINK_TEXTURE_GENERATED
+    map_location = (0.0, 0.0, 0.0)
+    map_rotation = (0.0, 0.0, 0.0)
+    map_scale = (1.0, 1.0, 1.0)
+    map_type = 2
+    world_ob_ref = None
+
     vec_sock = None
     inputs = getattr(node, "inputs", None)
     if inputs is not None:
@@ -1798,11 +1812,84 @@ def _pack_world_sky_from_node(node) -> dict:
             getter = getattr(inputs, "get", None)
             vec_sock = getter("Vector") if callable(getter) else None
     if vec_sock is not None and getattr(vec_sock, "is_linked", False):
-        raise QuantTraceSyncError(
-            "world Background Color TEX_SKY Vector linked refused "
-            "(Slice 2am: unlinked Vector / ShaderNodeTexSky only; "
-            "TEX_COORD/Noise/RGB Curves still refuse)"
-        )
+        vlinks = list(getattr(vec_sock, "links", None) or [])
+        if len(vlinks) != 1:
+            raise QuantTraceSyncError(
+                "world Background Color TEX_SKY Vector has multiple links "
+                "(Slice 2ar)"
+            )
+        vsrc = vlinks[0]
+        vnode = getattr(vsrc, "from_node", None)
+        vsock = getattr(vsrc, "from_socket", None)
+        vtype = getattr(vnode, "type", None) if vnode is not None else None
+        vname = getattr(vsock, "name", "") if vsock is not None else ""
+        if vtype == "TEX_COORD":
+            key = str(vname).strip().lower()
+            if key == "uv":
+                tex_vector_mode = 1
+            elif key == "generated":
+                tex_vector_mode = 3
+            elif key == "object":
+                world_ob_ref = getattr(vnode, "object", None)
+                tex_vector_mode = 5
+            elif key == "camera":
+                tex_vector_mode = 7
+            elif key == "window":
+                tex_vector_mode = 9
+            elif key == "reflection":
+                tex_vector_mode = 11
+            else:
+                raise QuantTraceSyncError(
+                    f"world Background Color TEX_SKY Vector TEX_COORD output "
+                    f"{vname!r} refused (Slice 2ar)"
+                )
+        elif vtype == "MAPPING":
+            if vname not in ("Vector", "vector"):
+                raise QuantTraceSyncError(
+                    "world Background Color TEX_SKY Vector must come from "
+                    "Mapping Vector (Slice 2ar)"
+                )
+            try:
+                map_location, map_rotation, map_scale, map_type, space = (
+                    _mapping_constants(vnode)
+                )
+            except QuantTraceSyncError as e:
+                msg = str(e)
+                if "Slice 2" in msg:
+                    raise QuantTraceSyncError(
+                        msg.replace("Slice 2ag", "Slice 2ar")
+                        .replace("Slice 2h", "Slice 2ar")
+                        .replace("Slice 2k", "Slice 2ar")
+                        .replace("Slice 2l", "Slice 2ar")
+                        .replace("Slice 2m", "Slice 2ar")
+                        .replace("Slice 2n", "Slice 2ar")
+                        .replace("Slice 2ac", "Slice 2ar")
+                        .replace("Slice 2ae", "Slice 2ar")
+                        .replace("Slice 2ab", "Slice 2ar")
+                        .replace("Slice 2an", "Slice 2ar")
+                    ) from e
+                raise QuantTraceSyncError(f"{msg} (Slice 2ar)") from e
+            if space == "Generated":
+                tex_vector_mode = 4
+            elif space == "Object":
+                vec_in = _mapping_input_by_name(vnode, "Vector")
+                world_ob_ref = _tex_coord_object_from_vec_sock(vec_in)
+                tex_vector_mode = 6
+            elif space == "Camera":
+                tex_vector_mode = 8
+            elif space == "Window":
+                tex_vector_mode = 10
+            elif space == "Reflection":
+                tex_vector_mode = 12
+            else:
+                tex_vector_mode = 2  # UV Mapping
+        else:
+            raise QuantTraceSyncError(
+                f"world Background Color TEX_SKY Vector from {vtype!r} refused "
+                "(Slice 2ar: TEX_COORD or Mapping←TEX_COORD only; "
+                "Noise/RGB Curves still refuse)"
+            )
+
     rna = str(getattr(node, "sky_type", "") or "").upper()
     if rna in ("NISHITA", "MULTIPLE_SCATTERING"):
         sky_type = 3
@@ -1840,6 +1927,12 @@ def _pack_world_sky_from_node(node) -> dict:
         "world_sky_air_density": float(getattr(node, "air_density", 1.0)),
         "world_sky_aerosol_density": float(aerosol if aerosol is not None else 1.0),
         "world_sky_ozone_density": float(getattr(node, "ozone_density", 1.0)),
+        "world_tex_vector_mode": int(tex_vector_mode),
+        "world_map_location": map_location,
+        "world_map_rotation": map_rotation,
+        "world_map_scale": map_scale,
+        "world_map_type": map_type,
+        "world_ob_ref": world_ob_ref,
     }
 
 
@@ -2279,11 +2372,11 @@ def _peel_world_gamma_hsv(from_node, from_sock):
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "CURVE_RGB":
         raise QuantTraceSyncError(
-            "world Background Color RGB Curves refused (Slice 2aq)"
+            "world Background Color RGB Curves refused (Slice 2ar: curve LUT/SVM deferred; linked Sky Vector landed)"
         )
     if ntype in ("TEX_NOISE", "NOISE"):
         raise QuantTraceSyncError(
-            "world Background Color Noise refused (Slice 2aq)"
+            "world Background Color Noise refused (Slice 2ar)"
         )
     # Mix immediately on Background with both-constant A/B is 2al (folded by
     # caller). Mix after HSV/BC/source with one constant side is peeled by
@@ -2319,7 +2412,7 @@ def _world_info(scene) -> dict:
     → Gamma → HSV → BrightContrast → Mix → Background. Noise / RGB Curves /
     linked Fac / both-sides-linked Mix (non-constant) / second Mix / linked
     Gamma/Hue/Sat/Value/Fac/Bright/Contrast / second Gamma/HueSat/BrightContrast
-    / VECTOR Mix / linked Sky Vector refuse.
+    / VECTOR Mix refuse. Slice 2ar: linked Sky Vector accepted (TEX_COORD / Mapping). RGB Curves still refuse.
     Slice 2ac: Vector may be TEX_COORD Generated/Object/Camera/Window/Reflection
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
