@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ai landed** (2026-08-28 11pm PlugWalk ET). Fold ShaderNodeMath → world Background Strength into existing `world_strength` float (Python-only; ADD/SUB/MUL/DIV/POWER ← Value/unlinked/shallow Math). math_mul 0.5×1.4=0.7 32²/4 Δmax=4.25e-4; 256²/128 Δmax=1.20e-4 PASS. value 2ah 32²/4 Δmax=4.25e-4 PASS. unlinked 2aa 32²/4 Δmax=6.13e-4 PASS. math_add 0.3+0.4 32²/4 Δmax=4.25e-4 PASS. Stock math_mul 0.7 vs unlinked 1.0 Δmax=0.289 (lever live). `is_tracer=1`. Native `0.0.36-slice2ai`. Addon `0.3.3`.
+Status: **Slice 2aj landed** (2026-08-29 12am PlugWalk ET). Fold ShaderNodeMix FLOAT / MixRGB → world Background Strength into existing `world_strength` float (Python-only; Factor+A/B unlinked/Value/RGB/shallow Math/Mix). mix_float Fac=0.5 A=0.4 B=1.0 → 0.7 32²/4 Δmax=4.25e-4; 256²/128 Δmax=1.20e-4 PASS. mix_unlinked / mix_rgb / math_mul 2ai / value 2ah 32²/4 Δmax=4.25e-4 PASS. unlinked 2aa 32²/4 Δmax=6.13e-4 PASS. Stock mix 0.7 vs unlinked 1.0 Δmax=0.289 (lever live). mix_tex (TEX_IMAGE→A) refuses. `is_tracer=1`. Native `0.0.37-slice2aj`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -59,7 +59,49 @@ Live graph (stock math_mul 0.7 vs stock unlinked 1.0) 32²/4: Δmax=**0.289** (1
 
 ### Next
 
-TEX_IMAGE→L/R/S, or Mix → Strength, or Sky/Nishita/TEX_IMAGE → Background Color. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
+Done 12am: Mix → Strength. See 12am section.
+
+## 12am PlugWalk (2026-08-29) — Mix → world Strength (Slice 2aj)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Blender 5.2 `ShaderNodeMix` default `data_type=FLOAT`; sockets key by display name (`Factor`/`A`/`B`/`Result`), identifiers `Factor_Float`/`A_Float`/`B_Float`/`Result_Float`. MixRGB (`MIX_RGB`) still exists (Fac/Color1/Color2). Fold MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE at sync into the existing `world_strength` float. Strength sock default left at 1.0 while Mix folds to 0.7 so ignoring the link fails the gate. `clamp_factor` honoured. |
+| ABI | Unchanged `world_strength` float. No new C++ fields — constant resolved at sync time (like 2ai Math). |
+| Python | `_world_strength_from_sock` + `_fold_world_strength_mix` / `_world_strength_const_input` in `sync.py`. Accepts unlinked / Value / Math / Mix FLOAT / MixRGB (constant Color1/Color2, RGB average = NODE_CONVERT_CF). TEX_IMAGE / color-linked Mix / RGB Curves / Noise / VECTOR Mix still refuse Slice 2aj. |
+| Native | Version stamp only → `0.0.37-slice2aj` (Background strength path unchanged). |
+| Version | `0.0.37-slice2aj` |
+| Tools | `tools/_quanttrace_slice2aj_scene.py`, `tools/_quanttrace_slice2aj_smoke.py`. Modes: `mix_float`, `mix_unlinked`, `mix_rgb`, `mix_tex` (refuse), `math_mul`, `value`, `unlinked`. Reuses 2aa HDR equirect cube. |
+| Visibility | Same OIIO linear EXR gradient as 2aa; Combined chromatic + non-constant. |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| mix_float (Fac 0.5 × A 0.4 / B 1.0 → Strength; sock default 1.0) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| mix_float (Fac 0.5 × A 0.4 / B 1.0 → Strength; sock default 1.0) | 256² / 128 | **1.20e-4** | 5.70e-7 | 0 | **PASS** |
+| mix_unlinked (same Mix FLOAT, Factor/A/B unlinked) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| mix_rgb (MixRGB Fac 0.5, grey 0.4 / 1.0) | 32² / 4 | **4.25e-4** | 2.79e-6 | 0 | **PASS** |
+| math_mul (2ai regression, 0.5 × 1.4) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| value (2ah regression, Value 0.7) | 32² / 4 | **4.25e-4** | 2.78e-6 | 0 | **PASS** |
+| unlinked (2aa regression, Strength 1.0) | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+
+Live graph (stock mix_float 0.7 vs stock unlinked 1.0) 32²/4: Δmax=**0.289** (1024 px ≥1e-3, MAE 0.0947). Packed `world_strength=0.7` while Strength socket default stayed 1.0. mix_tex (TEX_IMAGE → Mix.A) raises Slice 2aj. Proof plate `docs/proof/quanttrace-mix-strength-32-pair.png` (mix_float stock|session) + `/workspace/quanttrace-mix-strength-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- TEX_IMAGE / color-linked Mix / RGB Curves / Noise / texture-driven Mix → Strength still refuse. Color links (Sky/Nishita/TEX_IMAGE → Background Color) still refuse. VECTOR/ROTATION Mix and HUE/SATURATION/COLOR/VALUE blend types still refuse. TEX_IMAGE→L/R/S SVM graphs deferred.
+- HDR Δmax remains ~1e-4–7e-4 class (BackgroundLight MIS map), under the 1e-3 gate with 0 px ≥1e-3 on the claim cases.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+TEX_IMAGE→L/R/S, or Sky/Nishita/TEX_IMAGE → Background Color, or Mix/Math → Color. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
 
 ## 10pm PlugWalk (2026-08-28) — linked world Strength (Slice 2ah)
 

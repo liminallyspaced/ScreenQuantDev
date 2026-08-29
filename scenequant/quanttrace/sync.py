@@ -37,7 +37,9 @@
 # Slice 2af: packed-only images materialize to /tmp/quanttrace_packed/ (filepath ABI).
 # Slice 2ag: Mapping L/R/S linked Combine XYZ / Value (same float3 ABI).
 # Slice 2ah: world Background Strength linked from ShaderNodeValue (same float ABI).
-#   TEX_IMAGE/Mix/RGB/Noise/Math → Strength / Sky/Nishita kitchens still refuse.
+# Slice 2ai: ShaderNodeMath ADD/SUB/MUL/DIV/POWER → Strength (fold into float).
+# Slice 2aj: ShaderNodeMix FLOAT / MixRGB constant → Strength (fold into float).
+#   TEX_IMAGE / color-linked Mix / RGB Curves / Noise / Sky/Nishita kitchens still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -1201,41 +1203,102 @@ def _mesh_arrays(obj) -> Tuple[List[float], List[int]]:
 _WORLD_STRENGTH_MATH_OPS = frozenset(
     {"ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "POWER"}
 )
-_WORLD_STRENGTH_MATH_MAX_DEPTH = 2  # Math → (Value|unlinked|Math…) one nest OK
+_WORLD_STRENGTH_MIX_OPS = frozenset(
+    {"MIX", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE"}
+)
+_WORLD_STRENGTH_FOLD_MAX_DEPTH = 2  # Value|unlinked|Math|Mix one nest OK
 
 
-def _world_strength_math_input(sock, label: str, *, depth: int) -> float:
-    """Resolve a Math Value input: unlinked float, Value, or shallow Math (2ai)."""
+def _color_to_float(val) -> float:
+    """Cycles NODE_CONVERT_CF: average RGB (Strength is a float)."""
+    if val is None:
+        return 0.0
+    try:
+        return (float(val[0]) + float(val[1]) + float(val[2])) / 3.0
+    except (TypeError, IndexError, ValueError):
+        try:
+            return float(val or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+
+def _sock_default_as_float(sock) -> float:
+    dv = getattr(sock, "default_value", 0.0)
+    stype = getattr(sock, "type", None)
+    if stype in ("RGBA", "VECTOR"):
+        return _color_to_float(dv)
+    try:
+        return float(dv or 0.0)
+    except (TypeError, ValueError):
+        return _color_to_float(dv)
+
+
+def _mix_blend_float(op: str, fac: float, a: float, b: float) -> float:
+    """Cycles svm_mix_* on scalars (fac already clamp_factor'd)."""
+    if op == "MIX":
+        return a * (1.0 - fac) + b * fac
+    if op == "ADD":
+        return a + fac * b
+    if op == "SUBTRACT":
+        return a - fac * b
+    if op == "MULTIPLY":
+        return a * (1.0 - fac + fac * b)
+    denom = 1.0 - fac + fac * b
+    if abs(denom) < 1e-12:
+        raise QuantTraceSyncError(
+            "world Background Strength Mix DIVIDE by zero refused (Slice 2aj)"
+        )
+    return a / denom
+
+
+def _world_strength_const_input(sock, label: str, *, depth: int) -> float:
+    """Resolve a Strength-graph socket to a constant float (2ah/2ai/2aj)."""
     if sock is None:
-        raise QuantTraceSyncError(f"{label} missing (Slice 2ai)")
+        raise QuantTraceSyncError(f"{label} missing (Slice 2aj)")
     if not getattr(sock, "is_linked", False):
-        return float(getattr(sock, "default_value", 0.0) or 0.0)
+        return _sock_default_as_float(sock)
     links = list(getattr(sock, "links", None) or [])
     if len(links) != 1:
-        raise QuantTraceSyncError(
-            f"{label} multi-link refused (Slice 2ai)"
-        )
+        raise QuantTraceSyncError(f"{label} multi-link refused (Slice 2aj)")
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "VALUE":
         if from_sock is None:
             raise QuantTraceSyncError(
-                f"{label} Value link has no from_socket (Slice 2ai)"
+                f"{label} Value link has no from_socket (Slice 2ah)"
             )
         return float(getattr(from_sock, "default_value", 0.0) or 0.0)
+    if ntype == "RGB":
+        if from_sock is None:
+            raise QuantTraceSyncError(
+                f"{label} RGB link has no from_socket (Slice 2aj)"
+            )
+        return _color_to_float(getattr(from_sock, "default_value", None))
     if ntype == "MATH":
-        if depth >= _WORLD_STRENGTH_MATH_MAX_DEPTH:
+        if depth >= _WORLD_STRENGTH_FOLD_MAX_DEPTH:
             raise QuantTraceSyncError(
                 f"{label} Math nest too deep (Slice 2ai max "
-                f"{_WORLD_STRENGTH_MATH_MAX_DEPTH})"
+                f"{_WORLD_STRENGTH_FOLD_MAX_DEPTH})"
             )
         return _fold_world_strength_math(from_node, depth=depth)
+    if ntype in ("MIX", "MIX_RGB"):
+        if depth >= _WORLD_STRENGTH_FOLD_MAX_DEPTH:
+            raise QuantTraceSyncError(
+                f"{label} Mix nest too deep (Slice 2aj max "
+                f"{_WORLD_STRENGTH_FOLD_MAX_DEPTH})"
+            )
+        return _fold_world_strength_mix(from_node, depth=depth)
     raise QuantTraceSyncError(
         f"{label} linked from {ntype!r} refused "
-        "(Slice 2ai: Value/Math/unlinked float only; "
-        "TEX_IMAGE/Mix/RGB Curves/Noise still refuse)"
+        "(Slice 2aj: Value/Math/Mix/RGB/unlinked float only; "
+        "TEX_IMAGE/RGB Curves/Noise/texture-driven Mix still refuse)"
     )
+
+
+def _world_strength_math_input(sock, label: str, *, depth: int) -> float:
+    """Resolve a Math Value input (2ai; Mix/Value/unlinked also OK via 2aj)."""
+    return _world_strength_const_input(sock, label, depth=depth)
 
 
 def _fold_world_strength_math(node, *, depth: int = 0) -> float:
@@ -1263,10 +1326,10 @@ def _fold_world_strength_math(node, *, depth: int = 0) -> float:
                 "world Background Strength Math missing Value/Value_001 "
                 "(Slice 2ai)"
             ) from e
-    a = _world_strength_math_input(
+    a = _world_strength_const_input(
         a_sock, "world Background Strength Math.Value", depth=depth + 1
     )
-    b = _world_strength_math_input(
+    b = _world_strength_const_input(
         b_sock, "world Background Strength Math.Value_001", depth=depth + 1
     )
     if op == "ADD":
@@ -1282,7 +1345,6 @@ def _fold_world_strength_math(node, *, depth: int = 0) -> float:
                 "(Slice 2ai)"
             )
         return float(a / b)
-    # POWER
     try:
         return float(a ** b)
     except (OverflowError, ValueError) as e:
@@ -1291,13 +1353,154 @@ def _fold_world_strength_math(node, *, depth: int = 0) -> float:
         ) from e
 
 
-def _world_strength_from_sock(sock) -> float:
-    """Resolve Background.Strength to a constant float (Slice 2ah/2ai).
+def _sock_ident_or_name(inputs, *keys):
+    """bpy Mix sockets key by display name; identifier lives on the socket."""
+    getter = getattr(inputs, "get", None)
+    for key in keys:
+        if callable(getter):
+            sock = getter(key)
+            if sock is not None:
+                return sock
+        for sock in inputs:
+            if getattr(sock, "identifier", None) == key or getattr(sock, "name", None) == key:
+                if getattr(sock, "enabled", True) or getattr(sock, "identifier", None) == key:
+                    return sock
+    return None
 
-    Accepts unlinked default_value, ShaderNodeValue, or ShaderNodeMath whose
-    Value inputs are unlinked floats / Value / shallow Math
-    (ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER). Multi-link, TEX_IMAGE / Mix /
-    RGB Curves / Noise / texture-driven Math / kitchens refuse.
+
+def _mix_input_socks(node):
+    """Factor / A / B sockets for ShaderNodeMix or MixRGB (Slice 2aj)."""
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(
+            "world Background Strength Mix has no inputs (Slice 2aj)"
+        )
+    ntype = getattr(node, "type", None)
+    if ntype == "MIX_RGB":
+        fac = _sock_ident_or_name(inputs, "Fac", "Factor")
+        a = _sock_ident_or_name(inputs, "Color1")
+        b = _sock_ident_or_name(inputs, "Color2")
+        if fac is None or a is None or b is None:
+            try:
+                fac = fac or inputs[0]
+                a = a or inputs[1]
+                b = b or inputs[2]
+            except (IndexError, TypeError, KeyError) as e:
+                raise QuantTraceSyncError(
+                    "world Background Strength MixRGB missing Fac/Color1/Color2 "
+                    "(Slice 2aj)"
+                ) from e
+        return fac, a, b
+    data_type = str(getattr(node, "data_type", "FLOAT") or "FLOAT")
+    if data_type in ("VECTOR", "ROTATION"):
+        raise QuantTraceSyncError(
+            f"world Background Strength Mix data_type {data_type!r} refused "
+            "(Slice 2aj: FLOAT or constant RGBA only)"
+        )
+    fac = _sock_ident_or_name(inputs, "Factor_Float", "Factor", "Fac")
+    if data_type == "RGBA":
+        a = _sock_ident_or_name(inputs, "A_Color", "A")
+        b = _sock_ident_or_name(inputs, "B_Color", "B")
+    else:
+        a = _sock_ident_or_name(inputs, "A_Float", "A")
+        b = _sock_ident_or_name(inputs, "B_Float", "B")
+    if fac is None or a is None or b is None:
+        try:
+            enabled = [s for s in inputs if getattr(s, "enabled", True)]
+            fac = fac or enabled[0]
+            a = a or enabled[1]
+            b = b or enabled[2]
+        except (IndexError, TypeError, KeyError) as e:
+            raise QuantTraceSyncError(
+                "world Background Strength Mix missing Factor/A/B (Slice 2aj)"
+            ) from e
+    return fac, a, b
+
+
+def _mix_color_rgb(sock, label: str, *, depth: int):
+    """Resolve Mix A/B to RGB. TEX_IMAGE / unfoldable color graphs refuse."""
+    if sock is None:
+        raise QuantTraceSyncError(f"{label} missing (Slice 2aj)")
+    stype = getattr(sock, "type", None)
+    if stype != "RGBA":
+        v = _world_strength_const_input(sock, label, depth=depth)
+        return (v, v, v)
+    if not getattr(sock, "is_linked", False):
+        dv = getattr(sock, "default_value", (0.0, 0.0, 0.0, 1.0))
+        return (float(dv[0]), float(dv[1]), float(dv[2]))
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(f"{label} multi-link refused (Slice 2aj)")
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype == "RGB":
+        if from_sock is None:
+            raise QuantTraceSyncError(
+                f"{label} RGB link has no from_socket (Slice 2aj)"
+            )
+        dv = getattr(from_sock, "default_value", (0.0, 0.0, 0.0, 1.0))
+        return (float(dv[0]), float(dv[1]), float(dv[2]))
+    if ntype in ("VALUE", "MATH", "MIX", "MIX_RGB"):
+        v = _world_strength_const_input(sock, label, depth=depth)
+        return (v, v, v)
+    raise QuantTraceSyncError(
+        f"{label} color-linked from {ntype!r} refused "
+        "(Slice 2aj: unlinked/RGB/Value/Math/Mix only; "
+        "TEX_IMAGE/Sky/Nishita still refuse)"
+    )
+
+
+def _fold_world_strength_mix(node, *, depth: int = 0) -> float:
+    """Fold ShaderNodeMix FLOAT / MixRGB with constant Factor+A/B (2aj)."""
+    op = str(getattr(node, "blend_type", "MIX") or "MIX")
+    if op not in _WORLD_STRENGTH_MIX_OPS:
+        raise QuantTraceSyncError(
+            f"world Background Strength Mix blend_type {op!r} refused "
+            "(Slice 2aj: MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only)"
+        )
+    fac_sock, a_sock, b_sock = _mix_input_socks(node)
+    fac = _world_strength_const_input(
+        fac_sock, "world Background Strength Mix.Factor", depth=depth + 1
+    )
+    if bool(getattr(node, "clamp_factor", False)):
+        fac = min(1.0, max(0.0, fac))
+    a_is_color = getattr(a_sock, "type", None) == "RGBA"
+    b_is_color = getattr(b_sock, "type", None) == "RGBA"
+    if a_is_color or b_is_color:
+        ar, ag, ab = _mix_color_rgb(
+            a_sock, "world Background Strength Mix.A", depth=depth + 1
+        )
+        br, bg, bb = _mix_color_rgb(
+            b_sock, "world Background Strength Mix.B", depth=depth + 1
+        )
+        r = _mix_blend_float(op, fac, ar, br)
+        g = _mix_blend_float(op, fac, ag, bg)
+        bch = _mix_blend_float(op, fac, ab, bb)
+        result = (r + g + bch) / 3.0
+    else:
+        a = _world_strength_const_input(
+            a_sock, "world Background Strength Mix.A", depth=depth + 1
+        )
+        b = _world_strength_const_input(
+            b_sock, "world Background Strength Mix.B", depth=depth + 1
+        )
+        result = _mix_blend_float(op, fac, a, b)
+    if bool(getattr(node, "clamp_result", False) or getattr(node, "use_clamp", False)):
+        result = min(1.0, max(0.0, result))
+    return float(result)
+
+
+def _world_strength_from_sock(sock) -> float:
+    """Resolve Background.Strength to a constant float (Slice 2ah/2ai/2aj).
+
+    Accepts unlinked default_value, ShaderNodeValue, ShaderNodeMath
+    (ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER), or ShaderNodeMix / MixRGB whose
+    Factor + A/B fold to constants (unlinked floats / Value / RGB / shallow
+    Math/Mix). FLOAT mix type is the primary path; constant RGBA / MixRGB
+    folds via per-channel blend then RGB average (NODE_CONVERT_CF).
+    Multi-link, TEX_IMAGE / color-linked Mix / RGB Curves / Noise /
+    VECTOR Mix / texture-driven graphs / kitchens refuse.
     """
     if sock is None:
         return 0.0
@@ -1306,7 +1509,7 @@ def _world_strength_from_sock(sock) -> float:
     links = list(getattr(sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
-            "world Background Strength multi-link refused (Slice 2ai)"
+            "world Background Strength multi-link refused (Slice 2aj)"
         )
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
@@ -1320,15 +1523,17 @@ def _world_strength_from_sock(sock) -> float:
         return float(getattr(from_sock, "default_value", 0.0) or 0.0)
     if ntype == "MATH":
         return _fold_world_strength_math(from_node, depth=0)
+    if ntype in ("MIX", "MIX_RGB"):
+        return _fold_world_strength_mix(from_node, depth=0)
     raise QuantTraceSyncError(
         f"world Background Strength linked from {ntype!r} refused "
-        "(Slice 2ai: ShaderNodeValue / ShaderNodeMath / unlinked float only; "
-        "TEX_IMAGE/Mix/RGB Curves/Noise still refuse)"
+        "(Slice 2aj: ShaderNodeValue / ShaderNodeMath / ShaderNodeMix / "
+        "MixRGB / unlinked float only; TEX_IMAGE/RGB Curves/Noise still refuse)"
     )
 
 
 def _world_info(scene) -> dict:
-    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah/2ai).
+    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah/2ai/2aj).
 
     Returns dict:
       world_strength: float
@@ -1343,9 +1548,10 @@ def _world_info(scene) -> dict:
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
     refuse with Slice 2ac in the error.
-    Slice 2ah/2ai: Strength may be unlinked default_value, ShaderNodeValue,
-    or ShaderNodeMath (ADD/SUB/MUL/DIV/POWER) ← Value/unlinked/shallow Math.
-    TEX_IMAGE/Mix/RGB/Noise/texture-driven Math → Strength still refuse.
+    Slice 2ah/2ai/2aj: Strength may be unlinked default_value, ShaderNodeValue,
+    ShaderNodeMath (ADD/SUB/MUL/DIV/POWER), or ShaderNodeMix FLOAT / MixRGB
+    whose Factor+A/B fold to constants (Value/unlinked/RGB/shallow Math/Mix).
+    TEX_IMAGE / color-linked Mix / RGB Curves / Noise → Strength still refuse.
     """
     empty = {
         "world_strength": 0.0,
