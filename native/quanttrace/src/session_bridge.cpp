@@ -34,6 +34,9 @@
  * Slice 2ae: Env Object-with-pointer (world_ob_use_transform + world_ob_tfm).
  * Slice 2z: Normal Map space OBJECT/WORLD (plus Coat Normal space).
  * Slice 2aa: Environment Texture world.
+ * Slice 2al: world Background Color constant (world_color float3).
+ *   Empty path uses world_color; env path keeps Color black (ENV feeds Color).
+ *   BackgroundLight when has_env || color_nonzero (black empty-path stays 2b).
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
@@ -248,6 +251,9 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->ior = 1.45f;
     d->alpha = 1.0f;
     d->world_strength = 0.0f;
+    d->world_color[0] = 0.0f;
+    d->world_color[1] = 0.0f;
+    d->world_color[2] = 0.0f;
     d->exr_path = nullptr;
 }
 
@@ -543,6 +549,7 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->world_map_type = s->world_map_type;
     out->world_ob_use_transform = s->world_ob_use_transform;
     std::memcpy(out->world_ob_tfm, s->world_ob_tfm, sizeof(out->world_ob_tfm));
+    std::memcpy(out->world_color, s->world_color, sizeof(out->world_color));
     out->exr_path = s->exr_path;
 }
 
@@ -1347,19 +1354,29 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
     cam->need_flags_update = true;
     cam->update(scene);
 
-    /* World Background: black+strength (Slice 2b) or Environment Texture (Slice 2aa/2ac/2ae).
+    /* World Background: black+strength (Slice 2b), constant Color (Slice 2al),
+     * or Environment Texture (Slice 2aa/2ac/2ae).
      * Slice 2aa: Vector unlinked LINK_POSITION. Slice 2ac: TEX_COORD (+ Mapping).
      * Slice 2ae: Object-with-pointer (world_ob_use_transform + world_ob_tfm).
-     * Empty world_image_path keeps bit-identical black world for locked cubes.
-     * With env: add BackgroundLight + MIS (Blender world.cycles sample_map 1024 /
-     * sampling AUTOMATIC) so surface lighting matches stock; camera-ray bg alone
-     * already matched without it. */
+     * Slice 2al: empty world_image_path uses world_color RGB (default 0,0,0
+     * stays bit-identical black). Env path keeps Color black — ENV node feeds
+     * Color; do not mix world_color into the env graph.
+     * BackgroundLight + MIS when has_env || color_nonzero (Blender world.cycles
+     * sample_map 1024 / sampling AUTOMATIC). Empty-path black stays without
+     * BackgroundLight (Slice 2b). */
     {
         unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
         BackgroundNode *bg = graph->create_node<BackgroundNode>();
-        bg->set_color(make_float3(0.0f, 0.0f, 0.0f));
-        bg->set_strength(desc->world_strength);
         const bool has_env = desc->world_image_path && desc->world_image_path[0];
+        const float3 wcol = has_env ?
+            make_float3(0.0f, 0.0f, 0.0f) :
+            make_float3(desc->world_color[0],
+                        desc->world_color[1],
+                        desc->world_color[2]);
+        bg->set_color(wcol);
+        bg->set_strength(desc->world_strength);
+        const bool color_nonzero = !has_env &&
+            (wcol.x != 0.0f || wcol.y != 0.0f || wcol.z != 0.0f);
         if (has_env) {
             EnvironmentTextureNode *env = graph->create_node<EnvironmentTextureNode>();
             env->set_filename(ustring(desc->world_image_path));
@@ -1434,7 +1451,7 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
         scene->default_background->set_graph(std::move(graph));
         scene->default_background->tag_update(scene);
 
-        if (has_env) {
+        if (has_env || color_nonzero) {
             BackgroundLight *bg_light = scene->create_node<BackgroundLight>();
             bg_light->set_use_mis(true);
             bg_light->set_map_resolution(1024); /* Blender factory sample_map_resolution */

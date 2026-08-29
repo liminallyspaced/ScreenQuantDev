@@ -40,7 +40,10 @@
 # Slice 2ai: ShaderNodeMath ADD/SUB/MUL/DIV/POWER → Strength (fold into float).
 # Slice 2aj: ShaderNodeMix FLOAT / MixRGB constant → Strength (fold into float).
 # Slice 2ak: ShaderNodeMapRange FLOAT LINEAR + ShaderNodeClamp → Strength (fold into float).
-#   TEX_IMAGE / color-linked Mix / RGB Curves / Noise / Sky/Nishita kitchens still refuse.
+# Slice 2al: world Background Color constant ABI (world_color float3).
+#   Unlinked non-black Color, ShaderNodeRGB, MixRGB/Mix FLOAT constants,
+#   Value/Math → Color as grey. TEX_ENVIRONMENT still wins (color stays 0).
+#   Sky/Nishita/TEX_IMAGE/Noise/RGB Curves/spatially-varying Mix still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -1666,18 +1669,124 @@ def _world_strength_from_sock(sock) -> float:
     )
 
 
+
+def _fold_world_color_mix(node, *, depth: int = 0):
+    """Fold MixRGB / Mix FLOAT+RGBA to constant RGB (Slice 2al).
+
+    MixRGB Color1/Color2 stay RGB. Mix FLOAT A/B become grey (v,v,v).
+    MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE; clamp_factor honoured.
+    """
+    op = str(getattr(node, "blend_type", "MIX") or "MIX")
+    if op not in _WORLD_STRENGTH_MIX_OPS:
+        raise QuantTraceSyncError(
+            f"world Background Color Mix blend_type {op!r} refused "
+            "(Slice 2al: MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only)"
+        )
+    if depth >= _WORLD_STRENGTH_FOLD_MAX_DEPTH:
+        raise QuantTraceSyncError(
+            f"world Background Color Mix nest too deep (Slice 2al max "
+            f"{_WORLD_STRENGTH_FOLD_MAX_DEPTH})"
+        )
+    fac_sock, a_sock, b_sock = _mix_input_socks(node)
+    try:
+        fac = _world_strength_const_input(
+            fac_sock, "world Background Color Mix.Factor", depth=depth + 1
+        )
+    except QuantTraceSyncError as e:
+        raise QuantTraceSyncError(f"{e} (Slice 2al Color)") from e
+    if bool(getattr(node, "clamp_factor", False)):
+        fac = min(1.0, max(0.0, fac))
+    try:
+        ar, ag, ab = _mix_color_rgb(
+            a_sock, "world Background Color Mix.A", depth=depth + 1
+        )
+        br, bg, bb = _mix_color_rgb(
+            b_sock, "world Background Color Mix.B", depth=depth + 1
+        )
+    except QuantTraceSyncError as e:
+        msg = str(e)
+        if "Slice 2al" not in msg:
+            raise QuantTraceSyncError(f"{msg} (Slice 2al)") from e
+        raise
+    r = _mix_blend_float(op, fac, ar, br)
+    g = _mix_blend_float(op, fac, ag, bg)
+    bch = _mix_blend_float(op, fac, ab, bb)
+    if bool(getattr(node, "clamp_result", False) or getattr(node, "use_clamp", False)):
+        r = min(1.0, max(0.0, r))
+        g = min(1.0, max(0.0, g))
+        bch = min(1.0, max(0.0, bch))
+    return (float(r), float(g), float(bch))
+
+
+def _rgb_from_sock_or_node(from_node, from_sock):
+    """ShaderNodeRGB output / node color as float3."""
+    dv = None
+    if from_sock is not None:
+        dv = getattr(from_sock, "default_value", None)
+    if dv is None and from_node is not None:
+        outs = getattr(from_node, "outputs", None)
+        getter = getattr(outs, "get", None) if outs is not None else None
+        cs = getter("Color") if callable(getter) else None
+        if cs is None and outs:
+            try:
+                cs = outs[0]
+            except (IndexError, TypeError, KeyError):
+                cs = None
+        if cs is not None:
+            dv = getattr(cs, "default_value", None)
+    if dv is None:
+        raise QuantTraceSyncError(
+            "world Background Color RGB has no Color value (Slice 2al)"
+        )
+    return (float(dv[0]), float(dv[1]), float(dv[2]))
+
+
+def _world_color_from_linked(from_node, from_sock):
+    """Resolve a linked Background Color source to constant RGB (Slice 2al).
+
+    TEX_ENVIRONMENT is not folded here — caller keeps the env path and
+    leaves world_color at (0,0,0).
+    """
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype == "RGB":
+        return _rgb_from_sock_or_node(from_node, from_sock)
+    if ntype == "VALUE":
+        if from_sock is None:
+            raise QuantTraceSyncError(
+                "world Background Color Value link has no from_socket "
+                "(Slice 2al)"
+            )
+        v = float(getattr(from_sock, "default_value", 0.0) or 0.0)
+        return (v, v, v)
+    if ntype == "MATH":
+        v = _fold_world_strength_math(from_node, depth=0)
+        return (float(v), float(v), float(v))
+    if ntype in ("MIX", "MIX_RGB"):
+        return _fold_world_color_mix(from_node, depth=0)
+    raise QuantTraceSyncError(
+        f"world Background Color linked from {ntype!r} refused "
+        "(Slice 2al: RGB/Mix/MixRGB/Value/Math/unlinked or TEX_ENVIRONMENT; "
+        "Sky/Nishita/TEX_IMAGE/Noise/RGB Curves/spatially-varying Mix still refuse)"
+    )
+
+
 def _world_info(scene) -> dict:
-    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah/2ai/2aj/2ak).
+    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah/2ai/2aj/2ak/2al).
 
     Returns dict:
       world_strength: float
-      world_image_path: str (empty = black Background Color, Slice 2b)
+      world_color: (r,g,b) Background Color when path empty (default 0,0,0)
+      world_image_path: str (empty = use world_color, Slice 2b/2al)
       world_image_colorspace: str
       world_projection: int (0=EQUIRECTANGULAR, 1=MIRROR_BALL)
       world_tex_vector_mode: int (QT_TEX_VECTOR_*; 0 = unlinked LINK_POSITION)
       world_map_location / rotation / scale / type: Mapping constants (Slice 2ac)
 
-    Empty path keeps locked-cube black worlds bit-identical.
+    Empty path keeps locked-cube black worlds bit-identical when world_color is 0.
+    Slice 2al: unlinked Color (incl. non-black), ShaderNodeRGB, MixRGB / Mix
+    FLOAT constants, Value/Math → Color as grey. TEX_ENVIRONMENT still wins
+    (world_color stays 0,0,0). Sky/Nishita/TEX_IMAGE/Noise/RGB Curves /
+    spatially-varying Mix refuse Slice 2al.
     Slice 2ac: Vector may be TEX_COORD Generated/Object/Camera/Window/Reflection
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
@@ -1690,6 +1799,7 @@ def _world_info(scene) -> dict:
     """
     empty = {
         "world_strength": 0.0,
+        "world_color": (0.0, 0.0, 0.0),
         "world_image_path": "",
         "world_image_colorspace": "",
         "world_projection": 0,
@@ -1703,10 +1813,11 @@ def _world_info(scene) -> dict:
     if world is None:
         return empty
     if not getattr(world, "use_nodes", False) or world.node_tree is None:
-        # Nodeless world color — Slice 2b only supports black+strength.
+        # Nodeless world color — Slice 2al accepts non-black world.color.
         col = getattr(world, "color", (0.0, 0.0, 0.0))
-        if abs(float(col[0])) + abs(float(col[1])) + abs(float(col[2])) > 1e-6:
-            raise QuantTraceSyncError("nodeless world color not black (Slice 2b)")
+        rgb = (float(col[0]), float(col[1]), float(col[2]))
+        if abs(rgb[0]) + abs(rgb[1]) + abs(rgb[2]) > 1e-6:
+            return {**empty, "world_color": rgb, "world_strength": 1.0}
         return empty
     bg = None
     for node in world.node_tree.nodes:
@@ -1719,30 +1830,31 @@ def _world_info(scene) -> dict:
     strength = _world_strength_from_sock(strength_sock)
     color_sock = bg.inputs.get("Color")
     if color_sock is None or not getattr(color_sock, "is_linked", False):
+        world_color = (0.0, 0.0, 0.0)
         if color_sock is not None:
             col = color_sock.default_value
-            if abs(float(col[0])) + abs(float(col[1])) + abs(float(col[2])) > 1e-6:
-                raise QuantTraceSyncError(
-                    "world Background Color not black (Slice 2b/2aa)"
-                )
+            world_color = (float(col[0]), float(col[1]), float(col[2]))
         return {
             **empty,
             "world_strength": strength,
+            "world_color": world_color,
         }
-    # Color linked — only TEX_ENVIRONMENT with disk filepath.
+    # Color linked — TEX_ENVIRONMENT (2aa) or constant RGB/Mix/Value/Math (2al).
     links = list(getattr(color_sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
-            "world Background Color multi-link refused (Slice 2aa)"
+            "world Background Color multi-link refused (Slice 2aa/2al)"
         )
     from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype != "TEX_ENVIRONMENT":
-        raise QuantTraceSyncError(
-            f"world Background Color linked from {ntype!r} "
-            "(Slice 2aa: TEX_ENVIRONMENT only; Slice 2ac refuses "
-            "Sky/Nishita/TEX_IMAGE/RGB/Mix)"
-        )
+        world_color = _world_color_from_linked(from_node, from_sock)
+        return {
+            **empty,
+            "world_strength": strength,
+            "world_color": world_color,
+        }
     img = getattr(from_node, "image", None)
     path = _abspath_image(img)
     if not path:
@@ -1852,6 +1964,7 @@ def _world_info(scene) -> dict:
 
     return {
         "world_strength": strength,
+        "world_color": (0.0, 0.0, 0.0),
         "world_image_path": path,
         "world_image_colorspace": cs,
         "world_projection": proj,
@@ -2913,6 +3026,7 @@ def make_qt_simple_scene_type():
             ("world_map_type", ctypes.c_int),
             ("world_ob_use_transform", ctypes.c_int),
             ("world_ob_tfm", ctypes.c_float * 12),
+            ("world_color", ctypes.c_float * 3),
             ("exr_path", ctypes.c_char_p),
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
@@ -3169,6 +3283,9 @@ def _fill_world_vec_ctypes(desc, packed):
     tfm = packed.get("world_ob_tfm") or _identity_3x4()
     for i, v in enumerate(tfm):
         desc.world_ob_tfm[i] = float(v)
+    wc = packed.get("world_color") or (0.0, 0.0, 0.0)
+    for i, v in enumerate(wc[:3]):
+        desc.world_color[i] = float(v)
 
 def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     """Build a QT_SimpleScene + keep-alive buffers from pack_simple_scene output."""
@@ -3521,6 +3638,7 @@ def make_qt_scene_types():
             ("world_map_type", ctypes.c_int),
             ("world_ob_use_transform", ctypes.c_int),
             ("world_ob_tfm", ctypes.c_float * 12),
+            ("world_color", ctypes.c_float * 3),
             ("exr_path", ctypes.c_char_p),
         ]
 

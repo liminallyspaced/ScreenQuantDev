@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ak landed** (2026-08-29 1am PlugWalk ET). Fold ShaderNodeMapRange FLOAT LINEAR + ShaderNodeClamp MINMAX/RANGE → world Background Strength into existing `world_strength` float (Python-only; no world_color ABI — Mix→Color deferred). map_range Value 0.25 From 0..1 To 0.4..1.6 → 0.7 32²/4 Δmax=4.25e-4; 256²/128 Δmax=1.20e-4 PASS. clamp Value 1.5 Min 0.2 Max 0.7 32²/4 Δmax=4.25e-4 PASS. mix_float 2aj / math_mul 2ai / value 2ah 32²/4 Δmax=4.25e-4 PASS. unlinked 2aa Strength 1.0 32²/4 Δmax=6.13e-4 PASS. Stock map_range 0.7 vs unlinked 1.0 Δmax=0.289 (lever live). map_tex (TEX_IMAGE→Value) refuses. `is_tracer=1`. Native `0.0.38-slice2ak`. Addon `0.3.3`.
+Status: **Slice 2al landed** (2026-08-29 2am PlugWalk ET). World Background Color constant ABI (`world_color` float3 after `world_ob_tfm`). RGB (1.0, 0.25, 0.1) 32²/4 Δmax=5.96e-7; 256²/128 Δmax=5.96e-7 PASS. mix_rgb / unlinked 32²/4 Δmax=5.96e-7 PASS. hdr 2aa 32²/4 Δmax=6.13e-4 PASS. map_range 2ak 32²/4 Δmax=4.25e-4 PASS. Stock rgb vs black Δmax=1.0 (lever live). Sky/Nishita refuses Slice 2al. `is_tracer=1`. Native `0.0.39-slice2al`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -18,6 +18,52 @@ addon zip or public commit tree.
 
 ---
 
+
+
+
+
+## 2am PlugWalk (2026-08-29) — world Background Color RGB/Mix (Slice 2al)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Retarget: last hour (2ak) deferred Mix/Math → Background Color because native had **no** `world_color` float3. This hour lands that ABI and packs RGB / Mix-constant / unlinked non-black Color. Strength folding (2ah–2ak) unchanged.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Blender BackgroundNode Color * Strength. Empty `world_image_path` + (0,0,0) stays Slice 2b black (no BackgroundLight). Non-zero `world_color` creates BackgroundLight + MIS like env (cite Cycles BackgroundLight / world sample_map 1024). Camera pulled 1.8× so Combined shows world pixels (cube stays in frame). |
+| ABI | `world_color[3]` appended after `world_ob_tfm[12]` on `QT_SimpleScene` + `QT_Scene`. Default 0,0,0. Env path keeps Color black (ENV node feeds Color); do not mix world_color into the env graph. |
+| Python | `_world_info` accepts unlinked non-black Color, ShaderNodeRGB, MixRGB / Mix FLOAT constants (MIX/ADD/SUB/MUL/DIV, `clamp_factor`), Value/Math → Color as grey. TEX_ENVIRONMENT still wins (`world_color` zeros). Sky/Nishita/TEX_IMAGE/Noise/RGB Curves/spatially-varying Mix refuse Slice 2al. Nodeless non-black `world.color` packs strength 1. |
+| Native | `bg->set_color(world_color)` when path empty. `BackgroundLight` when `has_env \|\| color_nonzero`. Version `0.0.39-slice2al`. |
+| Version | `0.0.39-slice2al` |
+| Tools | `tools/_quanttrace_slice2al_scene.py`, `tools/_quanttrace_slice2al_smoke.py`. Modes: `rgb`, `unlinked`, `mix_rgb`, `hdr` (2aa), `map_range` (2ak), `sky` (refuse). |
+| Visibility | Camera 1.8× pull-back; Combined shows world RGB (1.0, 0.25, 0.1). |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| rgb (ShaderNodeRGB 1.0, 0.25, 0.1 → Color; sock default black; Strength 1.0) | 32² / 4 | **5.96e-7** | 2.36e-9 | 0 | **PASS** |
+| rgb (ShaderNodeRGB 1.0, 0.25, 0.1 → Color; sock default black; Strength 1.0) | 256² / 128 | **5.96e-7** | 1.51e-9 | 0 | **PASS** |
+| mix_rgb (MixRGB Fac 0.5 A=(1,0,0) B=(1,0.5,0.2) → (1.0, 0.25, 0.1); sock default black) | 32² / 4 | **5.96e-7** | 2.36e-9 | 0 | **PASS** |
+| unlinked (Color default 1.0, 0.25, 0.1; Strength 1.0) | 32² / 4 | **5.96e-7** | 2.36e-9 | 0 | **PASS** |
+| hdr (2aa regression, HDR equirect Strength 1.0; world_color zeros) | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+| map_range (2ak regression, HDR + Map Range → Strength 0.7) | 32² / 4 | **4.25e-4** | 2.79e-6 | 0 | **PASS** |
+
+Live graph (stock rgb vs stock black world) 32²/4: Δmax=**1.0** (1024 px ≥1e-3, MAE 0.446). Packed `world_color=(1.0, 0.25, 0.1)` while Color socket default stayed black. sky (TEX_SKY/Nishita → Color) raises Slice 2al. Proof plate `docs/proof/quanttrace-world-color-32-pair.png` (rgb stock\|session) + `/workspace/quanttrace-world-color-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- Sky/Nishita, TEX_IMAGE → Color, TEX_IMAGE → L/R/S, Noise / RGB Curves / spatially-varying Mix still refuse. Strength path (2ah–2ak) unchanged.
+- HDR Δmax remains ~1e-4–7e-4 class (BackgroundLight MIS map), under the 1e-3 gate with 0 px ≥1e-3 on the claim cases. Solid Color Δmax is 5.96e-7 (filter/sample-pattern class).
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed). Not spent this hour.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Sky/Nishita → Color, or TEX_IMAGE → L/R/S. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
 
 
 

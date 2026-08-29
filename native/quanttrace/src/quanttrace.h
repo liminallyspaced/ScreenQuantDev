@@ -34,6 +34,9 @@
  * Slice 2ad: BLENDER_OBJECT=3 / BLENDER_WORLD=4 (Cycles NODE_NORMAL_MAP_BLENDER_*).
  *   SVM flips color.y/z vs Object/World ("strange blender convention").
  * Slice 2aa: Environment Texture world (empty path = Slice 2b black).
+ * Slice 2al: world Background Color constant ABI (world_color float3).
+ *   Empty path + (0,0,0) = Slice 2b black. RGB / Mix-constant / unlinked
+ *   non-black Color pack here; TEX_ENVIRONMENT still wins (color stays 0).
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  *   Empty Object ref (2l) stays use_transform=false / NODE_TEXCO_OBJECT.
  *   Pointer set → NODE_TEXCO_OBJECT_WITH_TRANSFORM + packed inverse of ob_tfm.
@@ -118,7 +121,7 @@ typedef struct QT_SimpleScene {
   float metallic;
   float ior;
   float alpha;
-  float world_strength; /* Background Strength; Color black when path empty */
+  float world_strength; /* Background Strength; Color = world_color when path empty */
   /* Slice 2aa: Environment Texture world (NULL/empty path = Slice 2b black) */
   const char *world_image_path;
   const char *world_image_colorspace;
@@ -132,6 +135,7 @@ typedef struct QT_SimpleScene {
   /* Slice 2ae: Env TEX_COORD Object-with-pointer (world-level; 0 = 2ac empty-ref) */
   int world_ob_use_transform; /* 0 = empty Object (bit-identical 2ac). 1 = pointer */
   float world_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
+  float world_color[3]; /* Slice 2al: Background Color RGB when world_image_path empty. Default 0,0,0 = Slice 2b black. */
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -776,6 +780,7 @@ typedef struct QT_Scene {
   /* Slice 2ae: Env TEX_COORD Object-with-pointer (world-level; 0 = 2ac empty-ref) */
   int world_ob_use_transform; /* 0 = empty Object (bit-identical 2ac). 1 = pointer */
   float world_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
+  float world_color[3]; /* Slice 2al: Background Color RGB when world_image_path empty. Default 0,0,0 = Slice 2b black. */
   const char *exr_path;
 } QT_Scene;
 
