@@ -51,6 +51,9 @@
  *   (RAMP_TABLE_SIZE=256 → 257 entries; DNA cm[0]=R..cm[3]=I). Fac==0 also
  *   skips (Cycles folds). Chain: Color → RGBCurves → Gamma → HSV → BC →
  *   Mix → Background.
+ * Slice 2at: 3-deep constant Math → world Strength (same world_strength float
+ *   ABI; no new C fields). Fold max depth 3 (2ai was 2). Identity 0–2-deep
+ *   graphs bit-identical. 4-deep Math / TEX_ENVIRONMENT→Math still refuse.
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via

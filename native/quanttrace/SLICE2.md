@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2as landed** (2026-08-29 9am PlugWalk ET). ShaderNodeRGBCurve → world Background Color as packed LUT (`world_curves*` after `world_mix_clamp_result`). Official Cycles `curvemapping_color_to_array` 257 entries. n==0 / Fac==0 skips — 2ar/2aq/2al bit-identical. rgb_curves (I mid_y=0.35) 32²/4 Δmax=5.96e-7 PASS / 256²/128 Δmax=5.96e-7 PASS. rgb_curves_gamma 32²/4 PASS. Identity rgb / rgb_mix / hdr / nishita / teximage / sky_map 32²/4 PASS. Stock vs unlinked RGB Δmax=0.102 (live). Noise refuses. `is_tracer=1`. Native `0.0.46-slice2as`. Addon `0.3.3`.
+Status: **Slice 2at landed** (2026-08-29 10am PlugWalk ET). 3-deep constant Math nest → world Strength (`_WORLD_STRENGTH_FOLD_MAX_DEPTH` 2→3; same `world_strength` float ABI). Loft EasyHDR first refuse was nest-too-deep (MATH×3). Identity 0–2-deep bit-identical. math_nest3 (0.5×1.4)/1+0=0.7 32²/4 Δmax=2.16e-4 PASS / 256²/128 Δmax=1.21e-4 PASS. 2ai math_mul / 2as rgb_curves / 2aq rgb_mix / 2al rgb / 2aa hdr / 2am nishita / 2an teximage 32²/4 PASS. Stock vs unlinked Strength Δmax=0.257 (live). 4-deep Math + TEX_ENVIRONMENT→Math refuse. `is_tracer=1`. Native `0.0.47-slice2at`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -26,6 +26,55 @@ addon zip or public commit tree.
 
 ---
 
+
+
+## 10am PlugWalk (2026-08-29) — 3-deep Math → world Strength (Slice 2at)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Kitchen-first: official loft EasyHDR `_world_info` refused **Math nest too deep (Slice 2ai max 2)** before Color. World DNA MATH×3 is MUL(env.Color, 0) → DIV/100 → ADD+20 → Strength. First refuse that is a small honest graph (one node class already packed, identity-skip extra unused depth, bit-identical when unused). Noise deferred — loft did not pack.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | loft EasyHDR Strength is 3 nested Math (MUL→DIV→ADD). 2ai fold max was 2. Color path (env+Mapping POINT+Gamma+HSV+Mix) not reached this hour. |
+| ABI | No new C fields. Same `world_strength` float. `_WORLD_STRENGTH_FOLD_MAX_DEPTH` 2→**3**. |
+| Python | `_world_strength_const_input` accepts one extra Math nest. 0–2-deep graphs unchanged. 4-deep / TEX_ENVIRONMENT→Math still refuse. |
+| Native | Version stamp only `0.0.47-slice2at`. Strength still a folded float. |
+| Tools | `_quanttrace_slice2at_scene/smoke.py` |
+
+### Measured — math_nest3 (claim)
+
+HDR equirect + Strength ← ADD(DIVIDE(MULTIPLY(0.5, 1.4), 1.0), 0.0)=0.7. Socket default left 1.0. Camera 1.8×. Persistent off. Tabulated Sobol.
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **2.16e-4** | 8.07e-7 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **1.21e-4** | 1.81e-7 | 0 / 65536 | **PASS** |
+
+### Measured — identity / regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| math_mul 2ai (2-deep identity) | 4.25e-4 | 2.78e-6 | 0 | **PASS** |
+| rgb_curves 2as | 5.96e-7 | 2.50e-9 | 0 | **PASS** |
+| rgb_mix 2aq | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| rgb 2al | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| nishita 2am | 1.91e-6 | 1.87e-8 | 0 | **PASS** |
+| teximage 2an | 9.73e-4 | 2.79e-6 | 0 | **PASS** |
+| Stock math_nest3 vs unlinked Strength 1.0 | 0.257 | 9.38e-2 | 1024 | live |
+
+Proof plate `docs/proof/quanttrace-math-nest3-32-pair.png` + `/workspace/quanttrace-math-nest3-32-pair.png`. F12 not run this hour; Session is the claim.
+
+### Honesty / still refuses
+
+- After 2at, loft EasyHDR `_world_info` refuses **TEX_ENVIRONMENT.Color → Strength Math** (innermost MUL). Mapping POINT on env Vector not reached (Strength packed first).
+- 4-deep Math nest still refuses Slice 2at max 3.
+- Noise → Color; Vector/Float Curve; kitchens.
+- Still-life 1px / SSS / sky-256 residue still document-only.
+- Next: TEX_ENVIRONMENT×0 Strength fold (loft MUL env.Color * 0 → 20), or Mapping POINT, or Noise → Color. Not ReSTIR. Not Classroom time %.
 
 ## 9am PlugWalk (2026-08-29) — RGB Curves → world Color (Slice 2as)
 

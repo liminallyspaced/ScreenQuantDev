@@ -65,6 +65,8 @@
  *   (set_blend_type, set_fac, set_a, set_b, set_use_clamp,
  *   set_use_clamp_result). MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only.
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
+ * Slice 2at: 3-deep constant Math nest → world Strength (fold max 3; no new
+ *   ABI). Identity 0–2-deep bit-identical. Version 0.0.47-slice2at.
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
  * Cite: blender/cycles src/session/session.h, src/scene/scene.h,

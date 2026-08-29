@@ -38,6 +38,8 @@
 # Slice 2ag: Mapping L/R/S linked Combine XYZ / Value (same float3 ABI).
 # Slice 2ah: world Background Strength linked from ShaderNodeValue (same float ABI).
 # Slice 2ai: ShaderNodeMath ADD/SUB/MUL/DIV/POWER → Strength (fold into float).
+# Slice 2at: 3-deep constant Math nest → Strength (fold max depth 3; 2ai was 2).
+#   Identity: 0–2-deep still bit-identical. 4-deep / TEX_ENVIRONMENT→Math refuse.
 # Slice 2aj: ShaderNodeMix FLOAT / MixRGB constant → Strength (fold into float).
 # Slice 2ak: ShaderNodeMapRange FLOAT LINEAR + ShaderNodeClamp → Strength (fold into float).
 # Slice 2al: world Background Color constant ABI (world_color float3).
@@ -48,6 +50,7 @@
 #   Path empty, world_color zeros. Unlinked Vector only.
 #   Slice 2ar: linked Sky Vector (TEX_COORD / Mapping) accepted.
 #   Slice 2as: RGB Curves accepted (packed LUT). Noise still refuses.
+#   Slice 2at: 3-deep constant Math → Strength (fold max 3). Noise still refuses.
 # Slice 2an: ShaderNodeTexImage → Background Color (world_color_image_* after
 #   world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical. Priority:
 #   TEX_ENVIRONMENT → TEX_SKY → TEX_IMAGE → RGB/Mix. Vector via world_tex_vector_*
@@ -1233,7 +1236,7 @@ _WORLD_STRENGTH_MATH_OPS = frozenset(
 _WORLD_STRENGTH_MIX_OPS = frozenset(
     {"MIX", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE"}
 )
-_WORLD_STRENGTH_FOLD_MAX_DEPTH = 2  # Value|unlinked|Math|Mix|MapRange|Clamp one nest OK
+_WORLD_STRENGTH_FOLD_MAX_DEPTH = 3  # Slice 2at: 3-deep Math nest; 2ai was 2
 
 
 def _color_to_float(val) -> float:
@@ -1305,7 +1308,7 @@ def _world_strength_const_input(sock, label: str, *, depth: int) -> float:
     if ntype == "MATH":
         if depth >= _WORLD_STRENGTH_FOLD_MAX_DEPTH:
             raise QuantTraceSyncError(
-                f"{label} Math nest too deep (Slice 2ai max "
+                f"{label} Math nest too deep (Slice 2at max "
                 f"{_WORLD_STRENGTH_FOLD_MAX_DEPTH})"
             )
         return _fold_world_strength_math(from_node, depth=depth)
@@ -1647,15 +1650,15 @@ def _world_strength_from_sock(sock) -> float:
     """Resolve Background.Strength to a constant float (Slice 2ah/2ai/2aj/2ak).
 
     Accepts unlinked default_value, ShaderNodeValue, ShaderNodeMath
-    (ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER), ShaderNodeMix / MixRGB whose
-    Factor + A/B fold to constants (unlinked floats / Value / RGB / shallow
-    Math/Mix), ShaderNodeMapRange FLOAT LINEAR (Value/From Min/Max/To Min/Max
-    constant; clamp RNA → RANGE clamp on To Min/Max), or ShaderNodeClamp
-    MINMAX/RANGE. FLOAT mix type is the primary Mix path; constant RGBA /
-    MixRGB folds via per-channel blend then RGB average (NODE_CONVERT_CF).
-    Multi-link, TEX_IMAGE / color-linked Mix / RGB Curves / Noise /
-    VECTOR Mix / VECTOR Map Range / non-LINEAR Map Range / texture-driven
-    graphs / kitchens refuse.
+    (ADD/SUBTRACT/MULTIPLY/DIVIDE/POWER, nest depth ≤3 — Slice 2at; 2ai was 2),
+    ShaderNodeMix / MixRGB whose Factor + A/B fold to constants (unlinked
+    floats / Value / RGB / shallow Math/Mix), ShaderNodeMapRange FLOAT LINEAR
+    (Value/From Min/Max/To Min/Max constant; clamp RNA → RANGE clamp on To
+    Min/Max), or ShaderNodeClamp MINMAX/RANGE. FLOAT mix type is the primary
+    Mix path; constant RGBA / MixRGB folds via per-channel blend then RGB
+    average (NODE_CONVERT_CF). Multi-link, TEX_IMAGE / color-linked Mix /
+    RGB Curves / Noise / VECTOR Mix / VECTOR Map Range / non-LINEAR Map Range
+    / texture-driven graphs / 4-deep Math / kitchens refuse.
     """
     if sock is None:
         return 0.0
@@ -2531,11 +2534,12 @@ def _world_info(scene) -> dict:
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
     refuse with Slice 2ac in the error.
-    Slice 2ah/2ai/2aj/2ak: Strength may be unlinked default_value, ShaderNodeValue,
-    ShaderNodeMath (ADD/SUB/MUL/DIV/POWER), ShaderNodeMix FLOAT / MixRGB
-    whose Factor+A/B fold to constants (Value/unlinked/RGB/shallow Math/Mix),
-    ShaderNodeMapRange FLOAT LINEAR, or ShaderNodeClamp MINMAX/RANGE.
-    TEX_IMAGE / color-linked Mix / RGB Curves / Noise → Strength still refuse.
+    Slice 2ah/2ai/2aj/2ak/2at: Strength may be unlinked default_value,
+    ShaderNodeValue, ShaderNodeMath (ADD/SUB/MUL/DIV/POWER, nest ≤3),
+    ShaderNodeMix FLOAT / MixRGB whose Factor+A/B fold to constants
+    (Value/unlinked/RGB/shallow Math/Mix), ShaderNodeMapRange FLOAT LINEAR,
+    or ShaderNodeClamp MINMAX/RANGE. 4-deep Math / TEX_IMAGE / color-linked
+    Mix / RGB Curves / Noise / TEX_ENVIRONMENT → Strength still refuse.
     """
     empty = {
         "world_strength": 0.0,
