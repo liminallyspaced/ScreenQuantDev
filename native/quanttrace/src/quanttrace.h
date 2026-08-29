@@ -28,7 +28,10 @@
  * Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (parallel bump_* ABI;
  *   not reuse of normal_image_path). Strength/Distance unlinked floats
  *   (Blender 5.2 RNA 1.0 / 0.001). invert RNA 0/1. use_object_space false.
- *   If both bump_* and normal_* paths are set, Bump wins; packer fills one.
+ * Slice 2az: Principled.Normal ← Bevel (samples + unlinked Radius). Optional
+ *   Bevel.Normal ← NormalMap and/or Bump. When bump_* + normal_* both set,
+ *   NormalMap → Bump.Normal → (Bevel?) → Principled (loft Metal_Sheet shape).
+ *   bevel_enable=0 keeps 2x/2j bit-identical.
  * Slice 2z: Principled Normal Map space OBJECT + WORLD (plus Coat Normal space).
  *   0=TANGENT (default, 2j/2t bit-identical), 1=OBJECT, 2=WORLD.
  * Slice 2ad: BLENDER_OBJECT=3 / BLENDER_WORLD=4 (Cycles NODE_NORMAL_MAP_BLENDER_*).
@@ -519,6 +522,12 @@ typedef struct QT_SimpleScene {
   int base_mix_clamp_result;
   const char *base_mix_b_image_path;
   const char *base_mix_b_image_colorspace;
+  /* Slice 2az: Bevel → Principled.Normal (0 = off, bit-identical 2ay/2x/2j).
+   * samples default 4; radius unlinked float (Blender 5.2 RNA 0.05).
+   * Nested Normal via bump_* / normal_* (NormalMap → Bump.Normal OK). */
+  int bevel_enable;
+  int bevel_samples;
+  float bevel_radius;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -831,6 +840,12 @@ typedef struct QT_Mesh {
   int base_mix_clamp_result;
   const char *base_mix_b_image_path;
   const char *base_mix_b_image_colorspace;
+  /* Slice 2az: Bevel → Principled.Normal (0 = off, bit-identical 2ay/2x/2j).
+   * samples default 4; radius unlinked float (Blender 5.2 RNA 0.05).
+   * Nested Normal via bump_* / normal_* (NormalMap → Bump.Normal OK). */
+  int bevel_enable;
+  int bevel_samples;
+  float bevel_radius;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

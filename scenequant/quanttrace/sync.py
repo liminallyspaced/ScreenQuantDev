@@ -29,6 +29,8 @@
 # Slice 2w: TEX_IMAGE → Principled Anisotropic / Rotation / Tangent.
 # Slice 2x: Principled.Normal ← Bump ← TEX_IMAGE Height (bump_* ABI).
 #   Coat Normal stays Normal-Map-only (Bump on Coat Normal refuses).
+# Slice 2az: Principled.Normal ← Bevel (samples + unlinked Radius). Nested
+#   NormalMap / Bump OK; Bump.Normal ← NormalMap OK (loft Metal_Sheet).
 # Slice 2y: Principled Thin Wall unlinked BOOLEAN + unlinked Transmission Weight
 #   constant. Linked Thin Wall still refuses (BOOLEAN, not TEX_IMAGE).
 # Slice 2aa: Environment Texture world (empty path = Slice 2b black).
@@ -745,7 +747,6 @@ def _empty_normal_info(prefix: str = "normal_") -> dict:
 
 
 def _empty_bump_info(prefix: str = "bump_") -> dict:
-    """Empty bump_* ABI. Distance is Blender 5.2 RNA 0.001, not Cycles 0.1."""
     out = _prefix_tex(_empty_tex_info(), prefix)
     out[f"{prefix}strength"] = 1.0
     out[f"{prefix}distance"] = 0.001
@@ -753,20 +754,30 @@ def _empty_bump_info(prefix: str = "bump_") -> dict:
     return out
 
 
+def _empty_bevel_info() -> dict:
+    """Slice 2az: Bevel off — bit-identical with prior slices."""
+    return {
+        "bevel_enable": 0,
+        "bevel_samples": 4,
+        "bevel_radius": 0.05,
+    }
+
+
 def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> dict:
     """Principled.{label} <- Bump.Normal; Height <- TEX_IMAGE Color.
 
     Strength and Distance must be unlinked floats (Blender 5.2 RNA 1.0 / 0.001).
-    Normal input unlinked. invert RNA True is OK (packed as bump_invert 1).
+    Normal input: unlinked OR ← Normal Map (Slice 2az loft Bevel←Bump←NormalMap).
+    invert RNA True is OK (packed as bump_invert 1).
     use_object_space is not a Blender 5.2 property -- native forces false.
     Packed-only images materialize via _abspath_image (Slice 2af).
     """
     empty = _empty_bump_info(prefix)
     if sock is None:
-        return empty
+        return {**empty, **_empty_normal_info()}
     links = list(getattr(sock, "links", None) or [])
     if not links:
-        return empty
+        return {**empty, **_empty_normal_info()}
     if len(links) != 1:
         raise QuantTraceSyncError(f"Principled.{label} has multiple links")
     src = links[0]
@@ -808,16 +819,28 @@ def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> di
         raise QuantTraceSyncError(
             "Bump Distance is linked (Slice 2x: unlinked float only)"
         )
+    normal_info = _empty_normal_info()
     if normal_in is not None and getattr(normal_in, "is_linked", False):
-        raise QuantTraceSyncError(
-            "Bump Normal input is linked (Slice 2x: unlinked only)"
+        # Slice 2az: Bump.Normal ← Normal Map only (loft).
+        n_links = list(getattr(normal_in, "links", None) or [])
+        if len(n_links) != 1:
+            raise QuantTraceSyncError("Bump Normal input has multiple links")
+        n_from = getattr(n_links[0], "from_node", None)
+        n_type = getattr(n_from, "type", None) if n_from is not None else None
+        if n_type != "NORMAL_MAP":
+            raise QuantTraceSyncError(
+                f"Bump Normal from {n_type!r} refused "
+                "(Slice 2az: Normal Map only under Bump Normal)"
+            )
+        normal_info = _normal_map_from_sock(
+            normal_in, prefix="normal_", label="Bump Normal"
         )
     if height_sock is None or not getattr(height_sock, "is_linked", False):
         raise QuantTraceSyncError(
             "Bump Height must be TEX_IMAGE Color (Slice 2x)"
         )
     tex = _tex_image_from_sock(height_sock, f"{label} Bump Height")
-    out = _prefix_tex(tex, prefix)
+    out = {**_prefix_tex(tex, prefix), **normal_info}
     strength = 1.0
     if strength_sock is not None:
         strength = float(getattr(strength_sock, "default_value", 1.0))
@@ -831,9 +854,89 @@ def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> di
     return out
 
 
+def _bevel_from_sock(sock) -> dict:
+    """Principled.Normal ← Bevel.Normal (Slice 2az).
+
+    Samples from node.samples (default 4). Radius unlinked float (RNA 0.05).
+    Bevel.Normal input: unlinked (geometric) OR ← Normal Map OR ← Bump
+    (Bump may itself nest Normal Map — loft Metal_Sheet / Concrete).
+    """
+    empty = {**_empty_normal_info(), **_empty_bump_info(), **_empty_bevel_info()}
+    if sock is None:
+        return empty
+    links = list(getattr(sock, "links", None) or [])
+    if not links:
+        return empty
+    if len(links) != 1:
+        raise QuantTraceSyncError("Principled.Normal has multiple links")
+    src = links[0]
+    from_node = getattr(src, "from_node", None)
+    from_sock = getattr(src, "from_socket", None)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype != "BEVEL":
+        raise QuantTraceSyncError(
+            f"Principled.Normal from {ntype!r} refused (Slice 2az: Bevel only here)"
+        )
+    sock_name = getattr(from_sock, "name", "") if from_sock is not None else ""
+    if sock_name not in ("Normal", "normal"):
+        raise QuantTraceSyncError(
+            "Principled.Normal must come from Bevel Normal (Slice 2az)"
+        )
+    inputs = getattr(from_node, "inputs", None)
+    getter = getattr(inputs, "get", None) if inputs is not None else None
+
+    def _in(name):
+        if callable(getter):
+            s = getter(name)
+            if s is not None:
+                return s
+        if inputs is not None:
+            for s in inputs:
+                if getattr(s, "name", None) == name or getattr(s, "identifier", None) == name:
+                    return s
+        return None
+
+    radius_sock = _in("Radius")
+    normal_in = _in("Normal")
+    if radius_sock is not None and getattr(radius_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "Bevel Radius is linked (Slice 2az: unlinked float only)"
+        )
+    samples = int(getattr(from_node, "samples", 4) or 4)
+    if samples < 1:
+        samples = 1
+    if samples > 128:
+        samples = 128
+    radius = 0.05
+    if radius_sock is not None:
+        radius = float(getattr(radius_sock, "default_value", 0.05))
+    inner = {**_empty_normal_info(), **_empty_bump_info()}
+    if normal_in is not None and getattr(normal_in, "is_linked", False):
+        n_links = list(getattr(normal_in, "links", None) or [])
+        if len(n_links) != 1:
+            raise QuantTraceSyncError("Bevel Normal input has multiple links")
+        n_from = getattr(n_links[0], "from_node", None)
+        n_type = getattr(n_from, "type", None) if n_from is not None else None
+        if n_type == "NORMAL_MAP":
+            inner = {**_normal_map_from_sock(normal_in), **_empty_bump_info()}
+        elif n_type == "BUMP":
+            inner = _bump_from_sock(normal_in, label="Bevel Normal")
+        else:
+            raise QuantTraceSyncError(
+                f"Bevel Normal from {n_type!r} refused "
+                "(Slice 2az: Normal Map or Bump only under Bevel)"
+            )
+    return {
+        **inner,
+        "bevel_enable": 1,
+        "bevel_samples": samples,
+        "bevel_radius": radius,
+    }
+
+
 def _principled_normal_dispatch(sock) -> dict:
-    """Principled.Normal <- Normal Map (2j) or Bump (2x). Packer fills one."""
-    empty = {**_empty_normal_info(), **_empty_bump_info()}
+    """Principled.Normal ← Normal Map (2j) or Bump (2x) or Bevel (2az)."""
+    empty = {**_empty_normal_info(), **_empty_bump_info(), **_empty_bevel_info()}
     if sock is None:
         return empty
     links = list(getattr(sock, "links", None) or [])
@@ -845,12 +948,14 @@ def _principled_normal_dispatch(sock) -> dict:
     from_node = getattr(src, "from_node", None)
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "NORMAL_MAP":
-        return {**_normal_map_from_sock(sock), **_empty_bump_info()}
+        return {**_normal_map_from_sock(sock), **_empty_bump_info(), **_empty_bevel_info()}
     if ntype == "BUMP":
-        return {**_empty_normal_info(), **_bump_from_sock(sock)}
+        return {**_empty_bevel_info(), **_bump_from_sock(sock)}
+    if ntype == "BEVEL":
+        return _bevel_from_sock(sock)
     raise QuantTraceSyncError(
         f"Principled.Normal from {ntype!r} refused "
-        "(Slice 2x: Normal Map or Bump only)"
+        "(Slice 2az: Normal Map, Bump, or Bevel only)"
     )
 
 
@@ -1554,6 +1659,7 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         **_prefix_tex(_empty_tex_info(), "aniso_rot_"),
         **_prefix_tex(_empty_tex_info(), "tangent_"),
         **_empty_bump_info(),
+        **_empty_bevel_info(),
         "thin_wall": 0,
         "transmission_weight": 0.0,
         "tex_ob_ref": None,
@@ -3767,6 +3873,13 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "bump_strength": float(pr.get("bump_strength", 1.0) if pr.get("bump_strength") is not None else 1.0),
         "bump_distance": float(pr.get("bump_distance", 0.001) if pr.get("bump_distance") is not None else 0.001),
         "bump_invert": int(pr.get("bump_invert", 0) or 0),
+        "bevel_enable": int(pr.get("bevel_enable", 0) or 0),
+        "bevel_samples": int(
+            pr["bevel_samples"] if pr.get("bevel_samples") is not None else 4
+        ),
+        "bevel_radius": float(
+            pr["bevel_radius"] if pr.get("bevel_radius") is not None else 0.05
+        ),
         "thin_wall": int(pr.get("thin_wall", 0) or 0),
         "transmission_weight": float(
             pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
@@ -4536,6 +4649,10 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     keep.append(bics)
     desc.base_mix_b_image_path = bip if bip else None
     desc.base_mix_b_image_colorspace = bics if bics else None
+    # Slice 2az: bevel_enable 0 / samples 4 / radius 0.05 — never `or` on samples.
+    desc.bevel_enable = _bi("bevel_enable", 0)
+    desc.bevel_samples = _bi("bevel_samples", 4)
+    desc.bevel_radius = _bf("bevel_radius", 0.05)
 
 
 def make_qt_simple_scene_type():
@@ -4863,6 +4980,9 @@ def make_qt_simple_scene_type():
             ("base_mix_clamp_result", ctypes.c_int),
             ("base_mix_b_image_path", ctypes.c_char_p),
             ("base_mix_b_image_colorspace", ctypes.c_char_p),
+            ("bevel_enable", ctypes.c_int),
+            ("bevel_samples", ctypes.c_int),
+            ("bevel_radius", ctypes.c_float),
         ]
 
     return QT_SimpleScene
@@ -5280,6 +5400,9 @@ def make_qt_scene_types():
             ("base_mix_clamp_result", ctypes.c_int),
             ("base_mix_b_image_path", ctypes.c_char_p),
             ("base_mix_b_image_colorspace", ctypes.c_char_p),
+            ("bevel_enable", ctypes.c_int),
+            ("bevel_samples", ctypes.c_int),
+            ("bevel_radius", ctypes.c_float),
         ]
 
     class QT_Light(ctypes.Structure):

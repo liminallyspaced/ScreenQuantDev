@@ -64,6 +64,10 @@
  *   type 0 = skip — 2ax/2f bit-identical. Color → Gamma → HSV → Mix →
  *   Base Color. Cite MixColorNode (same as world 2aq). Empty B path uses
  *   base_mix_other; nonempty B shares primary Vector graph.
+ * Slice 2az: BevelNode → Principled.Normal (bevel_enable/samples/radius).
+ *   Optional nested NormalMap / Bump (NormalMap → Bump.Normal when both
+ *   paths set). Cite BevelNode (set_samples, set_radius) + KERNEL_FEATURE
+ *   NODE_RAYTRACE. bevel_enable=0 keeps 2ay/2x/2j bit-identical.
  * Slice 2ap: BrightContrastNode on world Color (world_bright / world_contrast).
  *   Identity (bright=0, contrast=0) skips — 2ao/2an/2am/2aa/2al bit-identical.
  *   Loft: Color → Gamma → HSV → BrightContrast → Background. Cite
@@ -315,6 +319,10 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->base_mix_clamp_result = 0;
     d->base_mix_b_image_path = nullptr;
     d->base_mix_b_image_colorspace = nullptr;
+    /* Slice 2az identity — bevel off. */
+    d->bevel_enable = 0;
+    d->bevel_samples = 4;
+    d->bevel_radius = 0.05f;
     /* Slice 2ap identity — bright=0 contrast=0 (memset is fine; set explicit). */
     d->world_bright = 0.0f;
     d->world_contrast = 0.0f;
@@ -603,6 +611,10 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->base_mix_clamp_result = s->base_mix_clamp_result;
     mesh->base_mix_b_image_path = s->base_mix_b_image_path;
     mesh->base_mix_b_image_colorspace = s->base_mix_b_image_colorspace;
+    /* Slice 2az: Bevel → Principled.Normal. */
+    mesh->bevel_enable = s->bevel_enable;
+    mesh->bevel_samples = s->bevel_samples;
+    mesh->bevel_radius = s->bevel_radius;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1177,55 +1189,69 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             m->metal_map_scale, m->metal_map_type);
         graph->connect(img->output("Color"), bsdf->input("Metallic"));
     }
-    /* Slice 2x: TEX_IMAGE Color → NODE_CONVERT_CF → Bump Height → Principled Normal.
-     * Official Cycles BumpNode (shader_nodes.cpp NODE_DEFINE): invert=false,
-     * use_object_space=false, height=1.0, strength=1.0, distance=0.1f.
-     * Blender 5.2 ShaderNodeBump RNA (bpy-verified): invert=False, Strength=1.0,
-     * Distance=0.001, Filter Width=0.1, Height=1.0. No use_object_space RNA.
-     * Match the Blender node (packer copies RNA defaults), not Cycles 0.1 distance.
-     * ShaderGraph::refine_bump_nodes clones Height onto SampleCenter/X/Y —
-     * only connect Height; do not wire Sample*. Graph finalize on Session.
-     * If both bump_* and normal_* paths are set, Bump wins (packer fills one). */
-    if (m->bump_image_path && m->bump_image_path[0]) {
-        ImageTextureNode *img = wire_tex_image(
-            graph.get(), m, m->bump_image_path, m->bump_image_colorspace,
-            m->bump_tex_vector_mode, m->bump_map_location, m->bump_map_rotation,
-            m->bump_map_scale, m->bump_map_type);
-        BumpNode *bump = graph->create_node<BumpNode>();
-        bump->set_invert(m->bump_invert != 0);
-        bump->set_use_object_space(false);
-        bump->set_strength(m->bump_strength);
-        bump->set_distance(m->bump_distance);
-        graph->connect(img->output("Color"), bump->input("Height"));
-        graph->connect(bump->output("Normal"), bsdf->input("Normal"));
-    }
-    /* Slice 2j: TEX_IMAGE Color → NormalMap Color → Principled Normal.
-     * Official Blender sync (intern/cycles/blender/shader.cpp ShaderNodeNormalMap):
-     *   space TANGENT → NODE_NORMAL_MAP_TANGENT (default).
-     *   Strength unlinked RNA default 1.0 → set_strength.
-     *   Color from Image Texture Color; convention OpenGL default;
-     *   attribute empty → ATTR_STD_UV + undisplaced tangents
-     *   (Mesh::update_tangents during geometry update). */
-    else if (m->normal_image_path && m->normal_image_path[0]) {
-        ImageTextureNode *img = wire_tex_image(
-            graph.get(), m, m->normal_image_path, m->normal_image_colorspace,
-            m->normal_tex_vector_mode, m->normal_map_location, m->normal_map_rotation,
-            m->normal_map_scale, m->normal_map_type);
-        NormalMapNode *nmap = graph->create_node<NormalMapNode>();
-        /* Slice 2z/2ad: TANGENT/OBJECT/WORLD/BLENDER_OBJECT/BLENDER_WORLD.
-         * Unknown → TANGENT. Cite src/scene/shader_nodes.cpp SOCKET_ENUM space
-         * + kernel/svm/types.h NodeNormalMapSpace + tex_coord.h Y/Z flip for
-         * BLENDER_*. Blender RNA identifiers match QT ints 0..4. */
-        int sp = m->normal_space;
-        ccl::NodeNormalMapSpace space = NODE_NORMAL_MAP_TANGENT;
-        if (sp == QT_NORMAL_MAP_OBJECT) space = NODE_NORMAL_MAP_OBJECT;
-        else if (sp == QT_NORMAL_MAP_WORLD) space = NODE_NORMAL_MAP_WORLD;
-        else if (sp == QT_NORMAL_MAP_BLENDER_OBJECT) space = NODE_NORMAL_MAP_BLENDER_OBJECT;
-        else if (sp == QT_NORMAL_MAP_BLENDER_WORLD) space = NODE_NORMAL_MAP_BLENDER_WORLD;
-        nmap->set_space(space);
-        nmap->set_strength(m->normal_strength);
-        graph->connect(img->output("Color"), nmap->input("Color"));
-        graph->connect(nmap->output("Normal"), bsdf->input("Normal"));
+    /* Slice 2j/2x/2az: NormalMap + optional Bump + optional Bevel → Principled.Normal.
+     * Order (loft Metal_Sheet): TEX → NormalMap → Bump.Normal; TEX → Bump.Height;
+     * Bump → Bevel.Normal; Bevel → Principled.Normal.
+     * When bump_* + normal_* both set: NormalMap feeds Bump.Normal (Slice 2az;
+     * previously Bump won and ignored normal_* — packer never set both before).
+     * bevel_enable=0 keeps 2x/2j bit-identical when only one of bump/normal is set.
+     * BevelNode: set_samples / set_radius; KERNEL_FEATURE_NODE_RAYTRACE.
+     * Bump: Blender 5.2 RNA Distance=0.001 (not Cycles NODE_DEFINE 0.1).
+     * refine_bump_nodes clones Height — only connect Height; do not wire Sample*. */
+    {
+        NormalMapNode *nmap = nullptr;
+        if (m->normal_image_path && m->normal_image_path[0]) {
+            ImageTextureNode *img = wire_tex_image(
+                graph.get(), m, m->normal_image_path, m->normal_image_colorspace,
+                m->normal_tex_vector_mode, m->normal_map_location, m->normal_map_rotation,
+                m->normal_map_scale, m->normal_map_type);
+            nmap = graph->create_node<NormalMapNode>();
+            int sp = m->normal_space;
+            ccl::NodeNormalMapSpace space = NODE_NORMAL_MAP_TANGENT;
+            if (sp == QT_NORMAL_MAP_OBJECT) space = NODE_NORMAL_MAP_OBJECT;
+            else if (sp == QT_NORMAL_MAP_WORLD) space = NODE_NORMAL_MAP_WORLD;
+            else if (sp == QT_NORMAL_MAP_BLENDER_OBJECT) space = NODE_NORMAL_MAP_BLENDER_OBJECT;
+            else if (sp == QT_NORMAL_MAP_BLENDER_WORLD) space = NODE_NORMAL_MAP_BLENDER_WORLD;
+            nmap->set_space(space);
+            nmap->set_strength(m->normal_strength);
+            graph->connect(img->output("Color"), nmap->input("Color"));
+        }
+        BumpNode *bump = nullptr;
+        if (m->bump_image_path && m->bump_image_path[0]) {
+            ImageTextureNode *img = wire_tex_image(
+                graph.get(), m, m->bump_image_path, m->bump_image_colorspace,
+                m->bump_tex_vector_mode, m->bump_map_location, m->bump_map_rotation,
+                m->bump_map_scale, m->bump_map_type);
+            bump = graph->create_node<BumpNode>();
+            bump->set_invert(m->bump_invert != 0);
+            bump->set_use_object_space(false);
+            bump->set_strength(m->bump_strength);
+            bump->set_distance(m->bump_distance);
+            graph->connect(img->output("Color"), bump->input("Height"));
+            if (nmap) {
+                graph->connect(nmap->output("Normal"), bump->input("Normal"));
+            }
+        }
+        ShaderOutput *normal_src = nullptr;
+        if (bump) {
+            normal_src = bump->output("Normal");
+        } else if (nmap) {
+            normal_src = nmap->output("Normal");
+        }
+        if (m->bevel_enable) {
+            BevelNode *bevel = graph->create_node<BevelNode>();
+            int ns = m->bevel_samples;
+            if (ns < 1) ns = 1;
+            if (ns > 128) ns = 128;
+            bevel->set_samples(ns);
+            bevel->set_radius(m->bevel_radius);
+            if (normal_src) {
+                graph->connect(normal_src, bevel->input("Normal"));
+            }
+            graph->connect(bevel->output("Normal"), bsdf->input("Normal"));
+        } else if (normal_src) {
+            graph->connect(normal_src, bsdf->input("Normal"));
+        }
     }
     if (m->ior_image_path && m->ior_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(

@@ -1,6 +1,28 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ay landed** (2026-08-29 3pm PlugWalk ET). Peel Mix on Principled Base Color (`base_mix_*` + optional `base_mix_b_image_path` after `base_hsv_fac`). Shape 1 constant-other + shape 2 dual TEX_IMAGE. Mapping TEXTURE packs (`map_type=1`). Identity type=0 keeps 2ax/2f bit-identical. Native Color → Gamma → HSV → Mix → Base Color. Loft Metal_Sheet dual-TEX MULTIPLY packs; first refuse now Bevel→Normal. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.52-slice2ay`. Addon `0.3.3`.
+Status: **Slice 2az landed** (2026-08-29 4pm PlugWalk ET). Bevel → Principled.Normal (`bevel_enable` / `bevel_samples` / `bevel_radius` after `base_mix_b_*`). Nested NormalMap / Bump OK; Bump.Normal ← NormalMap OK (loft Metal_Sheet). bevel_enable=0 keeps 2ay/2x/2j bit-identical. Loft Bevel→Normal cleared; first refuse now Roughness←ColorRamp. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.53-slice2az`. Addon `0.3.3`.
+
+## Slice 2az — Bevel → Principled.Normal (2026-08-29 4pm ET)
+
+Loft refuse shape (Metal_Sheet / Concrete_Wall / Concrete_Ground on Cube*): Principled.Normal ← Bevel (samples=4; radius 0.02 Metal / 0.05 Concrete; Radius unlinked) ← Bump.Normal (Strength 0.1 Distance 1.0 Height←TEX_IMAGE Bump.jpg; Bump.Normal ← NormalMap Tangent Strength 1 ← TEX_IMAGE Normal.jpg). Coat Normal unlinked. Not Coat Normal.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| bevel CLAIM | 32²/4 | 4.77e-6 | 2.05e-8 | 0 | **PASS** |
+| bevel CLAIM | 256²/128 | 2.26e-6 | 7.98e-9 | 0 | **PASS** |
+| loft-nest | 32²/4 | 1.06e-5 | 3.32e-8 | 0 | **PASS** |
+| mix 2ay | 32²/4 | 5.36e-7 | 3.54e-9 | 0 | **PASS** |
+| hsv 2ax | 32²/4 | 1.61e-6 | 8.44e-9 | 0 | **PASS** |
+| point 2av | 32²/4 | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| bump 2x | 32²/4 | 2.38e-7 | 5.49e-9 | 0 | **PASS** |
+| live r=0.12 vs r=0 | 32²/4 | 0.308 | — | 22 | graph live |
+
+Loft pack: Bevel cleared. First PACK_FAIL `Principled.Roughness link is not TEX_IMAGE (Slice 2f/2h/2i)` (ColorRamp). Next expected: Fresnel-Fac Mix beds / GROUP / Botaniq / more ColorRamp. Not loft Session Δmax.
+
+ABI: `bevel_enable` int, `bevel_samples` int, `bevel_radius` float after `base_mix_b_image_colorspace`. Native BevelNode when enable≠0; optional NormalMap + Bump nest. Packer `_principled_normal_dispatch` accepts BEVEL; `_bump_from_sock` accepts Normal←NormalMap.
+
+Proof plate `docs/proof/quanttrace-bevel-32-pair.png`. Tools `_quanttrace_slice2az_scene/smoke.py`.
 
 ## Slice 2ay — Mix → Principled Base Color (2026-08-29 3pm ET)
 
