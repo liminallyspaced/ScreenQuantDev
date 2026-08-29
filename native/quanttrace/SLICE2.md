@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2an landed** (2026-08-29 4am PlugWalk ET). TEX_IMAGE → world Background Color (`world_color_image_*` after `world_sky_ozone_density`). Generated FLAT claim 32²/4 Δmax=9.73e-4 PASS / 256²/128 Δmax=3.01e-4 PASS. Mapping rot_z=0.15 32²/4 Δmax=0.00115 (1 px) not claimed PASS. Unlinked / rgb / hdr / nishita 32²/4 PASS. Stock teximage vs black Δmax=0.716 (lever live). Noise refuses. `is_tracer=1`. Native `0.0.41-slice2an`. Addon `0.3.3`.
+Status: **Slice 2ao landed** (2026-08-29 5am PlugWalk ET). Gamma + HueSat → world Background Color (`world_gamma` / `world_hsv_*` after `world_color_image_projection`). Identity skip keeps 2aa/2al/2am/2an bit-identical. rgb_gamma 32²/4 Δmax=4.77e-7 PASS / 256²/128 Δmax=5.96e-7 PASS. rgb_gamma_hsv loft 32²/4 Δmax=7.15e-7 PASS / 256²/128 Δmax=4.77e-7 PASS. rgb_hsv 32²/4 Δmax=5.96e-7 PASS. hdr_gamma 32²/4 Δmax=9.73e-4 PASS / 256²/128 Δmax=1.91e-4 PASS. rgb/hdr/nishita/teximage 32²/4 PASS. Stock rgb_gamma vs unlinked RGB Δmax=0.203 (lever live). Noise refuses. `is_tracer=1`. Native `0.0.42-slice2ao`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -22,6 +22,69 @@ addon zip or public commit tree.
 
 
 
+
+
+## 5am PlugWalk (2026-08-29) — Gamma/HueSat → world Color (Slice 2ao)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Retarget: 2an packed TEX_IMAGE Color and refused loft EasyHDR Gamma/HueSat/Mix. Typical loft chain is Env/TEX_IMAGE → Gamma → HueSat → (Mix later) → Background Color. This hour peels unlinked Gamma + HueSat (one of each, either order walking toward the source) and applies them in loft order.
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Cycles `GammaNode` (`set_color`, `set_gamma`; SOCKET gamma default 1.0; `X^1==X` fold) and `HSVNode` (`set_color`, `set_hue`, `set_saturation`, `set_value`, `set_fac`; hue default 0.5). Cite `shader_nodes.h` / `NODE_DEFINE` in `shader_nodes.cpp`. |
+| ABI | `world_gamma` / `world_hsv_hue` / `world_hsv_sat` / `world_hsv_val` / `world_hsv_fac` after `world_color_image_projection` on `QT_SimpleScene` + `QT_Scene`. Identity 1 / 0.5 / 1 / 1 / 1 = skip native nodes (2aa/2al/2am/2an bit-identical). |
+| Python | `_world_info` peels one unlinked `GAMMA` + one unlinked `HUE_SAT` then resolves remaining source as today. Linked Gamma/Hue/Sat/Value/Fac, second Gamma/HueSat, Noise, RGB Curves, Bright/Contrast (defer 2ap), Mix after HSV refuse Slice 2ao. |
+| Native | Color source (env / sky / ImageTexture / world_color RGB) → Gamma (if gamma!=1) → HSV (if hsv not identity) → Background Color. If only HSV skip Gamma; if only Gamma skip HSV. Locked-cube memset sets identity (gamma=0 after memset is NOT identity). Version `0.0.42-slice2ao`. |
+| Version | `0.0.42-slice2ao` |
+| Tools | `_quanttrace_slice2ao_scene/smoke.py` (modes rgb_gamma / rgb_hsv / rgb_gamma_hsv / hdr_gamma / rgb / hdr / nishita / teximage / noise / unlinked_rgb) |
+
+### Measured — rgb_gamma_hsv loft chain (claim)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **7.15e-7** | 2.36e-9 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **4.77e-7** | 1.52e-9 | 0 / 65536 | **PASS** |
+
+### Measured — rgb_gamma (claim)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **4.77e-7** | 2.21e-9 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **5.96e-7** | 1.44e-9 | 0 / 65536 | **PASS** |
+
+### Measured — hdr_gamma EasyHDR-like (claim)
+
+| Path | Res / spp | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|---|
+| Session | 32² / 4 | **9.73e-4** | 5.71e-6 | 0 / 1024 | **PASS** |
+| Session | 256² / 128 | **1.91e-4** | 1.04e-6 | 0 / 65536 | **PASS** |
+
+### Measured — secondary / regressions (32² / 4)
+
+| Mode | Δmax | MAE | px ≥ 1e-3 | Gate |
+|---|---|---|---|---|
+| rgb_hsv hue=0.6 sat=1.2 val=0.85 | 5.96e-7 | 2.20e-9 | 0 | **PASS** |
+| rgb 2al | 5.96e-7 | 2.36e-9 | 0 | **PASS** |
+| hdr 2aa | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| nishita 2am | 1.91e-6 | 1.87e-8 | 0 | **PASS** |
+| teximage 2an Generated FLAT | 9.73e-4 | 2.79e-6 | 0 | **PASS** |
+| Stock rgb_gamma vs unlinked RGB | 0.203 | 0.0979 | 1024 | live |
+
+Identity skip: rgb / hdr / nishita / teximage packed `world_gamma=1` + HSV identity; Δmax matches 2an/2am/2aa/2al within noise. Proof plate `docs/proof/quanttrace-gamma-hsv-32-pair.png` (rgb_gamma_hsv stock|session) + `/workspace/quanttrace-gamma-hsv-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty / still refuses
+
+- Linked Gamma/Hue/Sat/Value/Fac (texture-driven), RGB Curves, Noise, Bright/Contrast (defer 2ap), Mix after HSV, second Gamma/HueSat, linked Sky Vector, BOX blend, UDIM, kitchens still refuse.
+- Still-life / SSS / sky-256 sun-disc residue still documented.
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+Bright/Contrast → world Color (Slice 2ap), Mix after HSV, or linked Sky Vector. Not ReSTIR. Not Classroom time %.
 
 
 ## 4am PlugWalk (2026-08-29) — TEX_IMAGE → world Color (Slice 2an)

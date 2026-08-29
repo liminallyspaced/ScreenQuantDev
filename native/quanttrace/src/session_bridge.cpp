@@ -45,6 +45,12 @@
  *   world_tex_vector_mode (0 = LINK_TEXTURE_UV ImageTexture default).
  *   BackgroundLight when has_env || has_sky || has_color_image || color_nonzero.
  *   map_resolution 1024 like env/color (ImageTexture not scanned for AUTOMATIC).
+ * Slice 2ao: GammaNode + HSVNode on world Color (world_gamma / world_hsv_*).
+ *   Identity (gamma=1, hue=0.5, sat=1, val=1, fac=1) skips extra nodes
+ *   (2aa/2al/2am/2an bit-identical). Else Color source → Gamma (if gamma!=1)
+ *   → HSV (if hsv not identity) → Background Color. Cite shader_nodes.h
+ *   GammaNode / HSVNode (set_color, set_gamma / set_hue,set_saturation,
+ *   set_value,set_fac). If only HSV skip Gamma; if only Gamma skip HSV.
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
@@ -262,6 +268,12 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->world_color[0] = 0.0f;
     d->world_color[1] = 0.0f;
     d->world_color[2] = 0.0f;
+    /* Slice 2ao identity — memset left gamma=0 which is NOT identity. */
+    d->world_gamma = 1.0f;
+    d->world_hsv_hue = 0.5f;
+    d->world_hsv_sat = 1.0f;
+    d->world_hsv_val = 1.0f;
+    d->world_hsv_fac = 1.0f;
     d->exr_path = nullptr;
 }
 
@@ -575,6 +587,11 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->world_color_image_path = s->world_color_image_path;
     out->world_color_image_colorspace = s->world_color_image_colorspace;
     out->world_color_image_projection = s->world_color_image_projection;
+    out->world_gamma = s->world_gamma;
+    out->world_hsv_hue = s->world_hsv_hue;
+    out->world_hsv_sat = s->world_hsv_sat;
+    out->world_hsv_val = s->world_hsv_val;
+    out->world_hsv_fac = s->world_hsv_fac;
     out->exr_path = s->exr_path;
 }
 
@@ -627,6 +644,63 @@ static bool tex_mode_has_mapping(int mode)
            mode == QT_TEX_VECTOR_MAPPING_CAMERA ||
            mode == QT_TEX_VECTOR_MAPPING_WINDOW ||
            mode == QT_TEX_VECTOR_MAPPING_REFLECTION;
+}
+
+/* Slice 2ao: identity skip keeps 2aa/2al/2am/2an bit-identical. */
+static bool world_gamma_identity(const QT_Scene *desc)
+{
+    return desc->world_gamma == 1.0f;
+}
+
+static bool world_hsv_identity(const QT_Scene *desc)
+{
+    return desc->world_hsv_hue == 0.5f &&
+           desc->world_hsv_sat == 1.0f &&
+           desc->world_hsv_val == 1.0f &&
+           desc->world_hsv_fac == 1.0f;
+}
+
+/* Wire Color source → Gamma (if gamma!=1) → HSV (if not identity) →
+ * Background Color. color_src NULL uses wcol as unlinked Color default.
+ * Cite shader_nodes.h GammaNode (set_color, set_gamma) / HSVNode
+ * (set_color, set_hue, set_saturation, set_value, set_fac). */
+static void connect_world_color_chain(ShaderGraph *graph,
+                                      ShaderOutput *color_src,
+                                      const float3 &wcol,
+                                      BackgroundNode *bg,
+                                      const QT_Scene *desc)
+{
+    const bool use_gamma = !world_gamma_identity(desc);
+    const bool use_hsv = !world_hsv_identity(desc);
+    ShaderOutput *cur = color_src;
+    if (use_gamma) {
+        GammaNode *g = graph->create_node<GammaNode>();
+        g->set_gamma(desc->world_gamma);
+        if (cur) {
+            graph->connect(cur, g->input("Color"));
+        }
+        else {
+            g->set_color(wcol);
+        }
+        cur = g->output("Color");
+    }
+    if (use_hsv) {
+        HSVNode *h = graph->create_node<HSVNode>();
+        h->set_hue(desc->world_hsv_hue);
+        h->set_saturation(desc->world_hsv_sat);
+        h->set_value(desc->world_hsv_val);
+        h->set_fac(desc->world_hsv_fac);
+        if (cur) {
+            graph->connect(cur, h->input("Color"));
+        }
+        else {
+            h->set_color(wcol);
+        }
+        cur = h->output("Color");
+    }
+    if (cur) {
+        graph->connect(cur, bg->input("Color"));
+    }
 }
 
 static bool mesh_uses_generated(const QT_Mesh *m)
@@ -1393,6 +1467,10 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
      * Background Color (Color→Color, no NODE_CONVERT_CF). Projection FLAT/BOX/
      * SPHERE/TUBE. Vector: mode 0 leaves LINK_TEXTURE_UV (ImageTextureNode
      * default; cite shader_nodes.cpp). Else same TEX_COORD (+ Mapping) as 2ac.
+     * Slice 2ao: Color source (env / sky / ImageTexture / world_color RGB)
+     * → GammaNode (if gamma != 1) → HSVNode (if hsv not identity) →
+     * Background Color. Identity skips extra nodes (2aa/2al/2am/2an
+     * bit-identical). Cite shader_nodes.h GammaNode / HSVNode.
      * Priority: has_env → has_sky → has_color_image → world_color RGB.
      * BackgroundLight + MIS when has_env || has_sky || has_color_image ||
      * color_nonzero. Env/Color/ImageTexture: map_res 1024. Sky AUTOMATIC 0.
@@ -1481,7 +1559,8 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
                 }
             }
             /* else mode 0: leave Vector unlinked → LINK_POSITION. */
-            graph->connect(env->output("Color"), bg->input("Color"));
+            connect_world_color_chain(graph.get(), env->output("Color"),
+                                       wcol, bg, desc);
         }
         else if (has_sky) {
             /* Slice 2am: SkyTextureNode Color → Background Color.
@@ -1514,7 +1593,8 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
             sky->set_air_density(desc->world_sky_air_density);
             sky->set_aerosol_density(desc->world_sky_aerosol_density);
             sky->set_ozone_density(desc->world_sky_ozone_density);
-            graph->connect(sky->output("Color"), bg->input("Color"));
+            connect_world_color_chain(graph.get(), sky->output("Color"),
+                                       wcol, bg, desc);
         }
         else if (has_color_image) {
             /* Slice 2an: ImageTextureNode Color → Background Color.
@@ -1595,7 +1675,13 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
                 }
             }
             /* else mode 0: leave Vector unlinked → LINK_TEXTURE_UV. */
-            graph->connect(img->output("Color"), bg->input("Color"));
+            connect_world_color_chain(graph.get(), img->output("Color"),
+                                       wcol, bg, desc);
+        }
+        if (!has_env && !has_sky && !has_color_image) {
+            /* RGB / unlinked Color: optional Gamma/HSV on world_color.
+             * Identity: no extra nodes, bg->set_color already set. */
+            connect_world_color_chain(graph.get(), nullptr, wcol, bg, desc);
         }
         graph->connect(bg->output("Background"), graph->output()->input("Surface"));
         scene->default_background->set_graph(std::move(graph));

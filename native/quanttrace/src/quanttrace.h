@@ -45,6 +45,12 @@
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
  *   world_tex_vector_mode + world_map_* + world_ob_* (same as 2ac/2ae).
+ * Slice 2ao: Gamma + Hue Saturation Value on world Background Color
+ *   (world_gamma + world_hsv_* after world_color_image_projection).
+ *   Identity (gamma=1, hue=0.5, sat=1, val=1, fac=1) skips native nodes —
+ *   2aa/2al/2am/2an bit-identical. Non-identity wires ccl::GammaNode then
+ *   ccl::HSVNode (loft order: Color source → Gamma → HSV → Background).
+ *   If only HSV, skip Gamma. If only Gamma, skip HSV.
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  *   Empty Object ref (2l) stays use_transform=false / NODE_TEXCO_OBJECT.
  *   Pointer set → NODE_TEXCO_OBJECT_WITH_TRANSFORM + packed inverse of ob_tfm.
@@ -155,6 +161,12 @@ typedef struct QT_SimpleScene {
   const char *world_color_image_path;
   const char *world_color_image_colorspace; /* OCIO name; empty = node default */
   int world_color_image_projection; /* 0=FLAT, 1=BOX, 2=SPHERE, 3=TUBE */
+  /* Slice 2ao: Gamma + HSV on world Color. Identity skips native nodes. */
+  float world_gamma;     /* 1.0 = skip GammaNode */
+  float world_hsv_hue;   /* 0.5 = identity */
+  float world_hsv_sat;   /* 1.0 = identity */
+  float world_hsv_val;   /* 1.0 = identity */
+  float world_hsv_fac;   /* 1.0 = identity */
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -811,6 +823,12 @@ typedef struct QT_Scene {
   const char *world_color_image_path;
   const char *world_color_image_colorspace; /* OCIO name; empty = node default */
   int world_color_image_projection; /* 0=FLAT, 1=BOX, 2=SPHERE, 3=TUBE */
+  /* Slice 2ao: Gamma + HSV on world Color. Identity skips native nodes. */
+  float world_gamma;     /* 1.0 = skip GammaNode */
+  float world_hsv_hue;   /* 0.5 = identity */
+  float world_hsv_sat;   /* 1.0 = identity */
+  float world_hsv_val;   /* 1.0 = identity */
+  float world_hsv_fac;   /* 1.0 = identity */
   const char *exr_path;
 } QT_Scene;
 

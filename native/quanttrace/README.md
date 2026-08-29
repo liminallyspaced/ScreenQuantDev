@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.41-slice2an` — TEX_IMAGE → world Background Color (`world_color_image_*`). Addon still `0.3.3`.
+**Current native:** `0.0.42-slice2ao` — Gamma + HueSat → world Background Color (`world_gamma` / `world_hsv_*`). Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.41-slice2an` (TEX_IMAGE world Color).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.42-slice2ao` (Gamma/HueSat world Color).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -57,8 +57,9 @@ this tree never feeds Auto clocks.
 | **2al — world Background Color RGB/Mix** | **PASS** | rgb (1.0, 0.25, 0.1) 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **5.96e-7**. mix_rgb / unlinked 32²/4 Δmax **5.96e-7**. hdr 2aa 32²/4 Δmax **6.13e-4**. map_range 2ak 32²/4 Δmax **4.25e-4**. Native `0.0.39-slice2al`. |
 | **2am — Sky/Nishita → world Color** | **32/4 PASS; 256 3-px FAIL** | nishita MULTIPLE_SCATTERING default RNA 32²/4 Δmax **1.91e-6**; 256²/128 Δmax **0.00172** (3 sun-disc px, MAE 6.28e-8) not claimed PASS. nishita_elev 0.6 rad 32²/4 Δmax **1.91e-6**. rgb 2al 32²/4 Δmax **5.96e-7**. hdr 2aa 32²/4 Δmax **6.13e-4**. Native `0.0.40-slice2am`. |
 | **2an — TEX_IMAGE → world Color** | **PASS** | Generated FLAT 32²/4 Δmax **9.73e-4**; 256²/128 Δmax **3.01e-4**. Mapping rot_z=0.15 32²/4 Δmax **0.00115** (1 px) not claimed PASS. Unlinked / rgb / hdr / nishita 32²/4 PASS. Native `0.0.41-slice2an`. |
+| **2ao — Gamma/HueSat → world Color** | **PASS** | rgb_gamma 32²/4 Δmax **4.77e-7**; 256²/128 Δmax **5.96e-7**. rgb_gamma_hsv loft 32²/4 Δmax **7.15e-7**; 256²/128 Δmax **4.77e-7**. rgb_hsv 32²/4 Δmax **5.96e-7**. hdr_gamma 32²/4 Δmax **9.73e-4**; 256²/128 Δmax **1.91e-4**. rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.42-slice2ao`. |
 
-Kitchens / linked Thin Wall (BOOLEAN) / TEX_IMAGE → world Strength still refuse with a named `QuantTraceSyncError`. Map Range FLOAT LINEAR / Clamp → world Strength is Slice 2ak. Mix FLOAT / MixRGB constant → world Strength is Slice 2aj. Math → world Strength is Slice 2ai. Linked world Strength (Value node) is Slice 2ah. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y. World Color RGB/Mix is Slice 2al. Sky/Nishita (unlinked Vector) is Slice 2am. TEX_IMAGE→Color is Slice 2an. Linked Sky Vector / Noise / RGB Curves / EasyHDR chain still refuse.
+Kitchens / linked Thin Wall (BOOLEAN) / TEX_IMAGE → world Strength still refuse with a named `QuantTraceSyncError`. Map Range FLOAT LINEAR / Clamp → world Strength is Slice 2ak. Mix FLOAT / MixRGB constant → world Strength is Slice 2aj. Math → world Strength is Slice 2ai. Linked world Strength (Value node) is Slice 2ah. Linked Mapping L/R/S (Combine XYZ / Value) is Slice 2ag. Packed-only images are Slice 2af. Unlinked Thin Wall BOOLEAN is Slice 2y. World Color RGB/Mix is Slice 2al. Sky/Nishita (unlinked Vector) is Slice 2am. TEX_IMAGE→Color is Slice 2an. Gamma/HueSat on world Color is Slice 2ao. Linked Sky Vector / Noise / RGB Curves / Bright-Contrast / Mix after HSV still refuse.
 
 ## Build (Linux) — hello stub (default)
 
