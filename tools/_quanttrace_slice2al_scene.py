@@ -72,7 +72,7 @@ def build_slice2al_scene(
       black     — unlinked Color black, Strength 1.0, no env (live-graph partner).
       hdr       — Slice 2aa regression (HDR equirect, Strength 1.0).
       map_range — Slice 2ak regression (HDR + Map Range → Strength 0.7).
-      sky       — Sky/Nishita → Color (must refuse pack).
+      sky       — Sky/Nishita → Color (Slice 2am packs; see _quanttrace_slice2am_*).
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:

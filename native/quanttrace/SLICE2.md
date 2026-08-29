@@ -1,6 +1,6 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2al landed** (2026-08-29 2am PlugWalk ET). World Background Color constant ABI (`world_color` float3 after `world_ob_tfm`). RGB (1.0, 0.25, 0.1) 32²/4 Δmax=5.96e-7; 256²/128 Δmax=5.96e-7 PASS. mix_rgb / unlinked 32²/4 Δmax=5.96e-7 PASS. hdr 2aa 32²/4 Δmax=6.13e-4 PASS. map_range 2ak 32²/4 Δmax=4.25e-4 PASS. Stock rgb vs black Δmax=1.0 (lever live). Sky/Nishita refuses Slice 2al. `is_tracer=1`. Native `0.0.39-slice2al`. Addon `0.3.3`.
+Status: **Slice 2am landed** (2026-08-29 3am PlugWalk ET). Sky Texture → world Background Color (`world_sky_*` after `world_color`). Nishita/MULTIPLE_SCATTERING default RNA 32²/4 Δmax=1.91e-6 PASS; 256²/128 Δmax=0.00172 (3 sun-disc px) not claimed PASS. nishita_elev 0.6 rad 32²/4 Δmax=1.91e-6 PASS. rgb 2al / hdr 2aa 32²/4 PASS. Stock nishita vs black Δmax=12.0 (lever live). Linked Sky Vector refuses. `is_tracer=1`. Native `0.0.40-slice2am`. Addon `0.3.3`.
 Slice 1 (done): hello `libquanttrace.so`, `quanttrace_is_tracer() == 0`.
 Acceptance: `docs/research/QUANTTRACE-CUBE.md`.
 
@@ -19,6 +19,52 @@ addon zip or public commit tree.
 ---
 
 
+
+
+
+
+
+## 3am PlugWalk (2026-08-29) — Sky/Nishita → world Color (Slice 2am)
+
+Box: Linux, 8 cores, Blender 5.2.0 CPU. No user 2080. No zip. No Make it Fast / Auto.
+
+Retarget: 2al packed RGB/Mix Color and refused TEX_SKY. Official scenes (and many interiors) use ShaderNodeTexSky on World. This hour accepts that graph (default NISHITA / Blender 5.2 MULTIPLE_SCATTERING).
+
+### What landed
+
+| Piece | Detail |
+|---|---|
+| Research | Blender 5.2 ShaderNodeTexSky `sky_type` enum is SINGLE_SCATTERING / MULTIPLE_SCATTERING / PREETHAM / HOSEK_WILKIE (no NISHITA identifier; MULTIPLE_SCATTERING is the Nishita default). Vector is `is_unavailable` on Nishita. Cycles `SkyTextureNode` SOCKET default NODE_SKY_MULTIPLE_SCATTERING. `aerosol_density` (older RNA `dust_density`). `simplify_settings` wraps elevation/rotation — packer does not double-wrap. World `sampling_method=AUTOMATIC` leaves BackgroundLight map_res=0 (Cycles sky 512×256 + sun guiding); forcing 1024 mismatches the sun disc (32²/4 Δmax 0.034). |
+| ABI | `world_sky_*` after `world_color` on `QT_SimpleScene` + `QT_Scene`. type 0 = 2al/2aa. 1=PREETHAM 2=HOSEK 3=NISHITA/MULTIPLE 4=SINGLE. Path empty, world_color zeros. |
+| Python | `_world_info` packs TEX_SKY RNA; unlinked Vector only. Linked Vector / TEX_IMAGE / Noise / RGB Curves refuse Slice 2am. |
+| Native | `SkyTextureNode` Color → Background Color. BackgroundLight when `has_env \|\| has_sky \|\| color_nonzero`. Sky map_res=0. Version `0.0.40-slice2am`. |
+| Version | `0.0.40-slice2am` |
+| Tools | `tools/_quanttrace_slice2am_scene.py`, `tools/_quanttrace_slice2am_smoke.py`. 2al mode=sky now packs. |
+| Visibility | Camera 1.8× pull-back; Combined shows sky (peak ~13 default / ~30 at elev 0.6). |
+
+### Measured (Session vs stock Cycles Combined, box CPU)
+
+| Case | Res / spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| nishita (TEX_SKY MULTIPLE_SCATTERING default RNA; sock default black; Strength 1.0) | 32² / 4 | **1.91e-6** | 1.87e-8 | 0 | **PASS** |
+| nishita (TEX_SKY MULTIPLE_SCATTERING default RNA; sock default black; Strength 1.0) | 256² / 128 | **0.00172** | 6.28e-8 | 3 | **FAIL** (3 sun-disc px; not claimed PASS) |
+| nishita_elev (sun_elevation=0.6 rad) | 32² / 4 | **1.91e-6** | 2.06e-8 | 0 | **PASS** |
+| rgb (2al regression, world_color, sky_type=0) | 32² / 4 | **5.96e-7** | 2.36e-9 | 0 | **PASS** |
+| hdr (2aa regression, env path, sky_type=0) | 32² / 4 | **6.13e-4** | 4.63e-6 | 0 | **PASS** |
+
+Live graph (stock nishita vs stock black world) 32²/4: Δmax=**12.0** (1024 px ≥1e-3, MAE 0.213). Packed `world_sky_type=3` while Color socket default stayed black. sky_vector_linked (TEX_COORD → Sky Vector) raises Slice 2am. Proof plate `docs/proof/quanttrace-sky-32-pair.png` (nishita stock\|session) + `/workspace/quanttrace-sky-32-pair.png`. F12 32² not run this hour; Session is the claim.
+
+### Honesty
+
+- 256²/128 nishita is 3-px sun-disc residue (Δmax 0.00172, MAE 6.28e-8, 0 px ≥1e-2). Same class as still-life / SSS 256 noise. 32²/4 is the PASS claim.
+- Linked Sky Vector / TEX_IMAGE → Color / Noise / RGB Curves / spatially-varying Mix still refuse. PREETHAM/HOSEK packed but not pixel-gated this hour.
+- SSS 256 residue / still-life 1px noise-class still documented (not claimed fixed).
+- Make it Fast / Auto / zip / listing / gibby / user 2080: untouched.
+- Store Classroom **41%** / loft **52%** unchanged.
+
+### Next
+
+TEX_IMAGE → Color, or linked Sky Vector / Mapping. SSS 256 residue stays document-only. Not ReSTIR. Not Classroom time %.
 
 
 

@@ -37,6 +37,10 @@
  * Slice 2al: world Background Color constant ABI (world_color float3).
  *   Empty path + (0,0,0) = Slice 2b black. RGB / Mix-constant / unlinked
  *   non-black Color pack here; TEX_ENVIRONMENT still wins (color stays 0).
+ * Slice 2am: Sky Texture → world Background Color (world_sky_* after world_color).
+ *   type 0 = 2al/2aa bit-identical. 1=PREETHAM 2=HOSEK 3=NISHITA/MULTIPLE
+ *   4=SINGLE_SCATTERING (Blender 5.2 RNA). Path empty, world_color zeros.
+ *   Unlinked Vector only. Linked Sky Vector / TEX_IMAGE→Color still refuse.
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  *   Empty Object ref (2l) stays use_transform=false / NODE_TEXCO_OBJECT.
  *   Pointer set → NODE_TEXCO_OBJECT_WITH_TRANSFORM + packed inverse of ob_tfm.
@@ -136,6 +140,13 @@ typedef struct QT_SimpleScene {
   int world_ob_use_transform; /* 0 = empty Object (bit-identical 2ac). 1 = pointer */
   float world_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
   float world_color[3]; /* Slice 2al: Background Color RGB when world_image_path empty. Default 0,0,0 = Slice 2b black. */
+  /* Slice 2am: Sky Texture (0=none → 2al/2aa). Path empty, color stays 0. */
+  int world_sky_type;  /* 0=none, 1=PREETHAM, 2=HOSEK, 3=NISHITA/MULTIPLE, 4=SINGLE */
+  float world_sky_sun_direction[3];
+  float world_sky_turbidity, world_sky_ground_albedo;
+  int world_sky_sun_disc;
+  float world_sky_sun_size, world_sky_sun_intensity, world_sky_sun_elevation, world_sky_sun_rotation;
+  float world_sky_altitude, world_sky_air_density, world_sky_aerosol_density, world_sky_ozone_density;
   const char *exr_path; /* optional; NULL/empty skips file write */
   const float *uvs; /* ntris * 3 * 2 corner UVs; NULL if untextured */
   const char *image_path; /* TEX_IMAGE filepath; NULL/empty = constant base */
@@ -781,6 +792,13 @@ typedef struct QT_Scene {
   int world_ob_use_transform; /* 0 = empty Object (bit-identical 2ac). 1 = pointer */
   float world_ob_tfm[12];     /* Blender matrix_world first 3 rows; ignore if 0 */
   float world_color[3]; /* Slice 2al: Background Color RGB when world_image_path empty. Default 0,0,0 = Slice 2b black. */
+  /* Slice 2am: Sky Texture (0=none → 2al/2aa). Path empty, color stays 0. */
+  int world_sky_type;  /* 0=none, 1=PREETHAM, 2=HOSEK, 3=NISHITA/MULTIPLE, 4=SINGLE */
+  float world_sky_sun_direction[3];
+  float world_sky_turbidity, world_sky_ground_albedo;
+  int world_sky_sun_disc;
+  float world_sky_sun_size, world_sky_sun_intensity, world_sky_sun_elevation, world_sky_sun_rotation;
+  float world_sky_altitude, world_sky_air_density, world_sky_aerosol_density, world_sky_ozone_density;
   const char *exr_path;
 } QT_Scene;
 

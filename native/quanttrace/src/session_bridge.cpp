@@ -37,6 +37,9 @@
  * Slice 2al: world Background Color constant (world_color float3).
  *   Empty path uses world_color; env path keeps Color black (ENV feeds Color).
  *   BackgroundLight when has_env || color_nonzero (black empty-path stays 2b).
+ * Slice 2am: SkyTextureNode → Background Color (world_sky_type != 0).
+ *   Path empty, do not mix world_color into the sky graph. BackgroundLight
+ *   when has_env || has_sky || color_nonzero. Unlinked Vector (GENERATED).
  * Slice 2ab: TEX_COORD Object-with-pointer (use_transform + ob_tfm).
  * QUANTTRACE_CUBE_WIDTH/HEIGHT/SAMPLES override locked 256/256/128.
  *
@@ -550,6 +553,20 @@ static void simple_to_qt(const QT_SimpleScene *s,
     out->world_ob_use_transform = s->world_ob_use_transform;
     std::memcpy(out->world_ob_tfm, s->world_ob_tfm, sizeof(out->world_ob_tfm));
     std::memcpy(out->world_color, s->world_color, sizeof(out->world_color));
+    out->world_sky_type = s->world_sky_type;
+    std::memcpy(out->world_sky_sun_direction, s->world_sky_sun_direction,
+                sizeof(out->world_sky_sun_direction));
+    out->world_sky_turbidity = s->world_sky_turbidity;
+    out->world_sky_ground_albedo = s->world_sky_ground_albedo;
+    out->world_sky_sun_disc = s->world_sky_sun_disc;
+    out->world_sky_sun_size = s->world_sky_sun_size;
+    out->world_sky_sun_intensity = s->world_sky_sun_intensity;
+    out->world_sky_sun_elevation = s->world_sky_sun_elevation;
+    out->world_sky_sun_rotation = s->world_sky_sun_rotation;
+    out->world_sky_altitude = s->world_sky_altitude;
+    out->world_sky_air_density = s->world_sky_air_density;
+    out->world_sky_aerosol_density = s->world_sky_aerosol_density;
+    out->world_sky_ozone_density = s->world_sky_ozone_density;
     out->exr_path = s->exr_path;
 }
 
@@ -1355,27 +1372,30 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
     cam->update(scene);
 
     /* World Background: black+strength (Slice 2b), constant Color (Slice 2al),
-     * or Environment Texture (Slice 2aa/2ac/2ae).
+     * Environment Texture (Slice 2aa/2ac/2ae), or Sky Texture (Slice 2am).
      * Slice 2aa: Vector unlinked LINK_POSITION. Slice 2ac: TEX_COORD (+ Mapping).
      * Slice 2ae: Object-with-pointer (world_ob_use_transform + world_ob_tfm).
      * Slice 2al: empty world_image_path uses world_color RGB (default 0,0,0
      * stays bit-identical black). Env path keeps Color black — ENV node feeds
      * Color; do not mix world_color into the env graph.
-     * BackgroundLight + MIS when has_env || color_nonzero (Blender world.cycles
-     * sample_map 1024 / sampling AUTOMATIC). Empty-path black stays without
-     * BackgroundLight (Slice 2b). */
+     * Slice 2am: world_sky_type != 0 builds SkyTextureNode; path empty, do not
+     * mix world_color into the sky graph. Vector unlinked LINK_TEXTURE_GENERATED.
+     * BackgroundLight + MIS when has_env || has_sky || color_nonzero (Blender
+     * world.cycles sample_map 1024 / sampling AUTOMATIC). Empty-path black stays
+     * without BackgroundLight (Slice 2b). */
     {
         unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
         BackgroundNode *bg = graph->create_node<BackgroundNode>();
         const bool has_env = desc->world_image_path && desc->world_image_path[0];
-        const float3 wcol = has_env ?
+        const bool has_sky = !has_env && desc->world_sky_type != 0;
+        const float3 wcol = (has_env || has_sky) ?
             make_float3(0.0f, 0.0f, 0.0f) :
             make_float3(desc->world_color[0],
                         desc->world_color[1],
                         desc->world_color[2]);
         bg->set_color(wcol);
         bg->set_strength(desc->world_strength);
-        const bool color_nonzero = !has_env &&
+        const bool color_nonzero = !has_env && !has_sky &&
             (wcol.x != 0.0f || wcol.y != 0.0f || wcol.z != 0.0f);
         if (has_env) {
             EnvironmentTextureNode *env = graph->create_node<EnvironmentTextureNode>();
@@ -1447,14 +1467,49 @@ static void build_qt_scene(Scene *scene, const QT_Scene *desc)
             /* else mode 0: leave Vector unlinked → LINK_POSITION. */
             graph->connect(env->output("Color"), bg->input("Color"));
         }
+        else if (has_sky) {
+            /* Slice 2am: SkyTextureNode Color → Background Color.
+             * Cite shader_nodes.cpp NODE_DEFINE(SkyTextureNode). Default
+             * SOCKET is NODE_SKY_MULTIPLE_SCATTERING (Blender RNA NISHITA /
+             * MULTIPLE_SCATTERING). Vector unlinked → LINK_TEXTURE_GENERATED.
+             * Do not invert sun_rotation; simplify_settings wraps it. */
+            SkyTextureNode *sky = graph->create_node<SkyTextureNode>();
+            NodeSkyType st = NODE_SKY_MULTIPLE_SCATTERING;
+            switch (desc->world_sky_type) {
+                case 1: st = NODE_SKY_PREETHAM; break;
+                case 2: st = NODE_SKY_HOSEK; break;
+                case 3: st = NODE_SKY_MULTIPLE_SCATTERING; break;
+                case 4: st = NODE_SKY_SINGLE_SCATTERING; break;
+                default: st = NODE_SKY_MULTIPLE_SCATTERING; break;
+            }
+            sky->set_sky_type(st);
+            sky->set_sun_direction(make_float3(
+                desc->world_sky_sun_direction[0],
+                desc->world_sky_sun_direction[1],
+                desc->world_sky_sun_direction[2]));
+            sky->set_turbidity(desc->world_sky_turbidity);
+            sky->set_ground_albedo(desc->world_sky_ground_albedo);
+            sky->set_sun_disc(desc->world_sky_sun_disc != 0);
+            sky->set_sun_size(desc->world_sky_sun_size);
+            sky->set_sun_intensity(desc->world_sky_sun_intensity);
+            sky->set_sun_elevation(desc->world_sky_sun_elevation);
+            sky->set_sun_rotation(desc->world_sky_sun_rotation);
+            sky->set_altitude(desc->world_sky_altitude);
+            sky->set_air_density(desc->world_sky_air_density);
+            sky->set_aerosol_density(desc->world_sky_aerosol_density);
+            sky->set_ozone_density(desc->world_sky_ozone_density);
+            graph->connect(sky->output("Color"), bg->input("Color"));
+        }
         graph->connect(bg->output("Background"), graph->output()->input("Surface"));
         scene->default_background->set_graph(std::move(graph));
         scene->default_background->tag_update(scene);
 
-        if (has_env || color_nonzero) {
+        if (has_env || has_sky || color_nonzero) {
             BackgroundLight *bg_light = scene->create_node<BackgroundLight>();
             bg_light->set_use_mis(true);
-            bg_light->set_map_resolution(1024); /* Blender factory sample_map_resolution */
+            /* Env/Color: factory 1024 (2aa/2al). Sky AUTOMATIC leaves 0 so
+             * Cycles uses SkyTextureNode environment_res (512x256 + sun guiding). */
+            bg_light->set_map_resolution(has_sky ? 0 : 1024);
             {
                 array<Node *> used;
                 used.push_back_slow(scene->default_background);

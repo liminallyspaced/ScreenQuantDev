@@ -43,7 +43,10 @@
 # Slice 2al: world Background Color constant ABI (world_color float3).
 #   Unlinked non-black Color, ShaderNodeRGB, MixRGB/Mix FLOAT constants,
 #   Value/Math → Color as grey. TEX_ENVIRONMENT still wins (color stays 0).
-#   Sky/Nishita/TEX_IMAGE/Noise/RGB Curves/spatially-varying Mix still refuse.
+# Slice 2am: ShaderNodeTexSky → Background Color (world_sky_* after world_color).
+#   type 0 = 2al/2aa. 1=PREETHAM 2=HOSEK 3=NISHITA/MULTIPLE 4=SINGLE.
+#   Path empty, world_color zeros. Unlinked Vector only.
+#   Linked Sky Vector / TEX_IMAGE→Color / Noise / RGB Curves still refuse.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -1741,11 +1744,95 @@ def _rgb_from_sock_or_node(from_node, from_sock):
     return (float(dv[0]), float(dv[1]), float(dv[2]))
 
 
+def _world_sky_empty():
+    """Slice 2am zeros — type 0 keeps 2al/2aa bit-identical."""
+    return {
+        "world_sky_type": 0,
+        "world_sky_sun_direction": (0.0, 0.0, 0.0),
+        "world_sky_turbidity": 0.0,
+        "world_sky_ground_albedo": 0.0,
+        "world_sky_sun_disc": 0,
+        "world_sky_sun_size": 0.0,
+        "world_sky_sun_intensity": 0.0,
+        "world_sky_sun_elevation": 0.0,
+        "world_sky_sun_rotation": 0.0,
+        "world_sky_altitude": 0.0,
+        "world_sky_air_density": 0.0,
+        "world_sky_aerosol_density": 0.0,
+        "world_sky_ozone_density": 0.0,
+    }
+
+
+def _pack_world_sky_from_node(node) -> dict:
+    """Pack ShaderNodeTexSky RNA into world_sky_* (Slice 2am).
+
+    Unlinked Vector only. Blender 5.2 sky_type default is MULTIPLE_SCATTERING
+    (legacy RNA NISHITA maps here). dust_density is the older name for
+    aerosol_density.
+    """
+    vec_sock = None
+    inputs = getattr(node, "inputs", None)
+    if inputs is not None:
+        for inp in list(inputs):
+            ident = str(getattr(inp, "identifier", "") or "")
+            name = str(getattr(inp, "name", "") or "")
+            if ident == "Vector" or name == "Vector":
+                vec_sock = inp
+                break
+        if vec_sock is None:
+            getter = getattr(inputs, "get", None)
+            vec_sock = getter("Vector") if callable(getter) else None
+    if vec_sock is not None and getattr(vec_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            "world Background Color TEX_SKY Vector linked refused "
+            "(Slice 2am: unlinked Vector / ShaderNodeTexSky only; "
+            "TEX_COORD/Noise/RGB Curves/TEX_IMAGE→Color still refuse)"
+        )
+    rna = str(getattr(node, "sky_type", "") or "").upper()
+    if rna in ("NISHITA", "MULTIPLE_SCATTERING"):
+        sky_type = 3
+    elif rna in ("HOSEK_WILKIE", "HOSEK"):
+        sky_type = 2
+    elif rna == "PREETHAM":
+        sky_type = 1
+    elif rna == "SINGLE_SCATTERING":
+        sky_type = 4
+    else:
+        raise QuantTraceSyncError(
+            f"world Background Color TEX_SKY sky_type {rna!r} refused "
+            "(Slice 2am: PREETHAM/HOSEK_WILKIE/NISHITA/MULTIPLE_SCATTERING/"
+            "SINGLE_SCATTERING)"
+        )
+    sd = getattr(node, "sun_direction", (0.0, 0.0, 1.0))
+    try:
+        sun_dir = (float(sd[0]), float(sd[1]), float(sd[2]))
+    except (TypeError, IndexError):
+        sun_dir = (0.0, 0.0, 1.0)
+    aerosol = getattr(node, "aerosol_density", None)
+    if aerosol is None:
+        aerosol = getattr(node, "dust_density", 1.0)
+    return {
+        "world_sky_type": int(sky_type),
+        "world_sky_sun_direction": sun_dir,
+        "world_sky_turbidity": float(getattr(node, "turbidity", 2.2)),
+        "world_sky_ground_albedo": float(getattr(node, "ground_albedo", 0.3)),
+        "world_sky_sun_disc": 1 if bool(getattr(node, "sun_disc", True)) else 0,
+        "world_sky_sun_size": float(getattr(node, "sun_size", 0.009512)),
+        "world_sky_sun_intensity": float(getattr(node, "sun_intensity", 1.0)),
+        "world_sky_sun_elevation": float(getattr(node, "sun_elevation", 0.0)),
+        "world_sky_sun_rotation": float(getattr(node, "sun_rotation", 0.0)),
+        "world_sky_altitude": float(getattr(node, "altitude", 100.0)),
+        "world_sky_air_density": float(getattr(node, "air_density", 1.0)),
+        "world_sky_aerosol_density": float(aerosol if aerosol is not None else 1.0),
+        "world_sky_ozone_density": float(getattr(node, "ozone_density", 1.0)),
+    }
+
+
 def _world_color_from_linked(from_node, from_sock):
     """Resolve a linked Background Color source to constant RGB (Slice 2al).
 
     TEX_ENVIRONMENT is not folded here — caller keeps the env path and
-    leaves world_color at (0,0,0).
+    leaves world_color at (0,0,0). TEX_SKY is packed by the caller (Slice 2am).
     """
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "RGB":
@@ -1766,12 +1853,13 @@ def _world_color_from_linked(from_node, from_sock):
     raise QuantTraceSyncError(
         f"world Background Color linked from {ntype!r} refused "
         "(Slice 2al: RGB/Mix/MixRGB/Value/Math/unlinked or TEX_ENVIRONMENT; "
-        "Sky/Nishita/TEX_IMAGE/Noise/RGB Curves/spatially-varying Mix still refuse)"
+        "Slice 2am TEX_SKY; TEX_IMAGE/Noise/RGB Curves/spatially-varying Mix "
+        "still refuse)"
     )
 
 
 def _world_info(scene) -> dict:
-    """Pack world Background + optional Environment Texture (Slice 2aa/2ac/2ah/2ai/2aj/2ak/2al).
+    """Pack world Background + optional Environment Texture / Sky (2aa/2al/2am).
 
     Returns dict:
       world_strength: float
@@ -1781,12 +1869,15 @@ def _world_info(scene) -> dict:
       world_projection: int (0=EQUIRECTANGULAR, 1=MIRROR_BALL)
       world_tex_vector_mode: int (QT_TEX_VECTOR_*; 0 = unlinked LINK_POSITION)
       world_map_location / rotation / scale / type: Mapping constants (Slice 2ac)
+      world_sky_*: Slice 2am Sky Texture (type 0 = none)
 
-    Empty path keeps locked-cube black worlds bit-identical when world_color is 0.
+    Empty path keeps locked-cube black worlds bit-identical when world_color is 0
+    and world_sky_type is 0.
     Slice 2al: unlinked Color (incl. non-black), ShaderNodeRGB, MixRGB / Mix
     FLOAT constants, Value/Math → Color as grey. TEX_ENVIRONMENT still wins
-    (world_color stays 0,0,0). Sky/Nishita/TEX_IMAGE/Noise/RGB Curves /
-    spatially-varying Mix refuse Slice 2al.
+    (world_color stays 0,0,0). Slice 2am: ShaderNodeTexSky (unlinked Vector)
+    packs world_sky_* (path empty, color zeros). TEX_IMAGE/Noise/RGB Curves /
+    spatially-varying Mix / linked Sky Vector refuse.
     Slice 2ac: Vector may be TEX_COORD Generated/Object/Camera/Window/Reflection
     or Mapping(VECTOR, unlinked L/R/S) ← TEX_COORD (same graph shapes as mesh
     TEX_IMAGE). UV accepted for ABI parity but uncommon on env. Other shapes
@@ -1808,6 +1899,7 @@ def _world_info(scene) -> dict:
         "world_map_rotation": (0.0, 0.0, 0.0),
         "world_map_scale": (1.0, 1.0, 1.0),
         "world_map_type": 2,
+        **_world_sky_empty(),
     }
     world = getattr(scene, "world", None)
     if world is None:
@@ -1839,15 +1931,23 @@ def _world_info(scene) -> dict:
             "world_strength": strength,
             "world_color": world_color,
         }
-    # Color linked — TEX_ENVIRONMENT (2aa) or constant RGB/Mix/Value/Math (2al).
+    # Color linked — TEX_ENVIRONMENT (2aa), TEX_SKY (2am), or RGB/Mix (2al).
     links = list(getattr(color_sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
-            "world Background Color multi-link refused (Slice 2aa/2al)"
+            "world Background Color multi-link refused (Slice 2aa/2al/2am)"
         )
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
     ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype == "TEX_SKY":
+        sky = _pack_world_sky_from_node(from_node)
+        return {
+            **empty,
+            "world_strength": strength,
+            "world_color": (0.0, 0.0, 0.0),
+            **sky,
+        }
     if ntype != "TEX_ENVIRONMENT":
         world_color = _world_color_from_linked(from_node, from_sock)
         return {
@@ -1974,6 +2074,7 @@ def _world_info(scene) -> dict:
         "world_map_scale": map_scale,
         "world_map_type": map_type,
         "world_ob_ref": world_ob_ref,
+        **_world_sky_empty(),
     }
 
 
@@ -3027,6 +3128,19 @@ def make_qt_simple_scene_type():
             ("world_ob_use_transform", ctypes.c_int),
             ("world_ob_tfm", ctypes.c_float * 12),
             ("world_color", ctypes.c_float * 3),
+            ("world_sky_type", ctypes.c_int),
+            ("world_sky_sun_direction", ctypes.c_float * 3),
+            ("world_sky_turbidity", ctypes.c_float),
+            ("world_sky_ground_albedo", ctypes.c_float),
+            ("world_sky_sun_disc", ctypes.c_int),
+            ("world_sky_sun_size", ctypes.c_float),
+            ("world_sky_sun_intensity", ctypes.c_float),
+            ("world_sky_sun_elevation", ctypes.c_float),
+            ("world_sky_sun_rotation", ctypes.c_float),
+            ("world_sky_altitude", ctypes.c_float),
+            ("world_sky_air_density", ctypes.c_float),
+            ("world_sky_aerosol_density", ctypes.c_float),
+            ("world_sky_ozone_density", ctypes.c_float),
             ("exr_path", ctypes.c_char_p),
             ("uvs", ctypes.POINTER(ctypes.c_float)),
             ("image_path", ctypes.c_char_p),
@@ -3286,6 +3400,21 @@ def _fill_world_vec_ctypes(desc, packed):
     wc = packed.get("world_color") or (0.0, 0.0, 0.0)
     for i, v in enumerate(wc[:3]):
         desc.world_color[i] = float(v)
+    desc.world_sky_type = int(packed.get("world_sky_type", 0) or 0)
+    sd = packed.get("world_sky_sun_direction") or (0.0, 0.0, 0.0)
+    for i, v in enumerate(sd[:3]):
+        desc.world_sky_sun_direction[i] = float(v)
+    desc.world_sky_turbidity = float(packed.get("world_sky_turbidity", 0.0) or 0.0)
+    desc.world_sky_ground_albedo = float(packed.get("world_sky_ground_albedo", 0.0) or 0.0)
+    desc.world_sky_sun_disc = int(packed.get("world_sky_sun_disc", 0) or 0)
+    desc.world_sky_sun_size = float(packed.get("world_sky_sun_size", 0.0) or 0.0)
+    desc.world_sky_sun_intensity = float(packed.get("world_sky_sun_intensity", 0.0) or 0.0)
+    desc.world_sky_sun_elevation = float(packed.get("world_sky_sun_elevation", 0.0) or 0.0)
+    desc.world_sky_sun_rotation = float(packed.get("world_sky_sun_rotation", 0.0) or 0.0)
+    desc.world_sky_altitude = float(packed.get("world_sky_altitude", 0.0) or 0.0)
+    desc.world_sky_air_density = float(packed.get("world_sky_air_density", 0.0) or 0.0)
+    desc.world_sky_aerosol_density = float(packed.get("world_sky_aerosol_density", 0.0) or 0.0)
+    desc.world_sky_ozone_density = float(packed.get("world_sky_ozone_density", 0.0) or 0.0)
 
 def to_ctypes(packed: dict, QT_SimpleScene, exr_path: Optional[str] = None):
     """Build a QT_SimpleScene + keep-alive buffers from pack_simple_scene output."""
@@ -3639,6 +3768,19 @@ def make_qt_scene_types():
             ("world_ob_use_transform", ctypes.c_int),
             ("world_ob_tfm", ctypes.c_float * 12),
             ("world_color", ctypes.c_float * 3),
+            ("world_sky_type", ctypes.c_int),
+            ("world_sky_sun_direction", ctypes.c_float * 3),
+            ("world_sky_turbidity", ctypes.c_float),
+            ("world_sky_ground_albedo", ctypes.c_float),
+            ("world_sky_sun_disc", ctypes.c_int),
+            ("world_sky_sun_size", ctypes.c_float),
+            ("world_sky_sun_intensity", ctypes.c_float),
+            ("world_sky_sun_elevation", ctypes.c_float),
+            ("world_sky_sun_rotation", ctypes.c_float),
+            ("world_sky_altitude", ctypes.c_float),
+            ("world_sky_air_density", ctypes.c_float),
+            ("world_sky_aerosol_density", ctypes.c_float),
+            ("world_sky_ozone_density", ctypes.c_float),
             ("exr_path", ctypes.c_char_p),
         ]
 
