@@ -68,6 +68,12 @@
  *   Optional nested NormalMap / Bump (NormalMap → Bump.Normal when both
  *   paths set). Cite BevelNode (set_samples, set_radius) + KERNEL_FEATURE
  *   NODE_RAYTRACE. bevel_enable=0 keeps 2ay/2x/2j bit-identical.
+ * Slice 2ba: RGBRampNode → Principled.Roughness (rough_ramp_*).
+ * Slice 2bb: NoiseTextureNode → RGBRampNode Fac (rough_ramp_noise_*).
+ *   enable=0 keeps 2ba bit-identical. Cite shader_nodes NoiseTextureNode
+ *   (set_dimensions, set_type, set_use_normalize, set_scale, set_detail,
+ *   set_roughness, set_lacunarity, set_distortion, set_w, set_offset,
+ *   set_gain). Vector unlinked LINK_TEXTURE_GENERATED. Fac or Color.
  * Slice 2ap: BrightContrastNode on world Color (world_bright / world_contrast).
  *   Identity (bright=0, contrast=0) skips — 2ao/2an/2am/2aa/2al bit-identical.
  *   Loft: Color → Gamma → HSV → BrightContrast → Background. Cite
@@ -329,6 +335,20 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->rough_ramp_n = 0;
     d->rough_ramp_interpolate = 1;
     d->rough_ramp_fac = 0.5f;
+    /* Slice 2bb identity — enable=0 skips NoiseTextureNode (2ba bit-identical). */
+    d->rough_ramp_noise_enable = 0;
+    d->rough_ramp_noise_dimensions = 3;
+    d->rough_ramp_noise_type = QT_NOISE_FBM;
+    d->rough_ramp_noise_normalize = 1;
+    d->rough_ramp_noise_w = 0.0f;
+    d->rough_ramp_noise_scale = 5.0f;
+    d->rough_ramp_noise_detail = 2.0f;
+    d->rough_ramp_noise_roughness = 0.5f;
+    d->rough_ramp_noise_lacunarity = 2.0f;
+    d->rough_ramp_noise_offset = 0.0f;
+    d->rough_ramp_noise_gain = 1.0f;
+    d->rough_ramp_noise_distortion = 0.0f;
+    d->rough_ramp_noise_use_color = 0;
     /* Slice 2ap identity — bright=0 contrast=0 (memset is fine; set explicit). */
     d->world_bright = 0.0f;
     d->world_contrast = 0.0f;
@@ -627,6 +647,20 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->rough_ramp_n = s->rough_ramp_n;
     mesh->rough_ramp_interpolate = s->rough_ramp_interpolate;
     mesh->rough_ramp_fac = s->rough_ramp_fac;
+    /* Slice 2bb: Noise → ColorRamp.Fac. */
+    mesh->rough_ramp_noise_enable = s->rough_ramp_noise_enable;
+    mesh->rough_ramp_noise_dimensions = s->rough_ramp_noise_dimensions;
+    mesh->rough_ramp_noise_type = s->rough_ramp_noise_type;
+    mesh->rough_ramp_noise_normalize = s->rough_ramp_noise_normalize;
+    mesh->rough_ramp_noise_w = s->rough_ramp_noise_w;
+    mesh->rough_ramp_noise_scale = s->rough_ramp_noise_scale;
+    mesh->rough_ramp_noise_detail = s->rough_ramp_noise_detail;
+    mesh->rough_ramp_noise_roughness = s->rough_ramp_noise_roughness;
+    mesh->rough_ramp_noise_lacunarity = s->rough_ramp_noise_lacunarity;
+    mesh->rough_ramp_noise_offset = s->rough_ramp_noise_offset;
+    mesh->rough_ramp_noise_gain = s->rough_ramp_noise_gain;
+    mesh->rough_ramp_noise_distortion = s->rough_ramp_noise_distortion;
+    mesh->rough_ramp_noise_use_color = s->rough_ramp_noise_use_color;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -953,7 +987,9 @@ static bool mesh_uses_generated(const QT_Mesh *m)
            tex_mode_is_generated(m->aniso_tex_vector_mode) ||
            tex_mode_is_generated(m->aniso_rot_tex_vector_mode) ||
            tex_mode_is_generated(m->tangent_tex_vector_mode) ||
-           tex_mode_is_generated(m->bump_tex_vector_mode);
+           tex_mode_is_generated(m->bump_tex_vector_mode) ||
+           /* Slice 2bb: NoiseTextureNode Vector LINK_TEXTURE_GENERATED. */
+           (m->rough_ramp_noise_enable != 0);
 }
 
 /* Blender Generated / orco: map object-local verts through the auto texspace
@@ -1186,9 +1222,10 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             graph->connect(cur, bsdf->input("Base Color"));
         }
     }
-    /* Slice 2ba: ColorRamp → Principled.Roughness.
+    /* Slice 2ba/2bb: ColorRamp → Principled.Roughness.
      * n>0: RGBRampNode LUT (official colorramp_to_array size+1=257).
-     * Fac ← TEX_IMAGE Color when rough_image_path nonempty, else set_fac.
+     * Fac: NoiseTextureNode (2bb enable≠0) else TEX_IMAGE Color (2ba)
+     * else set_fac. enable=0 keeps 2ba bit-identical.
      * Color → Roughness via NODE_CONVERT_CF (same as 2i Color→float).
      * n==0 + image: keep 2i (image → Roughness directly). */
     if (m->rough_ramp_n > 0 && m->rough_ramp != nullptr) {
@@ -1205,7 +1242,33 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         ramp->set_ramp(ramp_c);
         ramp->set_ramp_alpha(ramp_a);
         ramp->set_interpolate(m->rough_ramp_interpolate != 0);
-        if (m->rough_image_path && m->rough_image_path[0]) {
+        if (m->rough_ramp_noise_enable != 0) {
+            /* Cite intern/cycles/scene/shader_nodes.cpp NODE_DEFINE(NoiseTextureNode).
+             * Vector unlinked → LINK_TEXTURE_GENERATED (Cycles default). */
+            NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+            int dims = m->rough_ramp_noise_dimensions;
+            if (dims < 1 || dims > 4) {
+                dims = 3;
+            }
+            noise->set_dimensions(dims);
+            noise->set_type(static_cast<NodeNoiseType>(m->rough_ramp_noise_type));
+            noise->set_use_normalize(m->rough_ramp_noise_normalize != 0);
+            noise->set_w(m->rough_ramp_noise_w);
+            noise->set_scale(m->rough_ramp_noise_scale);
+            noise->set_detail(m->rough_ramp_noise_detail);
+            noise->set_roughness(m->rough_ramp_noise_roughness);
+            noise->set_lacunarity(m->rough_ramp_noise_lacunarity);
+            noise->set_offset(m->rough_ramp_noise_offset);
+            noise->set_gain(m->rough_ramp_noise_gain);
+            noise->set_distortion(m->rough_ramp_noise_distortion);
+            if (m->rough_ramp_noise_use_color != 0) {
+                graph->connect(noise->output("Color"), ramp->input("Fac"));
+            }
+            else {
+                graph->connect(noise->output("Fac"), ramp->input("Fac"));
+            }
+        }
+        else if (m->rough_image_path && m->rough_image_path[0]) {
             ImageTextureNode *img = wire_tex_image(
                 graph.get(), m, m->rough_image_path, m->rough_image_colorspace,
                 m->rough_tex_vector_mode, m->rough_map_location, m->rough_map_rotation,

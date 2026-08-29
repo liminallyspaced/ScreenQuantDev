@@ -544,6 +544,25 @@ typedef struct QT_SimpleScene {
   int rough_ramp_n;
   int rough_ramp_interpolate;
   float rough_ramp_fac;
+  /* Slice 2bb: NoiseTextureNode -> RGBRampNode Fac. enable=0 keeps 2ba
+   * bit-identical (unlinked Fac float or TEX_IMAGE Color).
+   * Vector unlinked Generated (LINK_TEXTURE_GENERATED). Pack Blender 5.2
+   * RNA that Cycles uses: dimensions 1..4, type NodeNoiseType, normalize,
+   * W/Scale/Detail/Roughness/Lacunarity/Offset/Gain/Distortion unlinked.
+   * use_color 0 = Fac, 1 = Color (NODE_CONVERT_CF). */
+  int rough_ramp_noise_enable;
+  int rough_ramp_noise_dimensions;
+  int rough_ramp_noise_type;
+  int rough_ramp_noise_normalize;
+  float rough_ramp_noise_w;
+  float rough_ramp_noise_scale;
+  float rough_ramp_noise_detail;
+  float rough_ramp_noise_roughness;
+  float rough_ramp_noise_lacunarity;
+  float rough_ramp_noise_offset;
+  float rough_ramp_noise_gain;
+  float rough_ramp_noise_distortion;
+  int rough_ramp_noise_use_color;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -868,6 +887,25 @@ typedef struct QT_Mesh {
   int rough_ramp_n;
   int rough_ramp_interpolate;
   float rough_ramp_fac;
+  /* Slice 2bb: NoiseTextureNode -> RGBRampNode Fac. enable=0 keeps 2ba
+   * bit-identical (unlinked Fac float or TEX_IMAGE Color).
+   * Vector unlinked Generated (LINK_TEXTURE_GENERATED). Pack Blender 5.2
+   * RNA that Cycles uses: dimensions 1..4, type NodeNoiseType, normalize,
+   * W/Scale/Detail/Roughness/Lacunarity/Offset/Gain/Distortion unlinked.
+   * use_color 0 = Fac, 1 = Color (NODE_CONVERT_CF). */
+  int rough_ramp_noise_enable;
+  int rough_ramp_noise_dimensions;
+  int rough_ramp_noise_type;
+  int rough_ramp_noise_normalize;
+  float rough_ramp_noise_w;
+  float rough_ramp_noise_scale;
+  float rough_ramp_noise_detail;
+  float rough_ramp_noise_roughness;
+  float rough_ramp_noise_lacunarity;
+  float rough_ramp_noise_offset;
+  float rough_ramp_noise_gain;
+  float rough_ramp_noise_distortion;
+  int rough_ramp_noise_use_color;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
@@ -875,6 +913,13 @@ typedef struct QT_Mesh {
 #define QT_LIGHT_POINT 1
 #define QT_LIGHT_SUN   2
 #define QT_LIGHT_SPOT  3
+
+/* Slice 2bb: NodeNoiseType (kernel/svm/types.h order). */
+#define QT_NOISE_MULTIFRACTAL           0
+#define QT_NOISE_FBM                    1
+#define QT_NOISE_HYBRID_MULTIFRACTAL    2
+#define QT_NOISE_RIDGED_MULTIFRACTAL    3
+#define QT_NOISE_HETERO_TERRAIN         4
 
 /* TEX_IMAGE Vector graph (Slice 2h) */
 #define QT_TEX_VECTOR_UNLINKED              0 /* default UV via unlinked Vector */

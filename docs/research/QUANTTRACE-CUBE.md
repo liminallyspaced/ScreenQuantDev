@@ -138,6 +138,10 @@ Fix: pack `is_sphere = !use_soft_falloff` (was always true). Native `0.0.6-slice
 Still-life 256² 1px noise-class residue unchanged. No Classroom/loft claims.
 
 
+## Slice 2bb (2026-08-29)
+
+Noise → ColorRamp.Fac → Principled.Roughness gate PASS (32²/4 Δmax 3.28e-5; 256²/128 Δmax 6.44e-6). Native `0.0.55-slice2bb`. See `native/quanttrace/SLICE2.md`.
+
 ## Slice 2ba (2026-08-29)
 
 ColorRamp → Principled.Roughness gate PASS (32²/4 Δmax 4.77e-7; 256²/128 Δmax 7.15e-7). Native `0.0.54-slice2ba`. See `native/quanttrace/SLICE2.md`.

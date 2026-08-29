@@ -1,6 +1,30 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2ba landed** (2026-08-29 5pm PlugWalk ET). ColorRamp → Principled.Roughness (`rough_ramp` / `rough_ramp_alpha` / `rough_ramp_n` / `rough_ramp_interpolate` / `rough_ramp_fac` after `bevel_radius`). Official `colorramp_to_array` LUT **257** (RAMP_TABLE_SIZE+1; evaluate i/256). Fac unlinked float OR Fac ← TEX_IMAGE (reuse `rough_image_*`). n==0 skips RGBRampNode — 2az/2i bit-identical. Connect Color → Roughness (NODE_CONVERT_CF). Loft Plane ColorRamp (LINEAR, Color out, 2 stops, Fac←Noise) recognized then named-refuse Fac. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.54-slice2ba`. Addon `0.3.3`.
+Status: **Slice 2bb landed** (2026-08-29 6pm PlugWalk ET). NoiseTextureNode → RGBRampNode Fac → Principled.Roughness (`rough_ramp_noise_*` after `rough_ramp_fac`). enable=0 keeps 2ba bit-identical (Fac float or TEX_IMAGE). Pack Blender 5.2 RNA Cycles uses (dimensions, type, normalize, W/Scale/Detail/Roughness/Lacunarity/Offset/Gain/Distortion); Vector unlinked Generated. Loft Plane census: 3D FBM normalize, Fac out, Scale=150 Detail=16 Distortion=0.2, identity mapping; 854 loft Noise→ColorRamp Fac all unlinked. Named refuse Fresnel/LayerWeight/GROUP/Mix/linked Vector. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.55-slice2bb`. Addon `0.3.3`.
+
+## Slice 2bb — Noise → ColorRamp.Fac → Principled.Roughness (2026-08-29 6pm ET)
+
+Loft census (object `Plane` / material `0`, first PACK_FAIL after 2ba): ShaderNodeTexNoise **3D FBM** normalize=True, Factor out, Vector unlinked Generated (identity TexMapping POINT loc0/rot0/scale1). Unlinked: W=0 Scale=**150** Detail=**16** Roughness=0.5 Lacunarity=2 Offset=0 Gain=1 Distortion=**0.2**. 854 Noise→ColorRamp.Fac on Roughness; 838 share Scale=5 Detail=16 Roughness=0 Distortion=0; 16 share Plane Scale=150. All float inputs unlinked — packer packs full RNA subset, no bake.
+
+Cite Cycles `shader_nodes.cpp` NODE_DEFINE(NoiseTextureNode): LINK_TEXTURE_GENERATED Vector, NODE_NOISE_FBM, use_normalize. Native fills ATTR_STD_GENERATED when enable≠0. Color out accepted (NODE_CONVERT_CF). Linked Vector / non-identity texture_mapping / linked Scale etc. refuse by name.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| noise CLAIM (Plane) | 32²/4 | 3.28e-5 | 1.94e-7 | 0 | **PASS** |
+| noise CLAIM (Plane) | 256²/128 | 6.44e-6 | 3.98e-8 | 0 | **PASS** |
+| ramp 2ba | 32²/4 | 4.77e-7 | 6.32e-9 | 0 | **PASS** |
+| fac_unlinked 2ba | 32²/4 | 3.58e-7 | 7.49e-9 | 0 | **PASS** |
+| tex 2i | 32²/4 | 3.58e-7 | 6.71e-9 | 0 | **PASS** |
+| live noise vs fac_unlinked | 32²/4 | 0.0590 | 5.74e-4 | 61 | graph live |
+| fresnel Fac | — | — | — | — | **REFUSE** Slice 2bb |
+| mix Fac | — | — | — | — | **REFUSE** Slice 2bb |
+| linked Noise Vector | — | — | — | — | **REFUSE** Slice 2bb |
+
+Loft pack: Plane ColorRamp.Fac←Noise cleared. First PACK_FAIL `Principled.Normal Bump Height link is not TEX_IMAGE (Slice 2f/2h/2i)`. Next: Invert/SEPARATE_COLOR/GROUP on leftover sockets, Bump Height non-TEX_IMAGE, Fresnel-Fac Mix / Botaniq. Not loft Session Δmax.
+
+ABI: `rough_ramp_noise_enable` / `dimensions` / `type` / `normalize` / `w` / `scale` / `detail` / `roughness` / `lacunarity` / `offset` / `gain` / `distortion` / `use_color` after `rough_ramp_fac` on `QT_Mesh` + `QT_SimpleScene`. enable=0 skips NoiseTextureNode. Native `0.0.55-slice2bb`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-noise-colorramp-rough-32-pair.png`. Tools `_quanttrace_slice2bb_scene/smoke.py`.
 
 ## Slice 2ba — ColorRamp → Principled.Roughness (2026-08-29 5pm ET)
 

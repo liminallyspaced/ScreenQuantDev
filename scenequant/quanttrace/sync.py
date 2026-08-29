@@ -767,15 +767,166 @@ def _empty_bevel_info() -> dict:
     }
 
 
+def _empty_rough_ramp_noise_info() -> dict:
+    """Slice 2bb identity — enable=0 skips NoiseTextureNode (2ba bit-identical)."""
+    return {
+        "rough_ramp_noise_enable": 0,
+        "rough_ramp_noise_dimensions": 3,
+        "rough_ramp_noise_type": 1,  # QT_NOISE_FBM
+        "rough_ramp_noise_normalize": 1,
+        "rough_ramp_noise_w": 0.0,
+        "rough_ramp_noise_scale": 5.0,  # Blender 5.2 RNA default; unused when enable=0
+        "rough_ramp_noise_detail": 2.0,
+        "rough_ramp_noise_roughness": 0.5,
+        "rough_ramp_noise_lacunarity": 2.0,
+        "rough_ramp_noise_offset": 0.0,
+        "rough_ramp_noise_gain": 1.0,
+        "rough_ramp_noise_distortion": 0.0,
+        "rough_ramp_noise_use_color": 0,
+    }
+
+
+_QT_NOISE_TYPE = {
+    "MULTIFRACTAL": 0,
+    "FBM": 1,
+    "HYBRID_MULTIFRACTAL": 2,
+    "RIDGED_MULTIFRACTAL": 3,
+    "HETERO_TERRAIN": 4,
+}
+_QT_NOISE_DIM = {"1D": 1, "2D": 2, "3D": 3, "4D": 4}
+
+
 def _empty_rough_ramp_info() -> dict:
-    """Slice 2ba: no ColorRamp — 2i TEX_IMAGE / constant roughness."""
+    """Slice 2ba/2bb: no ColorRamp — 2i TEX_IMAGE / constant roughness."""
     return {
         "rough_ramp": [],
         "rough_ramp_alpha": [],
         "rough_ramp_n": 0,
         "rough_ramp_interpolate": 1,
         "rough_ramp_fac": 0.5,
+        **_empty_rough_ramp_noise_info(),
     }
+
+
+def _require_unlinked_float_noise(node, names, label: str, ctx: str) -> float:
+    """Unlinked Noise socket constant. None-check — never `or` (0 valid)."""
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise.{label} "
+            f"has no inputs (Slice 2bb)"
+        )
+    sock = _sock_ident_or_name(inputs, *names)
+    if sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise.{label} "
+            f"missing (Slice 2bb)"
+        )
+    if getattr(sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise.{label} is linked "
+            f"refused (Slice 2bb: unlinked constants only)"
+        )
+    v = getattr(sock, "default_value", None)
+    if v is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise.{label} "
+            f"has no default_value (Slice 2bb)"
+        )
+    return float(v)
+
+
+def _noise_mapping_is_identity(node) -> bool:
+    """Blender TexMapping identity (loft Plane: POINT loc0 rot0 scale1)."""
+    tm = getattr(node, "texture_mapping", None)
+    if tm is None:
+        return True
+    loc = tuple(float(x) for x in (getattr(tm, "translation", (0.0, 0.0, 0.0)) or (0, 0, 0)))
+    rot = tuple(float(x) for x in (getattr(tm, "rotation", (0.0, 0.0, 0.0)) or (0, 0, 0)))
+    scale = tuple(float(x) for x in (getattr(tm, "scale", (1.0, 1.0, 1.0)) or (1, 1, 1)))
+    if any(abs(x) > 1e-8 for x in loc) or any(abs(x) > 1e-8 for x in rot):
+        return False
+    if any(abs(x - 1.0) > 1e-8 for x in scale):
+        return False
+    return True
+
+
+def _pack_noise_for_ramp_fac(fn, fs, ctx: str) -> dict:
+    """Slice 2bb: ShaderNodeTexNoise Factor/Color → ColorRamp.Fac.
+
+    Proven loft Plane subset: 3D FBM normalize, Vector unlinked Generated,
+    all float inputs unlinked. Packs full Blender 5.2 RNA Cycles uses
+    (dimensions, type, normalize, W/Scale/Detail/Roughness/Lacunarity/
+    Offset/Gain/Distortion). Linked Vector / non-identity texture_mapping
+    refuse by name.
+    """
+    out = _empty_rough_ramp_noise_info()
+    out_name = getattr(fs, "name", None) if fs is not None else None
+    out_ident = getattr(fs, "identifier", None) if fs is not None else None
+    names = {str(out_name or ""), str(out_ident or "")}
+    if names & {"Color", "color"}:
+        use_color = 1
+    elif names & {"Fac", "Factor", "fac"}:
+        use_color = 0
+    else:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise output "
+            f"{out_name!r} refused (Slice 2bb: Factor or Color only)"
+        )
+    inputs = getattr(fn, "inputs", None)
+    vec = _sock_ident_or_name(inputs, "Vector") if inputs is not None else None
+    if vec is not None and getattr(vec, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise Vector is linked "
+            f"refused (Slice 2bb: unlinked Generated default only)"
+        )
+    if not _noise_mapping_is_identity(fn):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise texture_mapping "
+            f"refused (Slice 2bb: identity mapping only)"
+        )
+    dims_s = str(getattr(fn, "noise_dimensions", "3D") or "3D")
+    dims = _QT_NOISE_DIM.get(dims_s)
+    if dims is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise dimensions "
+            f"{dims_s!r} refused (Slice 2bb)"
+        )
+    type_s = str(getattr(fn, "noise_type", "FBM") or "FBM")
+    ntype = _QT_NOISE_TYPE.get(type_s)
+    if ntype is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac Noise type "
+            f"{type_s!r} refused (Slice 2bb)"
+        )
+    out["rough_ramp_noise_enable"] = 1
+    out["rough_ramp_noise_dimensions"] = dims
+    out["rough_ramp_noise_type"] = ntype
+    out["rough_ramp_noise_normalize"] = 1 if bool(getattr(fn, "normalize", True)) else 0
+    out["rough_ramp_noise_w"] = _require_unlinked_float_noise(fn, ("W",), "W", ctx)
+    out["rough_ramp_noise_scale"] = _require_unlinked_float_noise(
+        fn, ("Scale",), "Scale", ctx
+    )
+    out["rough_ramp_noise_detail"] = _require_unlinked_float_noise(
+        fn, ("Detail",), "Detail", ctx
+    )
+    out["rough_ramp_noise_roughness"] = _require_unlinked_float_noise(
+        fn, ("Roughness",), "Roughness", ctx
+    )
+    out["rough_ramp_noise_lacunarity"] = _require_unlinked_float_noise(
+        fn, ("Lacunarity",), "Lacunarity", ctx
+    )
+    out["rough_ramp_noise_offset"] = _require_unlinked_float_noise(
+        fn, ("Offset",), "Offset", ctx
+    )
+    out["rough_ramp_noise_gain"] = _require_unlinked_float_noise(
+        fn, ("Gain",), "Gain", ctx
+    )
+    out["rough_ramp_noise_distortion"] = _require_unlinked_float_noise(
+        fn, ("Distortion",), "Distortion", ctx
+    )
+    out["rough_ramp_noise_use_color"] = use_color
+    return out
 
 
 def _pack_color_ramp_lut(node) -> tuple:
@@ -804,7 +955,7 @@ def _pack_color_ramp_lut(node) -> tuple:
 
 
 def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
-    """Slice 2ba: peel REROUTE, ColorRamp LUT, Fac unlinked or TEX_IMAGE."""
+    """Slice 2ba/2bb: peel REROUTE, ColorRamp LUT, Fac unlinked / TEX_IMAGE / TEX_NOISE."""
     ctx = _mat_refuse_ctx(object_name, mat)
     empty_tex = _empty_tex_info()
     empty_ramp = _empty_rough_ramp_info()
@@ -836,6 +987,7 @@ def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
             "rough_ramp_n": n,
             "rough_ramp_interpolate": interpolate,
             "rough_ramp_fac": 0.5,
+            **_empty_rough_ramp_noise_info(),
         }
         fac_sock = None
         inputs = getattr(from_node, "inputs", None)
@@ -861,17 +1013,25 @@ def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
         if ftype == "TEX_IMAGE":
             tex = _tex_image_from_tex_node(fn, fs, "ColorRamp.Fac", ctx=ctx)
             return tex, ramp
+        if ftype in ("TEX_NOISE", "NOISE") or (
+            fn is not None
+            and getattr(fn, "bl_idname", "") == "ShaderNodeTexNoise"
+        ):
+            noise = _pack_noise_for_ramp_fac(fn, fs, ctx)
+            ramp.update(noise)
+            return empty_tex, ramp
         raise QuantTraceSyncError(
             f"{ctx} Principled.Roughness ColorRamp.Fac from {ftype!r} refused "
-            f"(Slice 2ba: unlinked Fac or TEX_IMAGE Color only; Noise/"
-            f"Fresnel/LayerWeight/GROUP/Mix still refuse)"
+            f"(Slice 2bb: unlinked Fac, TEX_IMAGE Color, or TEX_NOISE "
+            f"Factor/Color; Fresnel/LayerWeight/GROUP/Mix/linked Noise "
+            f"Vector still refuse)"
         )
     if ntype == "TEX_IMAGE":
         tex = _tex_image_from_tex_node(from_node, from_sock, "Roughness", ctx=ctx)
         return tex, empty_ramp
     raise QuantTraceSyncError(
         f"{ctx} Principled.Roughness from {ntype!r} refused "
-        f"(Slice 2ba: ColorRamp or TEX_IMAGE Color only)"
+        f"(Slice 2bb: ColorRamp or TEX_IMAGE Color only)"
     )
 
 
@@ -1829,7 +1989,8 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
     base_tex, base_gh, peeled_rgb = _base_color_tex_and_gh(
         base_sock, object_name=object_name, mat=mat
     )
-    # Slice 2ba: Roughness peels REROUTE then ColorRamp or TEX_IMAGE.
+    # Slice 2ba/2bb: Roughness peels REROUTE then ColorRamp (Fac unlinked /
+    # TEX_IMAGE / TEX_NOISE) or TEX_IMAGE.
     _rname, rough_sock = _input_by_names(bsdf, "Roughness")
     if rough_sock is not None and getattr(rough_sock, "is_linked", False):
         rough_tex, rough_ramp = _roughness_tex_and_ramp(
@@ -4013,6 +4174,71 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "rough_ramp_fac": float(
             pr["rough_ramp_fac"] if pr.get("rough_ramp_fac") is not None else 0.5
         ),
+        "rough_ramp_noise_enable": int(
+            pr["rough_ramp_noise_enable"]
+            if pr.get("rough_ramp_noise_enable") is not None
+            else 0
+        ),
+        "rough_ramp_noise_dimensions": int(
+            pr["rough_ramp_noise_dimensions"]
+            if pr.get("rough_ramp_noise_dimensions") is not None
+            else 3
+        ),
+        "rough_ramp_noise_type": int(
+            pr["rough_ramp_noise_type"]
+            if pr.get("rough_ramp_noise_type") is not None
+            else 1
+        ),
+        "rough_ramp_noise_normalize": int(
+            pr["rough_ramp_noise_normalize"]
+            if pr.get("rough_ramp_noise_normalize") is not None
+            else 1
+        ),
+        "rough_ramp_noise_w": float(
+            pr["rough_ramp_noise_w"]
+            if pr.get("rough_ramp_noise_w") is not None
+            else 0.0
+        ),
+        "rough_ramp_noise_scale": float(
+            pr["rough_ramp_noise_scale"]
+            if pr.get("rough_ramp_noise_scale") is not None
+            else 5.0
+        ),
+        "rough_ramp_noise_detail": float(
+            pr["rough_ramp_noise_detail"]
+            if pr.get("rough_ramp_noise_detail") is not None
+            else 2.0
+        ),
+        "rough_ramp_noise_roughness": float(
+            pr["rough_ramp_noise_roughness"]
+            if pr.get("rough_ramp_noise_roughness") is not None
+            else 0.5
+        ),
+        "rough_ramp_noise_lacunarity": float(
+            pr["rough_ramp_noise_lacunarity"]
+            if pr.get("rough_ramp_noise_lacunarity") is not None
+            else 2.0
+        ),
+        "rough_ramp_noise_offset": float(
+            pr["rough_ramp_noise_offset"]
+            if pr.get("rough_ramp_noise_offset") is not None
+            else 0.0
+        ),
+        "rough_ramp_noise_gain": float(
+            pr["rough_ramp_noise_gain"]
+            if pr.get("rough_ramp_noise_gain") is not None
+            else 1.0
+        ),
+        "rough_ramp_noise_distortion": float(
+            pr["rough_ramp_noise_distortion"]
+            if pr.get("rough_ramp_noise_distortion") is not None
+            else 0.0
+        ),
+        "rough_ramp_noise_use_color": int(
+            pr["rough_ramp_noise_use_color"]
+            if pr.get("rough_ramp_noise_use_color") is not None
+            else 0
+        ),
         "thin_wall": int(pr.get("thin_wall", 0) or 0),
         "transmission_weight": float(
             pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
@@ -4793,6 +5019,20 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     ramp_alpha_list = packed.get("rough_ramp_alpha") or []
     desc.rough_ramp_interpolate = _bi("rough_ramp_interpolate", 1)
     desc.rough_ramp_fac = _bf("rough_ramp_fac", 0.5)
+    # Slice 2bb: enable 0 / type 0 / scale 0 valid — never `or` on ints/floats.
+    desc.rough_ramp_noise_enable = _bi("rough_ramp_noise_enable", 0)
+    desc.rough_ramp_noise_dimensions = _bi("rough_ramp_noise_dimensions", 3)
+    desc.rough_ramp_noise_type = _bi("rough_ramp_noise_type", 1)
+    desc.rough_ramp_noise_normalize = _bi("rough_ramp_noise_normalize", 1)
+    desc.rough_ramp_noise_w = _bf("rough_ramp_noise_w", 0.0)
+    desc.rough_ramp_noise_scale = _bf("rough_ramp_noise_scale", 5.0)
+    desc.rough_ramp_noise_detail = _bf("rough_ramp_noise_detail", 2.0)
+    desc.rough_ramp_noise_roughness = _bf("rough_ramp_noise_roughness", 0.5)
+    desc.rough_ramp_noise_lacunarity = _bf("rough_ramp_noise_lacunarity", 2.0)
+    desc.rough_ramp_noise_offset = _bf("rough_ramp_noise_offset", 0.0)
+    desc.rough_ramp_noise_gain = _bf("rough_ramp_noise_gain", 1.0)
+    desc.rough_ramp_noise_distortion = _bf("rough_ramp_noise_distortion", 0.0)
+    desc.rough_ramp_noise_use_color = _bi("rough_ramp_noise_use_color", 0)
     if ramp_list and ramp_n > 0:
         flat = [float(v) for v in ramp_list]
         if len(flat) < ramp_n * 3:
@@ -5155,6 +5395,19 @@ def make_qt_simple_scene_type():
             ("rough_ramp_n", ctypes.c_int),
             ("rough_ramp_interpolate", ctypes.c_int),
             ("rough_ramp_fac", ctypes.c_float),
+            ("rough_ramp_noise_enable", ctypes.c_int),
+            ("rough_ramp_noise_dimensions", ctypes.c_int),
+            ("rough_ramp_noise_type", ctypes.c_int),
+            ("rough_ramp_noise_normalize", ctypes.c_int),
+            ("rough_ramp_noise_w", ctypes.c_float),
+            ("rough_ramp_noise_scale", ctypes.c_float),
+            ("rough_ramp_noise_detail", ctypes.c_float),
+            ("rough_ramp_noise_roughness", ctypes.c_float),
+            ("rough_ramp_noise_lacunarity", ctypes.c_float),
+            ("rough_ramp_noise_offset", ctypes.c_float),
+            ("rough_ramp_noise_gain", ctypes.c_float),
+            ("rough_ramp_noise_distortion", ctypes.c_float),
+            ("rough_ramp_noise_use_color", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -5580,6 +5833,19 @@ def make_qt_scene_types():
             ("rough_ramp_n", ctypes.c_int),
             ("rough_ramp_interpolate", ctypes.c_int),
             ("rough_ramp_fac", ctypes.c_float),
+            ("rough_ramp_noise_enable", ctypes.c_int),
+            ("rough_ramp_noise_dimensions", ctypes.c_int),
+            ("rough_ramp_noise_type", ctypes.c_int),
+            ("rough_ramp_noise_normalize", ctypes.c_int),
+            ("rough_ramp_noise_w", ctypes.c_float),
+            ("rough_ramp_noise_scale", ctypes.c_float),
+            ("rough_ramp_noise_detail", ctypes.c_float),
+            ("rough_ramp_noise_roughness", ctypes.c_float),
+            ("rough_ramp_noise_lacunarity", ctypes.c_float),
+            ("rough_ramp_noise_offset", ctypes.c_float),
+            ("rough_ramp_noise_gain", ctypes.c_float),
+            ("rough_ramp_noise_distortion", ctypes.c_float),
+            ("rough_ramp_noise_use_color", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):

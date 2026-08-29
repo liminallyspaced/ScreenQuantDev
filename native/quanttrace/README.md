@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.54-slice2ba` — ColorRamp → Principled.Roughness. Addon still `0.3.3`.
+**Current native:** `0.0.55-slice2bb` — Noise → ColorRamp.Fac → Principled.Roughness. Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.54-slice2ba` (ColorRamp → Principled.Roughness).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.55-slice2bb` (Noise → ColorRamp.Fac → Principled.Roughness).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -63,6 +63,7 @@ this tree never feeds Auto clocks.
 | **2as — RGB Curves → world Color** | **PASS** | rgb_curves 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **5.96e-7**. Native `0.0.46-slice2as`. |
 | **2at — 3-deep Math → world Strength** | **PASS** | math_nest3 (0.5×1.4)/1+0=0.7 32²/4 Δmax **2.16e-4**; 256²/128 Δmax **1.21e-4**. math_mul 2ai 32²/4 Δmax **4.25e-4**. rgb_curves/rgb_mix/rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.47-slice2at`. |
 | **2au — TEX_ENVIRONMENT×0 → world Strength** | **env_mul0 PASS; add20 HDR-MIS FAIL** | env_mul0 32²/4 Δmax **3.58e-7**. env_mul0_add20 loft ops=20 32²/4 Δmax **6.17e-3** (16 px) FAIL / 256²/128 Δmax **2.34e-2** (70 px) FAIL — same as unlinked Strength 20. math_nest3/math_mul/hdr/rgb/rgb_mix/rgb_curves/nishita/teximage 32²/4 PASS. Native `0.0.48-slice2au`. |
+| **2bb — Noise → ColorRamp.Fac → Roughness** | **PASS** | noise CLAIM Plane 32²/4 Δmax **3.28e-5**; 256²/128 Δmax **6.44e-6**. ramp/tex 2ba 32²/4 PASS. Loft Noise Fac cleared; PACK_FAIL Bump Height non-TEX_IMAGE. Native `0.0.55-slice2bb`. |
 | **2ba — ColorRamp → Principled.Roughness** | **PASS** | ramp CLAIM 32²/4 Δmax **4.77e-7**; 256²/128 Δmax **7.15e-7**. fac_unlinked 32²/4 Δmax **3.58e-7**. tex 2i 32²/4 Δmax **3.58e-7**. Loft ColorRamp accepted; PACK_FAIL ColorRamp.Fac←Noise on Plane. Native `0.0.54-slice2ba`. |
 | **2az — Bevel → Principled.Normal** | **PASS** | bevel 32²/4 Δmax **4.77e-6**; 256²/128 Δmax **2.26e-6**. loft-nest 32²/4 Δmax **1.06e-5**. Loft Bevel cleared; PACK_FAIL Roughness←ColorRamp. Native `0.0.53-slice2az`. |
 | **2ax — Gamma/HueSat → Principled Base Color** | **PASS** | hsv 32²/4 Δmax **1.61e-6**; 256²/128 Δmax **8.94e-7**. gamma_hsv 32²/4 Δmax **8.94e-7**. tex 2f 32²/4 Δmax **1.01e-6**. Stock hsv vs tex Δmax **0.635**. Loft PACK_FAIL Mix on Base Color (`Cube` / `Metal_Sheet_2x2_uhwnbcqew`). Native `0.0.51-slice2ax`. |
