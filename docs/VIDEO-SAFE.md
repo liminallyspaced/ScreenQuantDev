@@ -24,6 +24,22 @@ Allowed automatic writes are explicitly allowlisted in
 Lowering the maximum sample count is not an ordinary plan action. It must pass
 the measured sample-floor probe described below.
 
+## Automatic action-group visual guard
+
+Preserve Look renders a scene-linear low-resolution baseline, applies one
+logical action group under its own journal run id, and renders the same frames
+again. Still images must remain at or below mean `0.003` and p95 `0.012` linear
+RGB delta. Video is stricter at mean `0.002` and p95 `0.008` on every checked
+frame. A failing group is reverted before the next group runs. Unknown future
+action kinds are isolated into their own group so they cannot cause a known-safe
+group to be discarded with them.
+
+The guard keeps the artist's compositor, denoiser, lighting and color pipeline.
+Only its temporary resolution, sample ceiling and EXR capture settings change,
+and those writes have a separate probe run id that is restored on every exit.
+If capture or comparison fails, all groups accepted during that invocation are
+rolled back and the report records a fail-closed result.
+
 ### Balanced
 
 Balanced may change sampling ceilings and noise distribution. It still blocks
@@ -68,12 +84,11 @@ reported separately. A reversible action is not automatically a safe action.
 
 ## Highest-value next work
 
-- Automatically render and compare a low-resolution baseline before/after each
-  candidate action group, reverting the group when its contract fails.
 - Add worst-region and luminance/shadow metrics alongside mean and p95 RGB.
 - Detect GPU memory pressure before render and select persistent data, GPU
   denoising, compositor placement, and tile/cache policy from real headroom.
 - Benchmark Preserve Look separately from the historical aggressive proof
-  plates, including CPU-only and low-VRAM systems.
+  plates on the named low-end machine and the user's exact problem scene using
+  `bench/run_preserve_look.ps1`.
 - Add adjacent-frame motion fixtures for hair, alpha cards, glass, small
   emissive lights, volumetrics, and dark indirect interiors.

@@ -110,9 +110,16 @@ def encode_last_report(data, maxlen=LAST_REPORT_MAXLEN):
     if isinstance(plan, dict):
         slim["speed_plan"] = {
             k: plan[k] for k in (
-                "est_pct", "est_factor", "profile", "intent", "withheld_kinds"
+                "est_pct", "est_factor", "planned_est_pct", "profile", "intent",
+                "withheld_kinds", "accepted_kinds"
             ) if k in plan
         }
+        guard = plan.get("visual_guard")
+        if isinstance(guard, dict):
+            slim["speed_plan"]["visual_guard"] = {
+                k: guard[k] for k in ("accepted", "rejected", "error")
+                if k in guard
+            }
         encoded = json.dumps(slim, default=str)
         if len(encoded) <= maxlen:
             return encoded
@@ -191,7 +198,10 @@ def _all_caveats(data):
     """Plan caveats + estimator caveats, deduped preserving order."""
     seen = []
     plan = data.get("plan") or {}
-    for caveat in list(plan.get("caveats") or []) + list(data.get("caveats") or []):
+    speed_plan = data.get("speed_plan") or {}
+    for caveat in (list(plan.get("caveats") or [])
+                   + list(speed_plan.get("caveats") or [])
+                   + list(data.get("caveats") or [])):
         caveat = str(caveat)
         if caveat not in seen:
             seen.append(caveat)
@@ -202,7 +212,8 @@ def _iter_skip_entries(skip_reasons):
     """Normalize the payload's skip_reasons ({'scan': [...], 'apply': [...]}
     dict, or a bare list) into {'source','name','reason'} dicts."""
     if isinstance(skip_reasons, dict):
-        groups = [skip_reasons.get(key) or [] for key in ("scan", "apply")]
+        groups = [skip_reasons.get(key) or []
+                  for key in ("scan", "apply", "speed")]
     elif isinstance(skip_reasons, list):
         groups = [skip_reasons]
     else:
@@ -231,6 +242,7 @@ def format_text(data):
     lines += _text_header(data)
     lines += _text_findings(data.get("findings") or [])
     lines += _text_plan(data.get("plan"))
+    lines += _text_speed_plan(data.get("speed_plan"))
     lines += _text_caveats(_all_caveats(data))
     lines += _text_targets(data.get("per_image_targets") or {})
     lines += _text_memory(data.get("memory") or {})
@@ -291,6 +303,37 @@ def _text_plan(plan):
     for index, action in enumerate(plan.get("actions") or [], start=1):
         lines.append(f"  {index}. [{action.get('kind', '?'):<14}] {action.get('label', '')} "
                      f"(visual cost {action.get('visual_cost', '?')})")
+    return lines
+
+
+def _text_speed_plan(plan):
+    if not plan:
+        return []
+    profile = str(plan.get("profile", "PRESERVE_LOOK")).replace("_", " ").title()
+    intent = str(plan.get("intent", "STILL")).title()
+    lines = ["", "Make it Fast: %s · %s · ~%.0f%% remaining time" % (
+        profile, intent, float(plan.get("est_pct", 100.0) or 100.0))]
+    planned = plan.get("planned_est_pct")
+    actual = plan.get("est_pct")
+    if (isinstance(planned, (int, float))
+            and isinstance(actual, (int, float))
+            and abs(planned - actual) > 0.01):
+        lines.append("  Preview estimate was ~%.0f%%; rolled-back/no-op groups receive no credit." % planned)
+    guard = plan.get("visual_guard")
+    if not isinstance(guard, dict):
+        return lines
+    lines.append("  Visual guard: %d accepted · %d rolled back%s" % (
+        int(guard.get("accepted", 0) or 0),
+        int(guard.get("rejected", 0) or 0),
+        (" · ERROR " + str(guard.get("error"))) if guard.get("error") else ""))
+    for group in guard.get("groups") or ():
+        quality = group.get("quality") or {}
+        frame_metrics = list((quality.get("frames") or {}).values())
+        worst_mean = max((m.get("mean", 0.0) for m in frame_metrics), default=0.0)
+        worst_p95 = max((m.get("p95", 0.0) for m in frame_metrics), default=0.0)
+        lines.append("    [%s] %s — mean %.5f · p95 %.5f" % (
+            group.get("status", "?"), group.get("label", "?"),
+            worst_mean, worst_p95))
     return lines
 
 
@@ -397,6 +440,7 @@ def _render_html(data):
         _html_header(data),
         _html_findings(data.get("findings") or []),
         _html_plan(data.get("plan")),
+        _html_speed_plan(data.get("speed_plan")),
         _html_caveats(_all_caveats(data)),
         _html_targets(data.get("per_image_targets") or {}),
         _html_memory(data.get("memory") or {}),
@@ -481,6 +525,44 @@ def _html_plan(plan):
             + "<div class=\"scroll\"><table><tr><th class=\"num\">#</th><th>Action</th>"
               "<th>Detail</th><th class=\"num\">Saves MB</th>"
               "<th class=\"num\">Visual cost</th></tr>" + "".join(rows) + "</table></div>")
+
+
+def _html_speed_plan(plan):
+    if not plan:
+        return ""
+    profile = str(plan.get("profile", "PRESERVE_LOOK")).replace("_", " ").title()
+    intent = str(plan.get("intent", "STILL")).title()
+    summary = ("<p><b>%s · %s</b> · ~%.0f%% remaining time</p>" % (
+        html.escape(profile), html.escape(intent),
+        float(plan.get("est_pct", 100.0) or 100.0)))
+    guard = plan.get("visual_guard")
+    if not isinstance(guard, dict):
+        return "<h2>Make it Fast</h2>" + summary
+    rows = []
+    for group in guard.get("groups") or ():
+        quality = group.get("quality") or {}
+        frame_metrics = list((quality.get("frames") or {}).values())
+        worst_mean = max((m.get("mean", 0.0) for m in frame_metrics), default=0.0)
+        worst_p95 = max((m.get("p95", 0.0) for m in frame_metrics), default=0.0)
+        rows.append(
+            "<tr><td>%s</td><td>%s</td><td class=\"num\">%.5f</td>"
+            "<td class=\"num\">%.5f</td></tr>" % (
+                html.escape(str(group.get("label", "?"))),
+                html.escape(str(group.get("status", "?"))),
+                worst_mean, worst_p95))
+    guard_summary = ("<p>Visual guard: <b>%d accepted</b> · "
+                     "<b>%d rolled back</b>%s</p>" % (
+                         int(guard.get("accepted", 0) or 0),
+                         int(guard.get("rejected", 0) or 0),
+                         (" · " + html.escape(str(guard.get("error"))))
+                         if guard.get("error") else ""))
+    table = ""
+    if rows:
+        table = ("<div class=\"scroll\"><table><tr><th>Action group</th>"
+                 "<th>Verdict</th><th class=\"num\">Worst mean</th>"
+                 "<th class=\"num\">Worst p95</th></tr>"
+                 + "".join(rows) + "</table></div>")
+    return "<h2>Make it Fast</h2>" + summary + guard_summary + table
 
 
 def _html_caveats(caveats):

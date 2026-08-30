@@ -155,6 +155,14 @@ class SceneQuantSettings(bpy.types.PropertyGroup):
         ),
         default=True,
     )
+    speed_visual_guard: BoolProperty(
+        name="Automatic visual guard",
+        description=(
+            "Preserve Look renders a small before/after probe for each action "
+            "group and immediately rolls back any group that changes the image"
+        ),
+        default=True,
+    )
     speed_apply_dead: BoolProperty(
         name="Dead work",
         description="Hide/cull/trim off-screen and leftover passes",

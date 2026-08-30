@@ -49,6 +49,7 @@ def apply_speed_plan(scene, settings, jrnl, plan, coverage_map=None,
     jrnl = _SpeedJournal(jrnl)
     cache = {"cov": coverage_map, "mem": mem}
     applied = 0
+    applied_kinds = []
     outcomes = []
     skipped = []
     actions = _plan_actions(plan)
@@ -64,7 +65,9 @@ def apply_speed_plan(scene, settings, jrnl, plan, coverage_map=None,
         if outcome:
             outcomes.append(outcome)
             applied += 1
-    return {"applied": applied, "outcomes": outcomes, "skipped": skipped}
+            applied_kinds.append(kind)
+    return {"applied": applied, "applied_kinds": applied_kinds,
+            "outcomes": outcomes, "skipped": skipped}
 
 
 def _plan_actions(plan):

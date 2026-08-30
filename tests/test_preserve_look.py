@@ -13,7 +13,10 @@ from _harness import PROJECT_ROOT, check, finish, section  # noqa: E402
 sys.path.insert(0, PROJECT_ROOT)
 import bpy  # noqa: E402
 import scenequant  # noqa: E402
+from scenequant import journal  # noqa: E402
+from scenequant.analysis import visual_guard as guard_policy  # noqa: E402
 from scenequant.apply import knee_apply  # noqa: E402
+from scenequant.apply import visual_guard as apply_visual_guard  # noqa: E402
 
 
 def main():
@@ -28,6 +31,9 @@ def main():
         settings.speed_profile = "PRESERVE_LOOK"
         settings.speed_render_intent = "AUTO"
         settings.speed_probe_knee = False
+        # The operator contract is covered here; the guard itself has focused
+        # real-render and forced-rejection checks below.
+        settings.speed_visual_guard = False
 
         cycles = scene.cycles
         cycles.max_bounces = 24
@@ -81,6 +87,89 @@ def main():
         }
         kinds = {a.get("kind") for a in (plan.get("actions") or [])}
         check(not (kinds & risky), "stored plan contains no appearance-risk action")
+
+        section("automatic visual guard accepts render-equivalent group")
+        scene.render.resolution_x = 32
+        scene.render.resolution_y = 32
+        scene.render.resolution_percentage = 100
+        scene.frame_start = 1
+        scene.frame_end = 1
+        scene.frame_set(1)
+        cycles.samples = 8
+        scene.render.use_lock_interface = False
+        jrnl = journal.Journal()
+        accepted = apply_visual_guard.run_guarded_speed_plan(
+            scene, settings, jrnl,
+            {"profile": "PRESERVE_LOOK", "intent": "STILL", "actions": [{
+                "kind": "LOCK_INTERFACE", "payload": {},
+            }]},
+        )
+        accepted_guard = accepted.get("visual_guard") or {}
+        check(accepted_guard.get("accepted") == 1,
+              "identical before/after render accepts the runtime group")
+        check(scene.render.use_lock_interface is True,
+              "accepted group remains applied")
+        accepted_groups = accepted_guard.get("groups") or [{}]
+        check(accepted_groups[0].get("quality", {}).get("passed") is True,
+              "accepted group stores per-frame quality evidence")
+        jrnl.revert_all()
+
+        section("automatic visual guard immediately rolls back drift")
+        import numpy as np
+        cycles.use_light_tree = True
+
+        def fake_renderer(target_scene, frame):
+            value = 0.4 if target_scene.cycles.use_light_tree else 0.8
+            return np.full((8, 8, 3), value, dtype=np.float32), 0.001
+
+        jrnl = journal.Journal()
+        rejected = apply_visual_guard.run_guarded_speed_plan(
+            scene, settings, jrnl,
+            {"profile": "PRESERVE_LOOK", "intent": "STILL", "actions": [{
+                "kind": "LIGHT_TREE", "payload": {"enabled": False},
+            }]},
+            renderer=fake_renderer,
+            prepare_probe=False,
+        )
+        rejected_guard = rejected.get("visual_guard") or {}
+        check(rejected_guard.get("rejected") == 1,
+              "image-changing group is rejected")
+        check(cycles.use_light_tree is True,
+              "rejected group is restored before the guard returns")
+        check(rejected.get("applied") == 0,
+              "rolled-back group is not reported as applied")
+        check(jrnl.entry_count() == 0,
+              "successful rollback consumes the rejected group's journal")
+
+        section("empty plan has zero visual-probe overhead")
+        probe_calls = []
+
+        def should_not_render(target_scene, frame):
+            probe_calls.append(frame)
+            raise AssertionError("empty plan rendered")
+
+        empty = apply_visual_guard.run_guarded_speed_plan(
+            scene, settings, journal.Journal(),
+            {"profile": "PRESERVE_LOOK", "intent": "VIDEO", "actions": []},
+            renderer=should_not_render,
+            prepare_probe=False,
+        )
+        check(probe_calls == [], "no action groups skip the baseline render")
+        check(empty.get("visual_guard", {}).get("reason") ==
+              "no action groups to verify",
+              "empty guard records why it did no work")
+
+        section("visual guard worst-region and temporal policy")
+        truth = np.full((10, 10, 3), 0.4, dtype=np.float32)
+        local = truth.copy()
+        local.reshape(-1, 3)[:10] += 0.05
+        verdict = guard_policy.evaluate_frame_set({1: truth}, {1: local})
+        check(verdict.get("passed") is False,
+              "p95 gate rejects a local change hidden by global mean")
+        temporal = guard_policy.temporal_residual_metrics(
+            truth, truth, truth, local)
+        check(temporal["p95"] > 0.01,
+              "temporal residual exposes frame-to-frame inconsistency")
 
         section("video knee integration")
         scene.render.resolution_x = 64

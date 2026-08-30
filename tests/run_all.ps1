@@ -26,6 +26,7 @@ $Suites = @(
     @{ Name = 'test_estimator';     Blend = $null },
     @{ Name = 'test_speed_solver';  Blend = $null },
     @{ Name = 'test_sample_knee';   Blend = $null },
+    @{ Name = 'test_visual_guard';  Blend = $null },
     @{ Name = 'test_preserve_look'; Blend = $null },
     @{ Name = 'test_fit_budget';    Blend = $null },
     @{ Name = 'test_headless';   Blend = $BadScene }

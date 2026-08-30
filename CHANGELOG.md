@@ -1,3 +1,27 @@
+## [0.3.5] — 2026-08-30
+
+### Automatic visual rollback and Preserve Look benchmark lane
+- Added an automatic Preserve Look visual guard. It renders a controlled
+  scene-linear baseline, applies one logical action group under an independent
+  journal run id, compares the same representative frames, and immediately
+  rolls back a group that exceeds the quality contract.
+- Added strict mean + p95 acceptance gates (`0.003` / `0.012` for stills,
+  `0.002` / `0.008` for video). Max delta is retained as diagnostic evidence,
+  and incomplete frame evidence fails closed.
+- Preserved the artist's compositor, denoiser, lighting and color pipeline
+  during guard renders. Temporary resolution, sample ceiling, EXR and filepath
+  writes are separately journaled and restored, including on exceptions.
+- Reports now distinguish planned estimates from guard-adjusted estimates and
+  store accepted, rejected/rolled-back and no-op action groups with per-frame
+  metrics and render durations.
+- Added a full-resolution Preserve Look benchmark runner with machine and scene
+  provenance, repeated timing medians, optimizer overhead, break-even sequence
+  count, per-frame quality gates and adjacent-frame temporal residuals. Real
+  low-end and user-problem-scene results remain pending those two inputs; no new
+  public speed percentage is claimed.
+- Added pure grouping/quality/temporal tests plus Blender 4.5/5.1 real-render
+  acceptance and forced-drift rollback coverage.
+
 ## [0.3.4] — 2026-08-30
 
 ### Preserve Look and video-safe sampling

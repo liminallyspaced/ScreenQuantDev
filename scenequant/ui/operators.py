@@ -16,7 +16,10 @@ from bpy.props import BoolProperty, EnumProperty, StringProperty
 
 from .. import journal
 from ..analysis import audit, coverage, dedup_scan, memory_model
-from ..apply import knee_apply, objects_apply, plan_apply, settings_apply, speed_apply
+from ..apply import (
+    knee_apply, objects_apply, plan_apply, settings_apply, speed_apply,
+    visual_guard as apply_visual_guard,
+)
 from ..constants import BUDGET_HEADROOM, SEVERITY_ORDER
 from ..planning import solver, speed_solver
 from . import panels, report
@@ -292,6 +295,34 @@ def _store_speed_plan(settings, plan, jrnl, skip_entries):
     data["skip_reasons"] = skips
     data["journal_tags"] = _journal_action_log(jrnl)
     _dump_report(settings, data)
+
+
+def _guard_adjusted_speed_plan(plan, result):
+    """Replace the preview estimate with accepted, actually-applied groups."""
+    guard = result.get("visual_guard") if isinstance(result, dict) else None
+    if not isinstance(plan, dict) or not isinstance(guard, dict):
+        return plan
+    accepted = set(result.get("applied_kinds") or ())
+    winners = {}
+    for action in plan.get("actions") or ():
+        if action.get("kind") not in accepted:
+            continue
+        waste_class = action.get("waste_class") or action.get("kind")
+        factor = float(action.get("time_factor", 1.0) or 1.0)
+        previous = winners.get(waste_class)
+        if previous is None or factor < previous:
+            winners[waste_class] = factor
+    factor = 1.0
+    for value in winners.values():
+        if value > 0:
+            factor *= min(float(value), 1.0)
+    adjusted = dict(plan)
+    adjusted["planned_est_pct"] = plan.get("est_pct", 100.0)
+    adjusted["est_factor"] = factor
+    adjusted["est_pct"] = factor * 100.0
+    adjusted["accepted_kinds"] = sorted(accepted)
+    adjusted["visual_guard"] = guard
+    return adjusted
 
 
 def _store_fit_estimates(settings, plan, jrnl, skip_entries, measured_after_mb):
@@ -1394,6 +1425,11 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
             layout.label(
                 text=f"Sample floor: check {count} frames; hardest frame wins",
                 icon='RENDER_ANIMATION')
+        if (plan.get("profile") == "PRESERVE_LOOK" and getattr(
+                context.scene.scenequant, "speed_visual_guard", True)):
+            layout.label(
+                text="Visual guard: each action group must match or rolls back",
+                icon='SHADING_RENDERED')
         for action in plan.get("actions") or []:
             badge = TIER_BADGES.get(action.get("tier"), "?")
             label = action.get("label") or action.get("kind", "?")
@@ -1451,6 +1487,8 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
             "applied": False, "reason": "sample knee off in Manual",
         }
         skip_entries = list(result["skipped"]) + _journal_skip_entries(jrnl)
+        guard_result = result.get("visual_guard")
+        plan = _guard_adjusted_speed_plan(plan, result)
         remaining = plan.get("est_pct", 100.0)
         message = (
             f"Make it Fast: ~{remaining:.0f}% estimated remaining time, "
@@ -1466,6 +1504,12 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
                 "name": "SAMPLE_KNEE",
                 "reason": knee["reason"],
             })
+        if isinstance(guard_result, dict):
+            rejected = int(guard_result.get("rejected", 0) or 0)
+            accepted = int(guard_result.get("accepted", 0) or 0)
+            message += ", visual guard %d accepted" % accepted
+            if rejected:
+                message += "/%d rolled back" % rejected
         _store_speed_plan(settings, plan, jrnl, skip_entries)
         if skip_entries:
             example = skip_entries[0]
@@ -1487,9 +1531,17 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
         result = None
         try:
             with _OperatorUI(context, "Make it Fast") as update:
-                result = speed_apply.apply_speed_plan(
-                    scene, settings, scoped, plan,
-                    coverage_map=cov, progress=update, mem=mem)
+                if (plan.get("profile") == "PRESERVE_LOOK"
+                        and getattr(settings, "speed_visual_guard", True)):
+                    result = apply_visual_guard.run_guarded_speed_plan(
+                        scene, settings, jrnl, plan,
+                        coverage_map=cov, progress=update, mem=mem,
+                        frame_count=getattr(settings, "video_probe_frames", 3),
+                    )
+                else:
+                    result = speed_apply.apply_speed_plan(
+                        scene, settings, scoped, plan,
+                        coverage_map=cov, progress=update, mem=mem)
         except Exception as error:
             reverted = jrnl.revert_run(run_id)
             logger.exception("Make it Fast failed; rolled back %d journaled changes",

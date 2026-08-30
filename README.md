@@ -34,6 +34,8 @@ It builds a revertible speed plan for **this** scene and shows it before any ren
 
 - Adaptive sampling with a measured sample floor
 - Three representative frame checks for video by default; the hardest frame wins
+- Automatic low-resolution before/after checks for each Preserve Look action
+  group; a failing group is immediately journal-rolled back
 - Persistent render data when VRAM headroom is available
 - GPU render/denoise/compositor placement when supported and memory-safe
 - Proven no-op work such as GPU path-guiding flags and static deform motion blur
@@ -49,6 +51,12 @@ Three quality contracts are available:
 The exact allowlist, video probe rules, and acceptance gates live in
 [`docs/VIDEO-SAFE.md`](docs/VIDEO-SAFE.md).
 
+Preserve Look now records mean, p95 and max scene-linear RGB evidence for every
+action group. Mean and p95 gate acceptance; max remains diagnostic so one
+firefly does not veto an otherwise identical render. Separate full-resolution
+benchmark tooling records temporal residuals and break-even frame counts; see
+[`docs/PRESERVE-LOOK-BENCHMARKS.md`](docs/PRESERVE-LOOK-BENCHMARKS.md).
+
 Everything it writes goes through a journal. **Revert All** puts the scene back.
 
 The N-panel exposes the quality contract, render intent, **Analyze & Preview**, and revert. Auto-detected video ranges use stricter multi-frame sample validation. Fit to Budget remains separate because automatic texture reduction is not part of Preserve Look.
@@ -57,7 +65,7 @@ Also in the addon: Analyze, Fit to Budget (VRAM), Probe Sample Knee, Verify Rend
 
 ## Install
 
-1. Download `scenequant-0.3.4.zip` from [Releases](https://github.com/liminallyspaced/ScreenQuantDev/releases/latest).
+1. Download `scenequant-0.3.5.zip` from [Releases](https://github.com/liminallyspaced/ScreenQuantDev/releases/latest).
 2. Blender → Edit → Preferences → Add-ons → Install from Disk.
 3. Enable **SceneQuant — Scene & Render Optimizer**.
 4. 3D Viewport → N panel → **SceneQuant** → **Analyze & Preview**.
@@ -71,6 +79,8 @@ Once it is on [extensions.blender.org](https://extensions.blender.org/), use Get
 - These numbers are two files on one laptop. Your file will differ.
 - A scene that is already well-tuned may only move a little.
 - The published timing plates used the older aggressive stack and measured MAE ~5.6–7.0 / 255; they are not Preserve Look performance claims.
+- The automatic visual guard is a conservative low-resolution screen, not a
+  substitute for the full-resolution low-end and problem-scene benchmark gate.
 - Preserve Look is a stricter policy and multi-frame sampling guard, not a promise of pixel identity on every device. Validate important shots before committing a full sequence.
 - Fit to Budget is a separate VRAM tool. It is not what the 41 / 52 / 62% plates measure.
 

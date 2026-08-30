@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "scenequant"
-version = "0.3.4"
+version = "0.3.5"
 name = "SceneQuant — Scene & Render Optimizer"
 tagline = "Make it Fast and Fit to Budget: cut Cycles time, fit VRAM"
 maintainer = "Nick Siegel <nicksiegel.loft@gmail.com>"

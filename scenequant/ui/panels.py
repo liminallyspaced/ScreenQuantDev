@@ -285,6 +285,11 @@ class SCENEQUANT_PT_speed(SceneQuantPanelMixin, bpy.types.Panel):
         row.operator("scenequant.make_it_fast", text="Analyze & Preview")
         if settings.speed_profile == "PRESERVE_LOOK":
             layout.label(text="Lights, shadows, materials and visibility stay intact", icon='LOCKED')
+            layout.prop(settings, "speed_visual_guard")
+            if settings.speed_visual_guard:
+                layout.label(
+                    text="Before/after action groups auto-rollback on visual drift",
+                    icon='SHADING_RENDERED')
         elif settings.speed_profile == "AGGRESSIVE":
             warning = layout.row()
             warning.alert = True
@@ -302,6 +307,11 @@ class SCENEQUANT_PT_speed(SceneQuantPanelMixin, bpy.types.Panel):
             prefix = (profile + " · " + intent + " · ") if profile else ""
             layout.label(text="Last: %s~%.0f%% remaining time" % (
                 prefix, plan["est_pct"]))
+            guard = plan.get("visual_guard")
+            if isinstance(guard, dict):
+                layout.label(text="Visual guard: %d accepted · %d rolled back" % (
+                    int(guard.get("accepted", 0) or 0),
+                    int(guard.get("rejected", 0) or 0)))
         verify = data.get("verify") if isinstance(data, dict) else None
         if isinstance(verify, dict) and "mean" in verify:
             layout.label(text="Verify Δ mean %.4f  max %.4f" % (

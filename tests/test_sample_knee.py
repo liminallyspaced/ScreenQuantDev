@@ -81,7 +81,11 @@ def test_encode_last_report_keeps_grade():
         {"kind": "CAMERA_CULL", "payload": {"objects": ["Chair.%03d" % i]}}
         for i in range(30)
     ], "profile": "PRESERVE_LOOK", "intent": "VIDEO",
-        "withheld_kinds": ["CAMERA_CULL", "OPAQUE_CUTOUT_SHADOWS"]}
+        "withheld_kinds": ["CAMERA_CULL", "OPAQUE_CUTOUT_SHADOWS"],
+        "visual_guard": {"accepted": 2, "rejected": 1, "groups": [
+            {"quality": {"frames": {str(i): {"mean": i / 1000.0}}}}
+            for i in range(40)
+        ]}}
     merged = report.encode_last_report(data, maxlen=1024)
     check(len(merged) <= 1024, "merged speed plan still fits")
     out = report.decode_last_report(merged)
@@ -91,6 +95,14 @@ def test_encode_last_report_keeps_grade():
     check(out["speed_plan"].get("profile") == "PRESERVE_LOOK"
           and out["speed_plan"].get("intent") == "VIDEO",
           "quality contract and render intent survive compact merge")
+    check(out["speed_plan"].get("visual_guard", {}).get("rejected") == 1,
+          "visual-guard rollback summary survives compact merge")
+    text_report = report.format_text(data)
+    check("Visual guard:" in text_report and "rolled back" in text_report,
+          "text report explains automatic visual rollback")
+    html_report = report._render_html(data)
+    check("Make it Fast" in html_report and "Worst p95" in html_report,
+          "HTML report includes action-group quality evidence")
 
 
 
