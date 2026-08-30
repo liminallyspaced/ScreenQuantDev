@@ -3683,6 +3683,25 @@ def _mix_nested2_ramp_math_identity() -> dict:
     }
 
 
+def _mix_nested2_add_identity() -> dict:
+    """add_enable=0 — Slice 2bs Glass+Transparent bit-identical. Never or-coerce 0."""
+    return {
+        "mix_nested2_add_enable": 0,
+        "mix_nested2_add_c1_kind": 0,
+        "mix_nested2_add_c2_kind": 1,
+        "mix_nested2_glossy_color": (1.0, 1.0, 1.0),
+        "mix_nested2_glossy_roughness": 0.5,
+        "mix_nested2_glossy_distribution": 1,
+        "mix_nested2_sss_color": (0.8, 0.8, 0.8),
+        "mix_nested2_sss_scale": 0.005,
+        "mix_nested2_sss_radius": (1.0, 0.2, 0.1),
+        "mix_nested2_sss_ior": 1.4,
+        "mix_nested2_sss_roughness": 1.0,
+        "mix_nested2_sss_method": 0,
+        "mix_nested2_translucent_color": (0.8, 0.8, 0.8),
+    }
+
+
 def _copy_mix_nested2_ramp_math_fields(pr: dict) -> dict:
     """Copy Slice 2bs ramp-math ABI. Never `or` 0 / 0.5 / 1.0."""
     out = {}
@@ -3705,6 +3724,35 @@ def _copy_mix_nested2_ramp_math_fields(pr: dict) -> dict:
     return out
 
 
+def _copy_mix_nested2_add_fields(pr: dict) -> dict:
+    """Copy Slice 2bt Add/Glossy/SSS ABI. Never `or` 0 / 0.5 / 1.0."""
+    out = {}
+    vecs = {
+        "mix_nested2_glossy_color",
+        "mix_nested2_sss_color",
+        "mix_nested2_sss_radius",
+        "mix_nested2_translucent_color",
+    }
+    floats = {
+        "mix_nested2_glossy_roughness",
+        "mix_nested2_sss_scale",
+        "mix_nested2_sss_ior",
+        "mix_nested2_sss_roughness",
+    }
+    for k, default in _mix_nested2_add_identity().items():
+        raw = pr.get(k)
+        if raw is None:
+            out[k] = default
+        elif k in vecs:
+            seq = list(raw) if raw is not None else list(default)
+            out[k] = (float(seq[0]), float(seq[1]), float(seq[2]))
+        elif k in floats:
+            out[k] = float(raw)
+        else:
+            out[k] = int(raw)
+    return out
+
+
 def _mix_nested2_identity() -> dict:
     """nested2 Mix enable off — Slice 2bp/2bq bit-identical. Never or-coerce 0."""
     return {
@@ -3721,6 +3769,7 @@ def _mix_nested2_identity() -> dict:
         "mix_nested2_ramp_interpolate": 1,
         "mix_nested2_ramp_fac": 0.5,
         **_mix_nested2_ramp_math_identity(),
+        **_mix_nested2_add_identity(),
     }
 
 
@@ -3731,7 +3780,13 @@ def _copy_mix_nested_fields(pr: dict) -> dict:
         raw = pr.get(k)
         if raw is None:
             out[k] = default
-        elif k == "mix_nested2_ramp_hsv_color":
+        elif k in (
+            "mix_nested2_ramp_hsv_color",
+            "mix_nested2_glossy_color",
+            "mix_nested2_sss_color",
+            "mix_nested2_sss_radius",
+            "mix_nested2_translucent_color",
+        ):
             seq = list(raw) if raw is not None else list(default)
             out[k] = (float(seq[0]), float(seq[1]), float(seq[2]))
         elif k in (
@@ -3742,6 +3797,10 @@ def _copy_mix_nested_fields(pr: dict) -> dict:
             "mix_nested2_ramp_hsv_sat",
             "mix_nested2_ramp_hsv_val",
             "mix_nested2_ramp_hsv_fac",
+            "mix_nested2_glossy_roughness",
+            "mix_nested2_sss_scale",
+            "mix_nested2_sss_ior",
+            "mix_nested2_sss_roughness",
         ) or k.endswith("_const"):
             out[k] = float(raw)
         elif k in ("mix_nested2_ramp", "mix_nested2_ramp_alpha"):
@@ -4010,13 +4069,216 @@ def _pack_ramp_math_node(node, ctx: str, *, depth: int, as_nest: bool,
     return out
 
 
+
+def _add_shader_socks(node):
+    s0 = node.inputs.get("Shader") if hasattr(node.inputs, "get") else None
+    s1 = node.inputs.get("Shader_001") if hasattr(node.inputs, "get") else None
+    if s0 is None or s1 is None:
+        ins = list(getattr(node, "inputs", []) or [])
+        if len(ins) >= 2:
+            s0, s1 = ins[0], ins[1]
+    return s0, s1
+
+
+def _refuse_linked_inputs(node, names, ctx, label):
+    for name in names:
+        sock = node.inputs.get(name) if hasattr(node.inputs, "get") else None
+        if sock is not None and getattr(sock, "is_linked", False):
+            raise QuantTraceSyncError(
+                f"{ctx} {label}.{name} is linked refused "
+                f"(Slice 2bt: unlinked Color/Roughness/Scale/Radius/IOR/Normal only)"
+            )
+
+
+def _pack_glossy_node(node, ctx: str) -> dict:
+    """Unlinked GlossyBsdfNode Color/Roughness/Normal. Cite GlossyBsdfNode."""
+    dist = str(getattr(node, "distribution", "") or "").upper()
+    if dist in ("ASHIKHMIN_SHIRLEY", "SHIRLEY", "ASHIKHMIN-SHIRLEY"):
+        raise QuantTraceSyncError(
+            f"{ctx} Glossy BSDF distribution={dist!r} refused "
+            f"(Slice 2bt: Beckmann/GGX/Multi-GGX only; Ashikhmin is a follow-up)"
+        )
+    _refuse_linked_inputs(
+        node,
+        ("Color", "Roughness", "Normal", "Anisotropy", "Rotation", "Tangent"),
+        ctx,
+        "Glossy BSDF",
+    )
+    code = 1
+    if dist in ("BECKMANN",):
+        code = 0
+    elif dist in ("MULTI_GGX", "MULTIGGX", "MULTI-GGX"):
+        code = 2
+    col = node.inputs["Color"].default_value
+    rough = node.inputs["Roughness"].default_value
+    return {
+        "kind": 3,
+        "color": (float(col[0]), float(col[1]), float(col[2])),
+        "roughness": float(rough),
+        "distribution": int(code),
+    }
+
+
+def _pack_sss_node(node, ctx: str) -> dict:
+    """Unlinked SubsurfaceScatteringNode. Cite SubsurfaceScatteringNode."""
+    _refuse_linked_inputs(
+        node,
+        ("Color", "Scale", "Radius", "IOR", "Roughness", "Anisotropy", "Normal"),
+        ctx,
+        "SSS",
+    )
+    fall = str(
+        getattr(node, "falloff", None)
+        or getattr(node, "subsurface_method", None)
+        or "BURLEY"
+    ).upper()
+    method = 0
+    if fall in ("RANDOM_WALK",):
+        method = 1
+    elif fall in ("RANDOM_WALK_SKIN", "SKIN"):
+        method = 2
+    elif fall in ("RANDOM_WALK_LEGACY", "LEGACY"):
+        method = 3
+    elif fall not in ("BURLEY", "CUBIC", ""):
+        raise QuantTraceSyncError(
+            f"{ctx} SSS falloff={fall!r} refused "
+            f"(Slice 2bt: Burley/Random Walk only)"
+        )
+    col = node.inputs["Color"].default_value
+    rad = node.inputs["Radius"].default_value
+    return {
+        "kind": 4,
+        "color": (float(col[0]), float(col[1]), float(col[2])),
+        "scale": float(node.inputs["Scale"].default_value),
+        "radius": (float(rad[0]), float(rad[1]), float(rad[2])),
+        "ior": float(node.inputs["IOR"].default_value),
+        "roughness": float(node.inputs["Roughness"].default_value),
+        "method": int(method),
+    }
+
+
+def _pack_translucent_node(node, ctx: str) -> tuple:
+    """Unlinked TranslucentBsdfNode Color. Cite TranslucentBsdfNode."""
+    _refuse_linked_inputs(node, ("Color", "Normal"), ctx, "Translucent BSDF")
+    sock = node.inputs.get("Color")
+    if sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Translucent BSDF missing Color refused (Slice 2bt)"
+        )
+    col = sock.default_value
+    return (float(col[0]), float(col[1]), float(col[2]))
+
+
+def _pack_add_shader_node(add, ctx: str) -> dict:
+    """AddClosureNode children: Glass/Transparent/Glossy/SSS/Translucent unlinked.
+
+    Nested Mix / nested Add / Refraction / GROUP / Principled refuse Slice 2bt
+    (loft Mix.002/Mix.003 under Add is the named leftover).
+    """
+    s0, s1 = _add_shader_socks(add)
+    if s0 is None or s1 is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Add Shader missing Shader sockets refused (Slice 2bt)"
+        )
+    if not getattr(s0, "is_linked", False) or not getattr(s1, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} Add Shader unlinked Shader input refused (Slice 2bt)"
+        )
+    l0 = list(s0.links or [])
+    l1 = list(s1.links or [])
+    if len(l0) != 1 or len(l1) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Add Shader multi-link Shader refused (Slice 2bt)"
+        )
+    nodes = (
+        _peel_surface_reroute(l0[0].from_node),
+        _peel_surface_reroute(l1[0].from_node),
+    )
+    out = _mix_nested2_add_identity()
+    kinds = []
+    glass = None
+    tcol = None
+    seen = set()
+    for node in nodes:
+        ntype = getattr(node, "type", None)
+        if ntype == "MIX_SHADER":
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix Add children Mix Shader refused "
+                f"(Slice 2bt: Add+unlinked Glossy/SSS/Translucent/Glass/"
+                f"Transparent only; nested Mix under Add is a follow-up)"
+            )
+        if ntype == "ADD_SHADER":
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix nested Add Shader refused "
+                f"(Slice 2bt: one Add hop only)"
+            )
+        if ntype == "BSDF_REFRACTION":
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix Add <- Refraction refused "
+                f"(Slice 2bt: Add+Glossy/SSS/Translucent/Glass/Transparent only; "
+                f"Refraction under Add is a follow-up)"
+            )
+        if ntype in seen and ntype in (
+            "BSDF_GLOSSY",
+            "SUBSURFACE_SCATTERING",
+            "BSDF_TRANSLUCENT",
+            "BSDF_GLASS",
+            "BSDF_TRANSPARENT",
+        ):
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix Add two {ntype!r} children refused "
+                f"(Slice 2bt: one of each leaf type this hour)"
+            )
+        seen.add(ntype)
+        if ntype == "BSDF_GLOSSY":
+            g = _pack_glossy_node(node, ctx)
+            kinds.append(3)
+            out["mix_nested2_glossy_color"] = g["color"]
+            out["mix_nested2_glossy_roughness"] = g["roughness"]
+            out["mix_nested2_glossy_distribution"] = g["distribution"]
+        elif ntype == "SUBSURFACE_SCATTERING":
+            s = _pack_sss_node(node, ctx)
+            kinds.append(4)
+            out["mix_nested2_sss_color"] = s["color"]
+            out["mix_nested2_sss_scale"] = s["scale"]
+            out["mix_nested2_sss_radius"] = s["radius"]
+            out["mix_nested2_sss_ior"] = s["ior"]
+            out["mix_nested2_sss_roughness"] = s["roughness"]
+            out["mix_nested2_sss_method"] = s["method"]
+        elif ntype == "BSDF_TRANSLUCENT":
+            kinds.append(5)
+            out["mix_nested2_translucent_color"] = _pack_translucent_node(node, ctx)
+        elif ntype == "BSDF_GLASS":
+            kinds.append(0)
+            glass = _pack_constant_glass_node(node, ctx)
+        elif ntype == "BSDF_TRANSPARENT":
+            kinds.append(1)
+            tcol = _pack_constant_transparent_node(node, ctx)
+        else:
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix Add children {ntype!r} refused "
+                f"(Slice 2bt: Glossy/SSS/Translucent/Glass/Transparent only; "
+                f"GROUP/Principled/Volume is a follow-up)"
+            )
+    if 3 not in kinds and 4 not in kinds and 5 not in kinds:
+        raise QuantTraceSyncError(
+            f"{ctx} nested2 Mix Add without Glossy/SSS/Translucent refused "
+            f"(Slice 2bt: Add+Glossy/SSS/Translucent is the claim)"
+        )
+    out["mix_nested2_add_enable"] = 1
+    out["mix_nested2_add_c1_kind"] = int(kinds[0])
+    out["mix_nested2_add_c2_kind"] = int(kinds[1])
+    return {"fields": out, "glass": glass, "transparent_color": tcol}
+
+
 def _pack_nested2_mix_shader(inner, ctx: str) -> dict:
-    """Slice 2bs: nested2 Mix Fac=unlinked|LightPath|ColorRamp(+MATH Fac) + Glass+Transparent.
+    """Slice 2bt: nested2 Mix Fac=unlinked|LightPath|ColorRamp(+MATH Fac)
+    + Glass+Transparent or Add+Glossy/SSS/Translucent.
 
     ColorRamp Fac uses official colorramp_to_array LUT (_pack_color_ramp_lut).
     ColorRamp.Fac unlinked float or MATH (Backfacing x HueSat). Fac<-Noise/TEX/
-    Fresnel/GROUP/LayerWeight refuse named Slice 2bs. Add / third Mix /
-    Refraction / Glossy / SSS / linked Color refuse with named Slice 2bs leftover.
+    Fresnel/GROUP/LayerWeight refuse named Slice 2bt. Nested Mix under Add /
+    Refraction / linked Color/Roughness refuse with named Slice 2bt leftover.
     """
     fac_sock = _mix_shader_fac_sock(inner)
     if fac_sock is None:
@@ -4150,18 +4412,77 @@ def _pack_nested2_mix_shader(inner, ctx: str) -> dict:
     t0 = getattr(c0, "type", None)
     t1 = getattr(c1, "type", None)
     kinds = {t0, t1}
-    if kinds != {"BSDF_GLASS", "BSDF_TRANSPARENT"}:
+    add_fields = _mix_nested2_add_identity()
+    g = None
+    tcol = None
+    if kinds == {"BSDF_GLASS", "BSDF_TRANSPARENT"}:
+        if t0 == "BSDF_GLASS":
+            glass, tr = c0, c1
+            k1, k2 = 0, 1
+        else:
+            glass, tr = c1, c0
+            k1, k2 = 1, 0
+        g = _pack_constant_glass_node(glass, ctx)
+        tcol = _pack_constant_transparent_node(tr, ctx)
+    elif "ADD_SHADER" in kinds:
+        if t0 == "ADD_SHADER" and t1 == "ADD_SHADER":
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix both sides Add Shader refused "
+                f"(Slice 2bt: one Add leaf only)"
+            )
         if "MIX_SHADER" in kinds:
             raise QuantTraceSyncError(
                 f"{ctx} Mix Shader nested Mix beyond packed depth refused "
-                f"(Slice 2bs: two nested Mix hops Glass+Transparent leaves only; "
-                f"third Mix/Add/Refraction/Glossy/SSS is a follow-up)"
+                f"(Slice 2bt: two nested Mix hops; third Mix is a follow-up)"
             )
-        if "ADD_SHADER" in kinds:
+        other = kinds - {"ADD_SHADER"}
+        if other not in ({"BSDF_GLASS"}, {"BSDF_TRANSPARENT"}):
             raise QuantTraceSyncError(
-                f"{ctx} nested2 Mix <- Add Shader refused "
-                f"(Slice 2bs: Glass+Transparent leaves only; "
-                f"Add+Refraction/Glossy/SSS under Mix.004 is a follow-up)"
+                f"{ctx} nested2 Mix closures {t0!r}+{t1!r} refused "
+                f"(Slice 2bt: Add opposite Glass or Transparent only; "
+                f"Refraction/Glossy/SSS as Mix.004 sibling is a follow-up)"
+            )
+        if t0 == "ADD_SHADER":
+            add_node, leaf, leaf_type = c0, c1, t1
+            k1, k2 = 2, (0 if leaf_type == "BSDF_GLASS" else 1)
+        else:
+            add_node, leaf, leaf_type = c1, c0, t0
+            k1, k2 = (0 if leaf_type == "BSDF_GLASS" else 1), 2
+        packed_add = _pack_add_shader_node(add_node, ctx)
+        add_fields = packed_add["fields"]
+        if leaf_type == "BSDF_GLASS":
+            if packed_add.get("glass") is not None:
+                raise QuantTraceSyncError(
+                    f"{ctx} nested2 Mix Add+Glass has two Glass BSDFs refused "
+                    f"(Slice 2bt: one Glass in Mix.004)"
+                )
+            g = _pack_constant_glass_node(leaf, ctx)
+            tcol = packed_add.get("transparent_color")
+        else:
+            if packed_add.get("glass") is None:
+                raise QuantTraceSyncError(
+                    f"{ctx} nested2 Mix Add+Transparent missing Glass refused "
+                    f"(Slice 2bt: need Glass in Add or Mix.004 sibling)"
+                )
+            g = packed_add["glass"]
+            leaf_tcol = _pack_constant_transparent_node(leaf, ctx)
+            nest_tcol = packed_add.get("transparent_color")
+            if nest_tcol is not None:
+                if any(
+                    abs(float(a) - float(b)) > 1e-6
+                    for a, b in zip(leaf_tcol, nest_tcol)
+                ):
+                    raise QuantTraceSyncError(
+                        f"{ctx} nested2 Mix Add Transparent colors differ refused "
+                        f"(Slice 2bt: shared mix_transparent_color only)"
+                    )
+            tcol = leaf_tcol
+    else:
+        if "MIX_SHADER" in kinds:
+            raise QuantTraceSyncError(
+                f"{ctx} Mix Shader nested Mix beyond packed depth refused "
+                f"(Slice 2bt: two nested Mix hops Glass+Transparent or Add leaves; "
+                f"third Mix is a follow-up)"
             )
         if (
             "SUBSURFACE_SCATTERING" in kinds
@@ -4171,21 +4492,13 @@ def _pack_nested2_mix_shader(inner, ctx: str) -> dict:
         ):
             raise QuantTraceSyncError(
                 f"{ctx} nested2 Mix closures {t0!r}+{t1!r} refused "
-                f"(Slice 2bs: Glass+Transparent only; "
-                f"Refraction/Glossy/SSS/Translucent is a follow-up)"
+                f"(Slice 2bt: Glass+Transparent or Add+Glass/Transparent; "
+                f"bare Refraction/Glossy/SSS on Mix.004 is a follow-up)"
             )
         raise QuantTraceSyncError(
             f"{ctx} nested2 Mix closures {t0!r}+{t1!r} refused "
-            f"(Slice 2bs: Glass+Transparent leaves only)"
+            f"(Slice 2bt: Glass+Transparent or Add+Glass/Transparent leaves)"
         )
-    if t0 == "BSDF_GLASS":
-        glass, tr = c0, c1
-        k1, k2 = 0, 1
-    else:
-        glass, tr = c1, c0
-        k1, k2 = 1, 0
-    g = _pack_constant_glass_node(glass, ctx)
-    tcol = _pack_constant_transparent_node(tr, ctx)
     return {
         "mix_nested2_fac": float(nest_fac),
         "mix_nested2_lightpath_enable": int(nest_lp_enable),
@@ -4199,6 +4512,7 @@ def _pack_nested2_mix_shader(inner, ctx: str) -> dict:
         "mix_nested2_ramp_interpolate": int(ramp_interp),
         "mix_nested2_ramp_fac": float(ramp_fac),
         **_copy_mix_nested2_ramp_math_fields(ramp_math),
+        **_copy_mix_nested2_add_fields(add_fields),
         "glass": g,
         "transparent_color": tcol,
     }
@@ -4356,16 +4670,17 @@ def _pack_nested_mix_shader(inner, ctx: str) -> dict:
                 )
             g = glass_g
             leaf_tcol = _pack_constant_transparent_node(leaf_node, ctx)
-            nest_tcol = n2["transparent_color"]
-            if any(
-                abs(float(a) - float(b)) > 1e-6
-                for a, b in zip(leaf_tcol, nest_tcol)
-            ):
-                raise QuantTraceSyncError(
-                    f"{ctx} nested Mix nested2 Transparent colors differ refused "
-                    f"(Slice 2bq: shared mix_transparent_color only; "
-                    f"dual Transparent color ABI is a follow-up)"
-                )
+            nest_tcol = n2.get("transparent_color")
+            if nest_tcol is not None:
+                if any(
+                    abs(float(a) - float(b)) > 1e-6
+                    for a, b in zip(leaf_tcol, nest_tcol)
+                ):
+                    raise QuantTraceSyncError(
+                        f"{ctx} nested Mix nested2 Transparent colors differ refused "
+                        f"(Slice 2bt: shared mix_transparent_color only; "
+                        f"dual Transparent color ABI is a follow-up)"
+                    )
             tcol = leaf_tcol
         return {
             "mix_nested_fac": float(nest_fac),
@@ -4401,6 +4716,7 @@ def _pack_nested_mix_shader(inner, ctx: str) -> dict:
                 else 0.5
             ),
             **_copy_mix_nested2_ramp_math_fields(n2),
+            **_copy_mix_nested2_add_fields(n2),
             "glass": g,
             "transparent_color": tcol,
         }
@@ -4894,6 +5210,7 @@ def _mix_glass_transparent_from_material(mat, root, *, object_name: str = "") ->
                 else 0.5
             ),
             **_copy_mix_nested2_ramp_math_fields(nested),
+            **_copy_mix_nested2_add_fields(nested),
         }
         # Exactly one Glass in {nested leaves, outer leaf}
         glass_g = nested.get("glass")
@@ -8671,6 +8988,35 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
         desc.mix_nested2_ramp_hsv_color[i] = float(v)
     desc.mix_nested2_ramp_hsv_color_kind = _bi("mix_nested2_ramp_hsv_color_kind", 0)
     desc.mix_nested2_ramp_hsv_color_lightpath = _bi("mix_nested2_ramp_hsv_color_lightpath", 0)
+    desc.mix_nested2_add_enable = _bi("mix_nested2_add_enable", 0)
+    desc.mix_nested2_add_c1_kind = _bi("mix_nested2_add_c1_kind", 0)
+    desc.mix_nested2_add_c2_kind = _bi("mix_nested2_add_c2_kind", 1)
+    _gcol = packed.get("mix_nested2_glossy_color")
+    if _gcol is None:
+        _gcol = (1.0, 1.0, 1.0)
+    for i, v in enumerate(list(_gcol)[:3]):
+        desc.mix_nested2_glossy_color[i] = float(v)
+    desc.mix_nested2_glossy_roughness = _bf("mix_nested2_glossy_roughness", 0.5)
+    desc.mix_nested2_glossy_distribution = _bi("mix_nested2_glossy_distribution", 1)
+    _scol = packed.get("mix_nested2_sss_color")
+    if _scol is None:
+        _scol = (0.8, 0.8, 0.8)
+    for i, v in enumerate(list(_scol)[:3]):
+        desc.mix_nested2_sss_color[i] = float(v)
+    desc.mix_nested2_sss_scale = _bf("mix_nested2_sss_scale", 0.005)
+    _srad = packed.get("mix_nested2_sss_radius")
+    if _srad is None:
+        _srad = (1.0, 0.2, 0.1)
+    for i, v in enumerate(list(_srad)[:3]):
+        desc.mix_nested2_sss_radius[i] = float(v)
+    desc.mix_nested2_sss_ior = _bf("mix_nested2_sss_ior", 1.4)
+    desc.mix_nested2_sss_roughness = _bf("mix_nested2_sss_roughness", 1.0)
+    desc.mix_nested2_sss_method = _bi("mix_nested2_sss_method", 0)
+    _tlc = packed.get("mix_nested2_translucent_color")
+    if _tlc is None:
+        _tlc = (0.8, 0.8, 0.8)
+    for i, v in enumerate(list(_tlc)[:3]):
+        desc.mix_nested2_translucent_color[i] = float(v)
     n2_ramp_list = packed.get("mix_nested2_ramp") or []
     n2_ramp_alpha_list = packed.get("mix_nested2_ramp_alpha") or []
     n2_ramp_n = packed.get("mix_nested2_ramp_n", 0)
@@ -9209,6 +9555,19 @@ def make_qt_simple_scene_type():
             ("mix_nested2_ramp_hsv_color", ctypes.c_float * 3),
             ("mix_nested2_ramp_hsv_color_kind", ctypes.c_int),
             ("mix_nested2_ramp_hsv_color_lightpath", ctypes.c_int),
+            ("mix_nested2_add_enable", ctypes.c_int),
+            ("mix_nested2_add_c1_kind", ctypes.c_int),
+            ("mix_nested2_add_c2_kind", ctypes.c_int),
+            ("mix_nested2_glossy_color", ctypes.c_float * 3),
+            ("mix_nested2_glossy_roughness", ctypes.c_float),
+            ("mix_nested2_glossy_distribution", ctypes.c_int),
+            ("mix_nested2_sss_color", ctypes.c_float * 3),
+            ("mix_nested2_sss_scale", ctypes.c_float),
+            ("mix_nested2_sss_radius", ctypes.c_float * 3),
+            ("mix_nested2_sss_ior", ctypes.c_float),
+            ("mix_nested2_sss_roughness", ctypes.c_float),
+            ("mix_nested2_sss_method", ctypes.c_int),
+            ("mix_nested2_translucent_color", ctypes.c_float * 3),
         ]
 
     return QT_SimpleScene
@@ -9775,6 +10134,19 @@ def make_qt_scene_types():
             ("mix_nested2_ramp_hsv_color", ctypes.c_float * 3),
             ("mix_nested2_ramp_hsv_color_kind", ctypes.c_int),
             ("mix_nested2_ramp_hsv_color_lightpath", ctypes.c_int),
+            ("mix_nested2_add_enable", ctypes.c_int),
+            ("mix_nested2_add_c1_kind", ctypes.c_int),
+            ("mix_nested2_add_c2_kind", ctypes.c_int),
+            ("mix_nested2_glossy_color", ctypes.c_float * 3),
+            ("mix_nested2_glossy_roughness", ctypes.c_float),
+            ("mix_nested2_glossy_distribution", ctypes.c_int),
+            ("mix_nested2_sss_color", ctypes.c_float * 3),
+            ("mix_nested2_sss_scale", ctypes.c_float),
+            ("mix_nested2_sss_radius", ctypes.c_float * 3),
+            ("mix_nested2_sss_ior", ctypes.c_float),
+            ("mix_nested2_sss_roughness", ctypes.c_float),
+            ("mix_nested2_sss_method", ctypes.c_int),
+            ("mix_nested2_translucent_color", ctypes.c_float * 3),
         ]
 
     class QT_Light(ctypes.Structure):

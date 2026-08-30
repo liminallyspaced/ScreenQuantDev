@@ -133,6 +133,10 @@
  *   2br set_fac bit-identical. Wire MathNode +/- GeometryNode Backfacing +/-
  *   HSVNode (Color<-LightPath Ray Length) -> RGBRampNode Fac. Cite MathNode,
  *   GeometryNode, HSVNode, LightPathNode.
+ * Slice 2bt: nested2 Mix leaf AddClosure (+ Glossy/SSS/Translucent).
+ *   mix_nested2_add_enable=0 / nested2 kinds 0/1 keep 2bs Glass+Transparent
+ *   bit-identical. Cite AddClosureNode, GlossyBsdfNode,
+ *   SubsurfaceScatteringNode, TranslucentBsdfNode.
  *   enable=0 keeps 2bc/2x bit-identical. Cite SeparateColorNode
  *   set_color_type NODE_COMBSEP_COLOR_RGB; float Red/Green/Blue → Height
  *   (no NODE_CONVERT_CF). Loft Sideboard: Blue ← TEX_IMAGE Color.
@@ -523,6 +527,25 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
         d->mix_nested2_ramp_hsv_color[2] = 0.0f;
     d->mix_nested2_ramp_hsv_color_kind = 0;
     d->mix_nested2_ramp_hsv_color_lightpath = 0;
+    /* Slice 2bt identity — add_enable=0 keeps 2bs Glass+Transparent. */
+    d->mix_nested2_add_enable = 0;
+    d->mix_nested2_add_c1_kind = 0;
+    d->mix_nested2_add_c2_kind = 1;
+    d->mix_nested2_glossy_color[0] = d->mix_nested2_glossy_color[1] =
+        d->mix_nested2_glossy_color[2] = 1.0f;
+    d->mix_nested2_glossy_roughness = 0.5f;
+    d->mix_nested2_glossy_distribution = 1;
+    d->mix_nested2_sss_color[0] = d->mix_nested2_sss_color[1] =
+        d->mix_nested2_sss_color[2] = 0.8f;
+    d->mix_nested2_sss_scale = 0.005f;
+    d->mix_nested2_sss_radius[0] = 1.0f;
+    d->mix_nested2_sss_radius[1] = 0.2f;
+    d->mix_nested2_sss_radius[2] = 0.1f;
+    d->mix_nested2_sss_ior = 1.4f;
+    d->mix_nested2_sss_roughness = 1.0f;
+    d->mix_nested2_sss_method = 0;
+    d->mix_nested2_translucent_color[0] = d->mix_nested2_translucent_color[1] =
+        d->mix_nested2_translucent_color[2] = 0.8f;
     /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
     d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
     d->spec_tint_mix_type = 0;
@@ -1007,6 +1030,27 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->mix_nested2_ramp_hsv_color[2] = s->mix_nested2_ramp_hsv_color[2];
     mesh->mix_nested2_ramp_hsv_color_kind = s->mix_nested2_ramp_hsv_color_kind;
     mesh->mix_nested2_ramp_hsv_color_lightpath = s->mix_nested2_ramp_hsv_color_lightpath;
+    mesh->mix_nested2_add_enable = s->mix_nested2_add_enable;
+    mesh->mix_nested2_add_c1_kind = s->mix_nested2_add_c1_kind;
+    mesh->mix_nested2_add_c2_kind = s->mix_nested2_add_c2_kind;
+    mesh->mix_nested2_glossy_color[0] = s->mix_nested2_glossy_color[0];
+    mesh->mix_nested2_glossy_color[1] = s->mix_nested2_glossy_color[1];
+    mesh->mix_nested2_glossy_color[2] = s->mix_nested2_glossy_color[2];
+    mesh->mix_nested2_glossy_roughness = s->mix_nested2_glossy_roughness;
+    mesh->mix_nested2_glossy_distribution = s->mix_nested2_glossy_distribution;
+    mesh->mix_nested2_sss_color[0] = s->mix_nested2_sss_color[0];
+    mesh->mix_nested2_sss_color[1] = s->mix_nested2_sss_color[1];
+    mesh->mix_nested2_sss_color[2] = s->mix_nested2_sss_color[2];
+    mesh->mix_nested2_sss_scale = s->mix_nested2_sss_scale;
+    mesh->mix_nested2_sss_radius[0] = s->mix_nested2_sss_radius[0];
+    mesh->mix_nested2_sss_radius[1] = s->mix_nested2_sss_radius[1];
+    mesh->mix_nested2_sss_radius[2] = s->mix_nested2_sss_radius[2];
+    mesh->mix_nested2_sss_ior = s->mix_nested2_sss_ior;
+    mesh->mix_nested2_sss_roughness = s->mix_nested2_sss_roughness;
+    mesh->mix_nested2_sss_method = s->mix_nested2_sss_method;
+    mesh->mix_nested2_translucent_color[0] = s->mix_nested2_translucent_color[0];
+    mesh->mix_nested2_translucent_color[1] = s->mix_nested2_translucent_color[1];
+    mesh->mix_nested2_translucent_color[2] = s->mix_nested2_translucent_color[2];
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1831,9 +1875,85 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             else {
                 n2->set_fac(m->mix_nested2_fac);
             }
-            graph->connect(make_leaf(m->mix_nested2_closure1_kind),
+            auto make_glossy = [&]() -> ShaderOutput * {
+                GlossyBsdfNode *gl = graph->create_node<GlossyBsdfNode>();
+                gl->set_color(make_float3(m->mix_nested2_glossy_color[0],
+                                          m->mix_nested2_glossy_color[1],
+                                          m->mix_nested2_glossy_color[2]));
+                gl->set_roughness(m->mix_nested2_glossy_roughness);
+                ClosureType gdist = CLOSURE_BSDF_MICROFACET_GGX_ID;
+                if (m->mix_nested2_glossy_distribution == 0) {
+                    gdist = CLOSURE_BSDF_MICROFACET_BECKMANN_ID;
+                }
+                else if (m->mix_nested2_glossy_distribution == 2) {
+                    gdist = CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID;
+                }
+                gl->set_distribution(gdist);
+                return gl->output("BSDF");
+            };
+            auto make_sss = [&]() -> ShaderOutput * {
+                SubsurfaceScatteringNode *sss =
+                    graph->create_node<SubsurfaceScatteringNode>();
+                sss->set_color(make_float3(m->mix_nested2_sss_color[0],
+                                           m->mix_nested2_sss_color[1],
+                                           m->mix_nested2_sss_color[2]));
+                sss->set_scale(m->mix_nested2_sss_scale);
+                sss->set_radius(make_float3(m->mix_nested2_sss_radius[0],
+                                            m->mix_nested2_sss_radius[1],
+                                            m->mix_nested2_sss_radius[2]));
+                sss->set_subsurface_ior(m->mix_nested2_sss_ior);
+                sss->set_subsurface_roughness(m->mix_nested2_sss_roughness);
+                ClosureType sm = CLOSURE_BSSRDF_BURLEY_ID;
+                if (m->mix_nested2_sss_method == 1) {
+                    sm = CLOSURE_BSSRDF_RANDOM_WALK_ID;
+                }
+                else if (m->mix_nested2_sss_method == 2) {
+                    sm = CLOSURE_BSSRDF_RANDOM_WALK_SKIN_ID;
+                }
+                else if (m->mix_nested2_sss_method == 3) {
+                    sm = CLOSURE_BSSRDF_RANDOM_WALK_LEGACY_ID;
+                }
+                sss->set_method(sm);
+                return sss->output("BSSRDF");
+            };
+            auto make_translucent = [&]() -> ShaderOutput * {
+                TranslucentBsdfNode *tl = graph->create_node<TranslucentBsdfNode>();
+                tl->set_color(make_float3(m->mix_nested2_translucent_color[0],
+                                          m->mix_nested2_translucent_color[1],
+                                          m->mix_nested2_translucent_color[2]));
+                return tl->output("BSDF");
+            };
+            /* Slice 2bt: Add children 0=Glass 1=Transparent 3=Glossy 4=SSS
+             * 5=Translucent. enable=0 never reaches here. */
+            auto make_add_child = [&](int kind) -> ShaderOutput * {
+                if (kind == 1) {
+                    return make_transparent();
+                }
+                if (kind == 3) {
+                    return make_glossy();
+                }
+                if (kind == 4) {
+                    return make_sss();
+                }
+                if (kind == 5) {
+                    return make_translucent();
+                }
+                return make_glass();
+            };
+            auto make_nested2_leaf = [&](int kind) -> ShaderOutput * {
+                if (kind == 2 && m->mix_nested2_add_enable != 0) {
+                    AddClosureNode *add = graph->create_node<AddClosureNode>();
+                    graph->connect(make_add_child(m->mix_nested2_add_c1_kind),
+                                   add->input("Closure1"));
+                    graph->connect(make_add_child(m->mix_nested2_add_c2_kind),
+                                   add->input("Closure2"));
+                    return add->output("Closure");
+                }
+                return make_leaf(kind);
+            };
+            graph->connect(make_nested2_leaf(m->mix_nested2_closure1_kind),
                            n2->input("Closure1"));
-            graph->connect(make_leaf(m->mix_nested2_closure2_kind),
+            graph->connect(make_nested2_leaf(m->mix_nested2_closure2_kind),
                            n2->input("Closure2"));
             return n2->output("Closure");
         };

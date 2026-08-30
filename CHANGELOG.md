@@ -1,5 +1,20 @@
 ## [0.3.3] — unreleased
 
+### QuantTrace Slice 2bt (2026-08-30 12pm PlugWalk ET)
+- Native `0.0.73-slice2bt`: nested2 Mix leaf Add Shader (+ unlinked Glossy/SSS/Translucent). ABI `mix_nested2_add_enable` / `add_c{1,2}_kind` + glossy color/roughness/distribution + sss color/scale/radius/ior/roughness/method + translucent_color after 2bs ramp-math HSV on `QT_Mesh` + `QT_SimpleScene`. enable=0 / nested2 kinds 0/1 keep 2bs Glass+Transparent bit-identical. Add children 0=Glass 1=Transparent 3=Glossy 4=SSS 5=Translucent. Cite Cycles `shader_nodes.h` AddClosureNode, GlossyBsdfNode, SubsurfaceScatteringNode (BSSRDF out), TranslucentBsdfNode, MixClosureNode, GlassBsdfNode, TransparentBsdfNode. `is_tracer=1`. Addon still `0.3.3`.
+- Census loft `Realistic_Glass_01` Mix.004 Shader=Add (Mix.002 Glossy GGX Color unlinked Roughness←MATH + Mix.003 SSS BURLEY Color←ColorRamp + Translucent); Shader_001 Glass Color+Rough linked. Packable CLAIM = Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp(+MATH) Add(unlinked Glossy GGX + Transparent)+Glass. Nested Mix under Add leftover.
+- CLAIM Add Glossy+Transparent (backplate): 32²/4 Δmax **1.91e-6** MAE 4.13e-8 0 px≥1e-3 **PASS**; 256²/128 Δmax **1.65e-5** MAE 2.09e-8 0 px≥1e-3 **PASS**.
+- Identity ramp 2br 32²/4 Δmax **1.91e-6** PASS (add_enable=0); nested2 2bq 32²/4 Δmax **1.91e-6** PASS; nested_mix 2bp 32²/4 Δmax **1.91e-6** PASS; glass_only 2bm 32²/4 Δmax **1.19e-5** PASS. mix/invert/bump_sep/hdr 32²/4 PASS (Δmax 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4).
+- Live stock CLAIM vs Session Add-bypass (add_enable=0, nested2 Glass+Transparent) 32²/4 Δmax **0.567** (115 px≥1e-3) — graph live.
+- Named REFUSE: Mix-under-Add, nested Add, Refraction under Add, ColorRamp.Fac←Noise, third Mix hop, Glass.Color linked (Slice 2bt/2bs tags).
+- Loft: Add Shader no longer first refuse; first PACK_FAIL still `G-__555573`/`Realistic_Glass_01` — now Mix-under-Add Slice 2bt. No loft Session Δmax. No zip / no gibby / no 2080. Store Classroom 41% / loft 52%.
+
+### QuantTrace Slice 2bs (2026-08-30 11am PlugWalk ET)
+- Native `0.0.72-slice2bs`: ColorRamp.Fac←MATH on nested2 ramp (`mix_nested2_ramp_math_*` after `mix_nested2_ramp_fac`). enable=0 / math off keeps 2br `set_fac` bit-identical. Reuse 2bo kind codes plus GEOM=3 Backfacing and HUESAT=4 (HueSat Color←Light Path Ray Length). Cite Cycles `shader_nodes.h` RGBRampNode Fac, MathNode MULTIPLY, GeometryNode Backfacing, HSVNode, LightPathNode Ray Length. `is_tracer=1`. Addon still `0.3.3`.
+- CLAIM ColorRamp.Fac←MATH (backplate): 32²/4 Δmax **1.91e-6** MAE 3.68e-8 0 px≥1e-3 **PASS**; 256²/128 Δmax **9.51e-6** MAE 1.91e-8 0 px≥1e-3 **PASS**.
+- Identity ramp 2br / nested2 2bq / nested_mix 2bp / glass_only 2bm 32²/4 PASS. mix/invert/bump_sep/hdr 32²/4 PASS.
+- Loft: ColorRamp.002 Fac←MATH packed; first PACK_FAIL still `G-__555573`/`Realistic_Glass_01` — nested2 Mix ← Add Shader Slice 2bs. No loft Session Δmax. No zip / no gibby / no 2080. Store Classroom 41% / loft 52%.
+
 ### QuantTrace Slice 2br (2026-08-30 10am PlugWalk ET)
 - Native `0.0.71-slice2br`: nested2 Mix Fac←ColorRamp (RGBRampNode). ABI `mix_nested2_ramp_enable` / `mix_nested2_ramp` / `mix_nested2_ramp_alpha` / `mix_nested2_ramp_n` / `mix_nested2_ramp_interpolate` / `mix_nested2_ramp_fac` after `mix_nested2_*` on `QT_Mesh` + `QT_SimpleScene`. enable=0 / n=0 keeps 2bq set_fac/LightPath bit-identical. Reuse official colorramp_to_array LUT 257. ColorRamp.Fac unlinked float only. Cite Cycles `shader_nodes.h` RGBRampNode + MixClosureNode. `is_tracer=1`. Addon still `0.3.3`.
 - Census loft `Realistic_Glass_01` Mix Shader.004 Fac←ColorRamp.002 Color (LINEAR RGB, hue=NEAR, 2 stops 0.387 black / 0.877 white; ColorRamp.Fac←MATH Backfacing×HueSat leftover); Shader=Add (Glossy/SSS/Translucent); Shader_001=Glass Color+Rough linked. Packable CLAIM = Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp (loft stops, Fac unlinked) Glass+Transparent.
