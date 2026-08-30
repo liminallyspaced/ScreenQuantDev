@@ -1856,6 +1856,19 @@ def test_camera_cull_partitions_far_tiny_to_distance_only():
 
 
 
+def test_dead_closure_prune_policy_and_handler():
+    section("DEAD_CLOSURE_PRUNE policy and handler registration")
+    check("DEAD_CLOSURE_PRUNE" not in speed_solver.PRESERVE_LOOK_KINDS,
+          "Preserve Look allowlist excludes DEAD_CLOSURE_PRUNE")
+    check("DEAD_CLOSURE_PRUNE" in speed_solver.BALANCED_BLOCKED_KINDS,
+          "Balanced blocks DEAD_CLOSURE_PRUNE")
+    check("DEAD_CLOSURE_PRUNE" in speed_solver.VIDEO_BLOCKED_KINDS,
+          "Video blocks DEAD_CLOSURE_PRUNE")
+    speed_apply = _load_speed_apply_fake_bpy()
+    check("DEAD_CLOSURE_PRUNE" in speed_apply._HANDLERS,
+          "DEAD_CLOSURE_PRUNE is in _HANDLERS")
+
+
 def main():
     test_independence()
     test_default_plan_filters()
@@ -1886,6 +1899,7 @@ def main():
     test_apply_camera_distance_cull_when_present()
     test_apply_camera_cull_ok_without_distance_rna()
     test_camera_cull_partitions_far_tiny_to_distance_only()
+    test_dead_closure_prune_policy_and_handler()
     test_filter_glossy_proven_only()
     test_auto_scramble_gpu_only()
     finish()

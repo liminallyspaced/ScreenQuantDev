@@ -58,17 +58,20 @@ BALANCED_BLOCKED_KINDS = {
     "CAMERA_CULL",
     "HAIR_RIBBONS",
     "OPAQUE_CUTOUT_SHADOWS",
+    "DEAD_CLOSURE_PRUNE",
 }
 
 # Animation is less forgiving than a still: small per-frame sampling changes
 # become flicker, crawling edges, or denoiser smearing.  Aggressive remains an
-# explicit escape hatch; the two safer profiles obey this additional block.
+# explicit escape hatch for sampling levers; DEAD_CLOSURE_PRUNE is withheld
+# on video even in Aggressive. The two safer profiles obey this block fully.
 VIDEO_BLOCKED_KINDS = {
     "ANIMATED_SEED",
     "DENOISE_ON",
     "DENOISE_PREFILTER",
     "AUTO_SCRAMBLE",
     "LIGHT_TREE",
+    "DEAD_CLOSURE_PRUNE",
 }
 # Never in the default Make it Fast plan (VRAM / draft / opt-in).
 FORBIDDEN_KINDS = {
@@ -298,6 +301,12 @@ def resolve_render_intent(scene, settings):
 def _allowed_by_policy(action, profile, intent):
     if profile == PROFILE_PRESERVE_LOOK:
         return action.kind in PRESERVE_LOOK_KINDS
+    # Graph-write JPEG/opaque Alpha unlink is Aggressive stills only.
+    # Aggressive remains the video escape hatch for sampling levers, but
+    # DEAD_CLOSURE_PRUNE must not flicker a stills-only material write.
+    if action.kind == "DEAD_CLOSURE_PRUNE" and (
+            profile != PROFILE_AGGRESSIVE or intent == INTENT_VIDEO):
+        return False
     if profile == PROFILE_BALANCED and action.kind in BALANCED_BLOCKED_KINDS:
         return False
     if profile != PROFILE_AGGRESSIVE and intent == INTENT_VIDEO:
@@ -797,9 +806,10 @@ def _dead_actions(scene, coverage, caveats):
     actions.extend(_crypto_actions(scene))
     actions.extend(_pass_prune_actions(scene))
     actions.extend(_opaque_cutout_shadow_actions(scene, caveats))
-    # DEAD_CLOSURE_PRUNE lives in dead_closure_prune_actions (manual-later).
-    # Not in the default Auto plan until official Classroom/loft inventory
-    # proves candidates. No time claim.
+    # Auto Aggressive stills: PRUNE_ALPHA only (tier 1). Other PRUNE_* stay
+    # in the manual-later hook at tier 2. Preserve Look / Balanced / Video
+    # withhold via policy. No time claim.
+    actions.extend(dead_closure_prune_actions(scene, caveats, auto_alpha=True))
     # UNUSED_SLOTS lives in unused_slots_actions (manual-later).
     # UNUSED_COLOR_ATTRS lives in unused_color_attrs_actions (manual-later).
     # PORTAL_MESH lives in portal_mesh_actions (manual-later).
@@ -2060,16 +2070,34 @@ def _load_dead_closures():
         return None
 
 
-def dead_closure_prune_actions(scene, caveats=None):
-    """Manual-later planner hook for L1 DEAD_CLOSURE_PRUNE.
+def dead_closure_prune_actions(scene, caveats=None, *, auto_alpha=False):
+    """Planner hook for L1 DEAD_CLOSURE_PRUNE.
 
-    NOT called from build_speed_plan / _dead_actions. Auto stays off until
-    official-file inventory proves candidates. time_factor is 1.0 (no claim).
+    Manual-later (default): all PRUNE_CLASSES, tier 2, label says "manual".
+    Auto Aggressive stills: pass auto_alpha=True from _dead_actions —
+    PRUNE_ALPHA records only, tier 1, label does not say "manual".
+    time_factor is 1.0 (no claim). Policy withholds Preserve Look / Balanced
+    / Video; other PRUNE_* stay Manual.
     """
     dead_closures = _load_dead_closures()
     if dead_closures is None:
         return []
-    records = dead_closures.classify_dead_closures(scene)
+    try:
+        records = dead_closures.classify_dead_closures(scene)
+    except Exception:
+        return []
+    if auto_alpha:
+        prunes = [r for r in records
+                  if r.get("class") == dead_closures.PRUNE_ALPHA]
+        n = len(prunes)
+        if n < 1:
+            return []
+        return [SpeedAction(
+            "DEAD_CLOSURE_PRUNE",
+            "%d JPEG / opaque-constant Alpha socket(s) -> unlink (PRUNE_ALPHA)"
+            % n,
+            "dead", 1, 1.0, 1,
+            {"records": prunes})]
     prunes = [r for r in records if r.get("class") in dead_closures.PRUNE_CLASSES]
     n_alpha = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_ALPHA)
     n_vol = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_VOLUME)

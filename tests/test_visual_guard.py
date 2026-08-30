@@ -52,6 +52,29 @@ def main():
     check(missing["passed"] is False,
           "incomplete video evidence fails closed")
 
+    section("DEAD_CLOSURE_PRUNE has its own fail-closed group")
+    mixed = [
+        {"kind": "ADAPTIVE_ON"},
+        {"kind": "DEVICE_GPU"},
+        {"kind": "LOCK_INTERFACE"},
+        {"kind": "DEAD_CLOSURE_PRUNE"},
+        {"kind": "MIN_SAMPLES"},
+        {"kind": "PERSISTENT_DATA"},
+    ]
+    grouped = visual_guard.group_speed_actions(mixed)
+    by_key = {g["key"]: g for g in grouped}
+    check("dead_closure_prune" in by_key,
+          "DEAD_CLOSURE_PRUNE has an explicit isolated group")
+    prune_kinds = [a["kind"] for a in by_key["dead_closure_prune"]["actions"]]
+    check(prune_kinds == ["DEAD_CLOSURE_PRUNE"],
+          "dead_closure_prune group contains only DEAD_CLOSURE_PRUNE")
+    for key in ("sampling", "backend", "runtime"):
+        kinds = [a["kind"] for a in by_key[key]["actions"]]
+        check("DEAD_CLOSURE_PRUNE" not in kinds,
+              "DEAD_CLOSURE_PRUNE is not bundled with %s" % key)
+    check(by_key["sampling"]["actions"][0]["kind"] == "ADAPTIVE_ON",
+          "sampling group still coalesces known sampling actions")
+
     section("temporal residual")
     temporal = visual_guard.temporal_residual_metrics(
         truth, truth, truth, local)

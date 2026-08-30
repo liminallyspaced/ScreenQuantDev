@@ -890,6 +890,22 @@ def _apply_device_gpu(scene, settings, jrnl, payload, cache, skipped, progress):
     return None
 
 
+def _apply_dead_closure_prune(scene, settings, jrnl, payload, cache, skipped, progress):
+    """Unlink proven-dead sockets from payload records. Revert is NODE_UNLINK."""
+    try:
+        from ..analysis import dead_closures
+    except Exception:
+        skipped.append(_skip("DEAD_CLOSURE_PRUNE", "-", "dead_closures module missing"))
+        return None
+    records = payload.get("records")
+    if not records:
+        return None
+    applied = dead_closures.apply_dead_closures(scene, jrnl, records=records)
+    if applied:
+        return "unlinked %d dead-closure socket(s)" % len(applied)
+    return None
+
+
 def _object_write_skip(obj, scene, guard_cache):
     from .. import compat
     override = getattr(getattr(obj, "scenequant", None), "override", "AUTO")
@@ -944,4 +960,5 @@ _HANDLERS = {
     "PASS_PRUNE": _apply_pass_prune,
     "CRYPTO_PRUNE": _apply_crypto_prune,
     "DEVICE_GPU": _apply_device_gpu,
+    "DEAD_CLOSURE_PRUNE": _apply_dead_closure_prune,
 }

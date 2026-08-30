@@ -7,7 +7,8 @@
 #
 # Mix Shader Fac proven 0/1 + unused Transparent BSDF is
 # PRUNE_MIX_TRANSPARENT (L1.5). Apply unlinks the dead shader input
-# (NODE_UNLINK passthrough). It is NOT wired into Make it Fast Auto.
+# (NODE_UNLINK passthrough). VOLUME/MIX/SSS/EMISSION/TRANSMISSION/BUMP/
+# BEVEL/DISPLACE stay Manual. PRUNE_ALPHA is Auto on Aggressive stills.
 # Displacement proven-zero is PRUNE_DISPLACE (L1.6). Unlink the
 # Displacement socket so Cycles drops has_displacement. Same apply.
 # Subsurface Weight proven-zero is PRUNE_SSS (L1.7). Unlink Weight
@@ -204,7 +205,11 @@ def _sock(owner, *names, collection="inputs"):
             sock = getter(name)
             if sock is not None:
                 return sock
-    for sock in socks or ():
+    try:
+        iterator = iter(socks)
+    except TypeError:
+        return None
+    for sock in iterator:
         ident = getattr(sock, "identifier", None)
         name = getattr(sock, "name", None)
         if ident in names or name in names:
@@ -216,7 +221,11 @@ def _iter_socks(owner, collection="inputs"):
     socks = getattr(owner, collection, None)
     if socks is None:
         return
-    for sock in socks or ():
+    try:
+        iterator = iter(socks)
+    except TypeError:
+        return
+    for sock in iterator:
         yield sock
 
 
@@ -1343,7 +1352,8 @@ def _unlink_socket(tree, sock):
 def apply_dead_closures(scene, jrnl, records=None, tag="speed"):
     """Unlink proven-dead sockets. Journal one NODE_UNLINK per write.
 
-    Only PRUNE_* records are written. Not called by Make it Fast Auto.
+    Only PRUNE_* records are written. Aggressive Auto passes PRUNE_ALPHA
+    records via DEAD_CLOSURE_PRUNE; other classes remain Manual.
     Never writes scene.cycles.* or use_transparent_shadow.
     """
     if records is None:

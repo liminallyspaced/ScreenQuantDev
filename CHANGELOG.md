@@ -1,5 +1,18 @@
 ## [Unreleased] — 0.3.6-dev
 
+### Aggressive PRUNE_ALPHA (JPEG / opaque-constant Alpha unlink)
+- Aggressive stills Make it Fast now plans, applies, and journals already-coded
+  `DEAD_CLOSURE_PRUNE` for **PRUNE_ALPHA only** (JPEG / no-alpha / IGNORE /
+  Value=1.0 Alpha unlink). No new Cycles RNA. `time_factor` stays 1.0.
+- Preserve Look default, Balanced, and Video withhold it. Other PRUNE_*
+  (VOLUME / MIX / SSS / EMISSION / TRANSMISSION / BUMP / BEVEL / DISPLACE)
+  stay Manual-later at tier 2.
+- Apply registers `_HANDLERS["DEAD_CLOSURE_PRUNE"]`; revert is existing
+  `NODE_UNLINK`. 0.3.5 `visual_guard` isolates the kind in its own group and
+  fail-closes (mean/p95 stills 0.003 / 0.012).
+- Prior inventory, not a measured cut: loft DNA FIRED=7 JPEG, Classroom
+  FIRED=0. Manifest stays 0.3.5. Store plates stay Classroom 41% / loft 52%.
+
 ### Aggressive CAMERA_CULL + distance cull (independent object sets)
 - Aggressive `CAMERA_CULL` enables scene `use_camera_cull` and
   `use_distance_cull` when the distance RNA exists, but uses **two disjoint
