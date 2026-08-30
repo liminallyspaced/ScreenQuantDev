@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.67-slice2bn` — Mix Shader Glass+Transparent (+ Light Path Fac). Addon still `0.3.3`.
+**Current native:** `0.0.68-slice2bo` — Mix Fac←MATH Light Path nest + Glass+Transparent. Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.67-slice2bn` (Glass BSDF → GlassBsdfNode).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.68-slice2bo` (Mix Fac MATH + GlassBsdfNode).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -63,6 +63,7 @@ this tree never feeds Auto clocks.
 | **2as — RGB Curves → world Color** | **PASS** | rgb_curves 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **5.96e-7**. Native `0.0.46-slice2as`. |
 | **2at — 3-deep Math → world Strength** | **PASS** | math_nest3 (0.5×1.4)/1+0=0.7 32²/4 Δmax **2.16e-4**; 256²/128 Δmax **1.21e-4**. math_mul 2ai 32²/4 Δmax **4.25e-4**. rgb_curves/rgb_mix/rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.47-slice2at`. |
 | **2au — TEX_ENVIRONMENT×0 → world Strength** | **env_mul0 PASS; add20 HDR-MIS FAIL** | env_mul0 32²/4 Δmax **3.58e-7**. env_mul0_add20 loft ops=20 32²/4 Δmax **6.17e-3** (16 px) FAIL / 256²/128 Δmax **2.34e-2** (70 px) FAIL — same as unlinked Strength 20. math_nest3/math_mul/hdr/rgb/rgb_mix/rgb_curves/nishita/teximage 32²/4 PASS. Native `0.0.48-slice2au`. |
+| **2bo — Mix Fac←MATH Light Path nest** | **PASS** | CLAIM 32²/4 Δmax **1.91e-6**; 256²/128 Δmax **9.13e-4**. glass_only/unlinked_fac/lightpath/mix/invert/bump_sep/hdr 32²/4 PASS. Loft Fac MATH cleared; PACK_FAIL Realistic_Glass_01 nested Mix Slice 2bo. Native `0.0.68-slice2bo`. |
 | **2bn — Mix Glass+Transparent + Light Path Fac** | **PASS** | CLAIM 32²/4 Δmax **1.91e-6**; 256²/128 Δmax **1.27e-4**. glass_only/lightpath/mix/invert/bump_sep/hdr 32²/4 PASS. Loft lente packs; PACK_FAIL Realistic_Glass_01 Fac←MATH Slice 2bn. Native `0.0.67-slice2bn`. |
 | **2bm — Glass BSDF → GlassBsdfNode** | **PASS** | CLAIM 32²/4 Δmax **1.19e-5**; 256²/512 Δmax **9.82e-4** (256²/128 3-px caustic noise). glass_rough/ior/color/ggx + mix/invert/separate/bump_sep/hdr 32²/4 PASS. Loft Glass_02 packs; PACK_FAIL Realistic_Glass_01 Mix refused Slice 2bm. Native `0.0.67-slice2bn`. |
 | **2bl — Bump Height ← SEPARATE_COLOR** | **PASS** | CLAIM Blue 32²/4 Δmax **2.38e-7**; 256²/128 Δmax **4.77e-7**. bump 2x/noise 2bc/separate 2bj/mix 2ay/invert 2be/hdr 32²/4 PASS. Loft Sideboard Bump SEPARATE cleared; PACK_FAIL G-__555573 Realistic_Glass_01 no Principled. Native `0.0.67-slice2bn`. |

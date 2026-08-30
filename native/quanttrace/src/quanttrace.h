@@ -718,6 +718,33 @@ typedef struct QT_SimpleScene {
   int mix_closure1_kind; /* 0=Glass 1=Transparent */
   int mix_closure2_kind; /* 0=Glass 1=Transparent */
   float mix_transparent_color[3];
+  /* Slice 2bo: Mix Fac ← MATH Light Path nest (after mix_transparent_color).
+   * enable=0 keeps 2bn bit-identical (unlinked Fac or single LightPath).
+   * Binary Math tree, max nest 2 (root + one inner on A and/or B).
+   * kind 0=unlinked float/Value 1=LightPath 2=nested Math.
+   * Cite MathNode Value1/Value2/Value + LightPathNode Ray Depth (float). */
+  int mix_shader_math_enable;
+  int mix_shader_math_op;
+  int mix_shader_math_a_kind;
+  float mix_shader_math_a_const;
+  int mix_shader_math_a_lightpath;
+  int mix_shader_math_a_op;
+  int mix_shader_math_a1_kind;
+  float mix_shader_math_a1_const;
+  int mix_shader_math_a1_lightpath;
+  int mix_shader_math_a2_kind;
+  float mix_shader_math_a2_const;
+  int mix_shader_math_a2_lightpath;
+  int mix_shader_math_b_kind;
+  float mix_shader_math_b_const;
+  int mix_shader_math_b_lightpath;
+  int mix_shader_math_b_op;
+  int mix_shader_math_b1_kind;
+  float mix_shader_math_b1_const;
+  int mix_shader_math_b1_lightpath;
+  int mix_shader_math_b2_kind;
+  float mix_shader_math_b2_const;
+  int mix_shader_math_b2_lightpath;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1171,6 +1198,30 @@ typedef struct QT_Mesh {
   int mix_closure1_kind; /* 0=Glass 1=Transparent */
   int mix_closure2_kind; /* 0=Glass 1=Transparent */
   float mix_transparent_color[3];
+  /* Slice 2bo: Mix Fac ← MATH Light Path nest (after mix_transparent_color).
+   * enable=0 keeps 2bn bit-identical. Same layout as QT_SimpleScene. */
+  int mix_shader_math_enable;
+  int mix_shader_math_op;
+  int mix_shader_math_a_kind;
+  float mix_shader_math_a_const;
+  int mix_shader_math_a_lightpath;
+  int mix_shader_math_a_op;
+  int mix_shader_math_a1_kind;
+  float mix_shader_math_a1_const;
+  int mix_shader_math_a1_lightpath;
+  int mix_shader_math_a2_kind;
+  float mix_shader_math_a2_const;
+  int mix_shader_math_a2_lightpath;
+  int mix_shader_math_b_kind;
+  float mix_shader_math_b_const;
+  int mix_shader_math_b_lightpath;
+  int mix_shader_math_b_op;
+  int mix_shader_math_b1_kind;
+  float mix_shader_math_b1_const;
+  int mix_shader_math_b1_lightpath;
+  int mix_shader_math_b2_kind;
+  float mix_shader_math_b2_const;
+  int mix_shader_math_b2_lightpath;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
@@ -1179,7 +1230,9 @@ typedef struct QT_Mesh {
 #define QT_LIGHT_SUN   2
 #define QT_LIGHT_SPOT  3
 
-/* Slice 2bn: LightPathNode float outputs (Is * Ray only; Ray Depth refuse). */
+/* Slice 2bn/2bo: LightPathNode float outputs.
+ * 0..6 Is * Ray (2bn). 7..9 Ray Length / Ray Depth / Transparent Depth (2bo).
+ * Ray Depth is a float out, not Is * Ray (cite shader_nodes.cpp LightPathNode). */
 #define QT_LIGHTPATH_CAMERA_RAY        0
 #define QT_LIGHTPATH_SHADOW_RAY        1
 #define QT_LIGHTPATH_DIFFUSE_RAY       2
@@ -1187,6 +1240,14 @@ typedef struct QT_Mesh {
 #define QT_LIGHTPATH_SINGULAR_RAY      4
 #define QT_LIGHTPATH_REFLECTION_RAY    5
 #define QT_LIGHTPATH_TRANSMISSION_RAY  6
+#define QT_LIGHTPATH_RAY_LENGTH          7
+#define QT_LIGHTPATH_RAY_DEPTH           8
+#define QT_LIGHTPATH_TRANSPARENT_DEPTH   9
+
+/* Slice 2bo: Math input kind (Fac MATH tree). */
+#define QT_MATH_IN_CONST      0
+#define QT_MATH_IN_LIGHTPATH  1
+#define QT_MATH_IN_NEST       2
 
 /* Slice 2bb: NodeNoiseType (kernel/svm/types.h order). */
 #define QT_NOISE_MULTIFRACTAL           0

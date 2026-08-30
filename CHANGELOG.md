@@ -1,5 +1,14 @@
 ## [0.3.3] — unreleased
 
+### QuantTrace Slice 2bo (2026-08-30 7am PlugWalk ET)
+- Native `0.0.68-slice2bo`: Mix Shader Fac←MATH Light Path nest (Is * Ray and/or Ray Depth / Transparent Depth / Ray Length + unlinked float/VALUE) + Glass + Transparent. ABI `mix_shader_math_*` after `mix_transparent_color[3]` on `QT_Mesh` + `QT_SimpleScene`. `mix_shader_math_enable=0` keeps 2bn bit-identical. Cite Cycles `shader_nodes.h` MathNode Value1/Value2/Value + LightPathNode Ray Depth (float out, not Is * Ray). `is_tracer=1`. Addon still `0.3.3`.
+- Census loft `Realistic_Glass_01`: Fac = MAXIMUM(MAXIMUM(Is Shadow Ray, Is Reflection Ray), GREATER_THAN(Ray Depth, 6.0)); Shader nested Mix; Shader_001 Transparent unlinked. 1 Mix-root Fac←MATH material.
+- CLAIM loft Fac MATH Glass+Transparent (backplate): 32²/4 Δmax **1.91e-6** MAE 3.70e-8 0 px≥1e-3 **PASS**; 256²/128 Δmax **9.13e-4** MAE 3.19e-8 0 px≥1e-3 **PASS**.
+- Identity glass_only 32²/4 Δmax **1.19e-5** PASS; unlinked_fac 0.85 32²/4 Δmax **1.91e-6** PASS; lightpath_shadow 32²/4 Δmax **1.19e-5** PASS (math enable=0). mix/invert/bump_sep/hdr 32²/4 PASS (Δmax 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4).
+- Live stock MATH Fac vs Session 2bn-bypass (math/lightpath stripped, unlinked Fac) 32²/4 Δmax **1.73** (127 px≥1e-3) — graph live.
+- Named REFUSE: nested Mix, Fac←TEX, Glass.Color linked, Mix←Add Shader (Slice 2bo tags).
+- Loft: Fac MATH no longer first refuse; first PACK_FAIL still `G-__555573`/`Realistic_Glass_01` nested Mix Slice 2bo. No loft Session Δmax. No zip / no gibby / no 2080. Store Classroom 41% / loft 52%.
+
 ### QuantTrace Slice 2bn (2026-08-30 6am PlugWalk ET)
 - Native `0.0.67-slice2bn`: Mix Shader Fac=unlinked float **or** Light Path Is * Ray + Glass + Transparent → `MixClosureNode` (+ optional `LightPathNode`) / `GlassBsdfNode` / `TransparentBsdfNode`. ABI `mix_shader_*` after `glass_*`. `mix_shader_enable=0` keeps 2bm pure-Glass bit-identical. `is_tracer=1`. Addon still `0.3.3`.
 - CLAIM Mix Fac=0.85 Glass+Transparent (backplate): 32²/4 Δmax **1.91e-6** MAE 3.74e-8 0 px≥1e-3 **PASS**; 256²/128 Δmax **1.27e-4** MAE 2.04e-8 0 px≥1e-3 **PASS**.

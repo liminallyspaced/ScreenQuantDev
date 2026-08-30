@@ -1,6 +1,27 @@
 # QuantTrace Slice 2 — Scene sync research
 
-Status: **Slice 2bn landed** (2026-08-30 6am PlugWalk ET). Mix Shader Fac=unlinked float **or** Light Path Is * Ray + Glass + Transparent → native `MixClosureNode` (+ optional `LightPathNode`) with `GlassBsdfNode` / `TransparentBsdfNode` (`mix_shader_*` after `glass_*`). enable=0 keeps Slice 2bm pure-Glass bit-identical. Census: loft `Realistic_Glass_01` root Mix Fac←MATH (Is Shadow/Reflection + Ray Depth) over nested Mix/Add/Refraction/Glossy/SSS/Glass(Color linked); **not** in this hop. Same-shape loft `lente` packs (Fac unlinked 0.317). First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now Fac←MATH Slice 2bn named refuse. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.67-slice2bn`. Addon `0.3.3`.
+Status: **Slice 2bo landed** (2026-08-30 7am PlugWalk ET). Mix Shader Fac←MATH Light Path nest (Is * Ray / Ray Depth / Transparent Depth / Ray Length + unlinked float) + Glass + Transparent → native `MathNode` + `LightPathNode` → `MixClosureNode` Fac (`mix_shader_math_*` after `mix_transparent_color`). enable=0 keeps Slice 2bn bit-identical. Census loft `Realistic_Glass_01`: Fac = MAXIMUM(MAXIMUM(Is Shadow Ray, Is Reflection Ray), GREATER_THAN(Ray Depth, 6.0)) over nested Mix/Add/Refraction/Glossy/SSS/Glass(Color linked). Fac MATH packs; nested Mix still leftover. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now nested Mix Slice 2bo named refuse. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.68-slice2bo`. Addon `0.3.3`.
+
+## Slice 2bo — Mix Fac←MATH Light Path nest (2026-08-30 7am ET)
+
+Cite Cycles `shader_nodes.h` MathNode (Value1/Value2/Value, math_type ADD/SUB/MUL/DIV/POWER/MIN/MAX/GT/LT, use_clamp loft=False refused), LightPathNode (Is * Ray 0..6 plus Ray Length / Ray Depth / Transparent Depth float outs). Do **not** evaluate Light Path at pack time (ray-state). Binary Math tree, max nest 2 (root + one inner on A and/or B). ShaderNodeValue folds to const. DIVIDE guards zero. Closures stay 2bn Glass+Transparent unlinked Color/Roughness/IOR/Normal.
+
+| plate | res/spp | Δmax | MAE | px≥1e-3 | gate |
+|---|---|---|---|---|---|
+| CLAIM MAXIMUM(MAXIMUM(Is Shadow, Is Reflection), GT(Ray Depth, 6)) Glass+Transparent | 32²/4 | **1.91e-6** | 3.70e-8 | **0** | **PASS** |
+| CLAIM same | 256²/128 | **9.13e-4** | 3.19e-8 | **0** | **PASS** |
+| identity glass_only (2bm) | 32²/4 | **1.19e-5** | 4.81e-8 | **0** | **PASS** |
+| identity unlinked_fac 0.85 (2bn) | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| identity lightpath_shadow (2bn) | 32²/4 | **1.19e-5** | 4.81e-8 | **0** | **PASS** |
+| mix 2ay / invert 2be / bump_sep 2bl / hdr 2aa | 32²/4 | 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4 | — | **0** | **PASS** |
+| live stock MATH vs Session 2bn-bypass unlinked Fac | 32²/4 | **1.73** | — | 127 | live (graph) |
+| refuse_nested / refuse_tex / refuse_linked / refuse_add | — | — | — | — | **REFUSE** Slice 2bo |
+
+Loft pack: Fac MATH itself cleared (no longer first refuse). First PACK_FAIL `G-__555573` / `Realistic_Glass_01` — `Mix Shader nested Mix beyond packed depth refused (Slice 2bo: one Mix hop Glass+Transparent only; nested Mix/Add/Refraction/Glossy/SSS is a follow-up)`. Next: nested Mix hop (Realistic inner Is Shadow Ray), Add/Refraction/Glossy/SSS, Glass.Color linked, Material.001 Glass.Roughness linked, Principled+Transparent Mix, GROUP/Botaniq, Diffuse/Emission/Hair leftovers. Not loft Session Δmax.
+
+ABI: `mix_shader_math_enable` / `mix_shader_math_op` (NODE_MATH_*) / `mix_shader_math_{a,b}_kind` (0=const 1=lightpath 2=nested) / `_const` / `_lightpath` / `_op` / `{a,b}{1,2}_kind/_const/_lightpath` after `mix_transparent_color[3]` on `QT_Mesh` + `QT_SimpleScene`. QT_LIGHTPATH_* extended 7=Ray Length 8=Ray Depth 9=Transparent Depth. Defaults 0 keep 2bn bit-identical. Native `0.0.68-slice2bo`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-math-fac-32-pair.png`. Tools `_quanttrace_slice2bo_scene/smoke.py` + `_quanttrace_slice2bo_census.py`.
 
 ## Slice 2bn — Mix Shader Glass+Transparent + Light Path Fac (2026-08-30 6am ET)
 
