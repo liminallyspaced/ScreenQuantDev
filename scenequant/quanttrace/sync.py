@@ -93,6 +93,11 @@
 #   TEX_IMAGE / Mix / Gamma/HSV / constant. Linked Fac / second Curves /
 #   Vector/Float Curve refuse Slice 2bd. Native Mix then Curves (loft
 #   Concrete_Facade: dual TEX Mix → Curves → Base Color).
+# Slice 2be: Invert → Principled.Roughness (rough_invert_enable / fac).
+#   enable=0 skips InvertNode (2ba/2bb/2i bit-identical). Unlinked Fac;
+#   Color <- TEX_IMAGE or ColorRamp (or constant Color fold via Rec.709
+#   NODE_CONVERT_CF). Linked Fac / nested Invert / GROUP / Mix / Noise
+#   Color named refuse Slice 2be.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -822,8 +827,16 @@ _QT_NOISE_TYPE = {
 _QT_NOISE_DIM = {"1D": 1, "2D": 2, "3D": 3, "4D": 4}
 
 
+def _empty_rough_invert_info() -> dict:
+    """Slice 2be identity — enable=0 skips InvertNode (2ba/2bb/2i bit-identical)."""
+    return {
+        "rough_invert_enable": 0,
+        "rough_invert_fac": 1.0,
+    }
+
+
 def _empty_rough_ramp_info() -> dict:
-    """Slice 2ba/2bb: no ColorRamp — 2i TEX_IMAGE / constant roughness."""
+    """Slice 2ba/2bb/2be: no ColorRamp — 2i TEX_IMAGE / constant roughness."""
     return {
         "rough_ramp": [],
         "rough_ramp_alpha": [],
@@ -831,7 +844,20 @@ def _empty_rough_ramp_info() -> dict:
         "rough_ramp_interpolate": 1,
         "rough_ramp_fac": 0.5,
         **_empty_rough_ramp_noise_info(),
+        **_empty_rough_invert_info(),
     }
+
+
+def _rgb_to_y_cf(rgb) -> float:
+    """NODE_CONVERT_CF: linear_rgb_to_gray = dot(c, film.rgb_to_y) Rec.709."""
+    r, g, b = float(rgb[0]), float(rgb[1]), float(rgb[2])
+    return 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
+
+
+def _invert_mix_rgb(color, fac: float):
+    """Cycles InvertNode: factor*(1-color) + (1-factor)*color per channel."""
+    f = float(fac)
+    return tuple(f * (1.0 - float(x)) + (1.0 - f) * float(x) for x in color[:3])
 
 
 def _require_unlinked_float_noise(node, names, label: str, where: str, slice_tag: str) -> float:
@@ -1013,8 +1039,122 @@ def _pack_color_ramp_lut(node) -> tuple:
     return rgb, alpha, n, interpolate
 
 
+def _is_invert_node(node) -> bool:
+    if node is None:
+        return False
+    if getattr(node, "type", None) == "INVERT":
+        return True
+    return getattr(node, "bl_idname", "") == "ShaderNodeInvert"
+
+
+def _is_colorramp_node(node) -> bool:
+    if node is None:
+        return False
+    if getattr(node, "type", None) in ("VALTORGB",):
+        return True
+    return getattr(node, "bl_idname", "") == "ShaderNodeValToRGB"
+
+
+def _invert_fac_unlinked(node, ctx: str) -> float:
+    """Unlinked Invert Fac/Factor (Blender 5.2 RNA name Factor). Linked refuse 2be."""
+    inputs = getattr(node, "inputs", None)
+    sock = _sock_ident_or_name(inputs, "Fac", "Factor") if inputs is not None else None
+    if sock is None:
+        return 1.0
+    if getattr(sock, "is_linked", False):
+        flinks = list(getattr(sock, "links", None) or [])
+        ftype = None
+        if flinks:
+            fn = getattr(flinks[0], "from_node", None)
+            fs = getattr(flinks[0], "from_socket", None)
+            fn, fs = _peel_reroute(fn, fs)
+            ftype = getattr(fn, "type", None) if fn is not None else None
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness Invert.Fac from {ftype!r} refused "
+            f"(Slice 2be: unlinked Fac only; linked Invert Fac still refuse)"
+        )
+    v = getattr(sock, "default_value", None)
+    try:
+        return float(v) if v is not None else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _stamp_rough_invert(tex, ramp, enable: int, fac: float):
+    ramp = dict(ramp)
+    ramp["rough_invert_enable"] = 1 if enable else 0
+    ramp["rough_invert_fac"] = float(fac)
+    return tex, ramp
+
+
+def _pack_rough_colorramp(from_node, from_sock, ctx: str):
+    """Slice 2ba/2bb ColorRamp LUT + Fac unlinked / TEX_IMAGE / TEX_NOISE."""
+    empty_tex = _empty_tex_info()
+    out_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
+    if out_name not in ("Color", "color"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp output {out_name!r} "
+            f"refused (Slice 2ba: Color only this hour)"
+        )
+    rgb, alpha, n, interpolate = _pack_color_ramp_lut(from_node)
+    ramp = {
+        "rough_ramp": rgb,
+        "rough_ramp_alpha": alpha,
+        "rough_ramp_n": n,
+        "rough_ramp_interpolate": interpolate,
+        "rough_ramp_fac": 0.5,
+        **_empty_rough_ramp_noise_info(),
+        **_empty_rough_invert_info(),
+    }
+    fac_sock = None
+    inputs = getattr(from_node, "inputs", None)
+    if inputs is not None:
+        fac_sock = _sock_ident_or_name(inputs, "Fac", "Factor")
+    if fac_sock is None or not getattr(fac_sock, "is_linked", False):
+        if fac_sock is not None:
+            v = getattr(fac_sock, "default_value", None)
+            if v is not None:
+                ramp["rough_ramp_fac"] = float(v)
+        return empty_tex, ramp
+    flinks = list(getattr(fac_sock, "links", None) or [])
+    if len(flinks) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness ColorRamp.Fac has multiple links "
+            f"(Slice 2ba)"
+        )
+    fn = getattr(flinks[0], "from_node", None)
+    fs = getattr(flinks[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    ftype = getattr(fn, "type", None) if fn is not None else None
+    if ftype == "TEX_IMAGE":
+        tex = _tex_image_from_tex_node(fn, fs, "ColorRamp.Fac", ctx=ctx)
+        return tex, ramp
+    if ftype in ("TEX_NOISE", "NOISE") or (
+        fn is not None
+        and getattr(fn, "bl_idname", "") == "ShaderNodeTexNoise"
+    ):
+        noise = _pack_noise_for_ramp_fac(fn, fs, ctx)
+        ramp.update(noise)
+        return empty_tex, ramp
+    raise QuantTraceSyncError(
+        f"{ctx} Principled.Roughness ColorRamp.Fac from {ftype!r} refused "
+        f"(Slice 2bb: unlinked Fac, TEX_IMAGE Color, or TEX_NOISE "
+        f"Factor/Color; Fresnel/LayerWeight/GROUP/Mix/linked Noise "
+        f"Vector still refuse)"
+    )
+
+
+def _fold_invert_constant(color, fac: float, empty_tex, empty_ramp):
+    """Python-only constant Invert → roughness float (NODE_CONVERT_CF Rec.709)."""
+    inv = _invert_mix_rgb(color, fac)
+    y = _rgb_to_y_cf(inv)
+    ramp = dict(empty_ramp)
+    ramp["roughness_folded"] = float(y)
+    return empty_tex, ramp
+
+
 def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
-    """Slice 2ba/2bb: peel REROUTE, ColorRamp LUT, Fac unlinked / TEX_IMAGE / TEX_NOISE."""
+    """Slice 2ba/2bb/2be: peel REROUTE + Invert, ColorRamp LUT, TEX_IMAGE."""
     ctx = _mat_refuse_ctx(object_name, mat)
     empty_tex = _empty_tex_info()
     empty_ramp = _empty_rough_ramp_info()
@@ -1028,69 +1168,75 @@ def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
     from_node, from_sock = _peel_reroute(from_node, from_sock)
-    ntype = getattr(from_node, "type", None) if from_node is not None else None
-    if ntype in ("VALTORGB",) or (
-        from_node is not None
-        and getattr(from_node, "bl_idname", "") == "ShaderNodeValToRGB"
-    ):
-        out_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
+    invert_enable = 0
+    invert_fac = 1.0
+    if _is_invert_node(from_node):
+        out_name = (
+            getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
+        )
         if out_name not in ("Color", "color"):
             raise QuantTraceSyncError(
-                f"{ctx} Principled.Roughness ColorRamp output {out_name!r} "
-                f"refused (Slice 2ba: Color only this hour)"
+                f"{ctx} Principled.Roughness Invert output {out_name!r} "
+                f"refused (Slice 2be: Color only)"
             )
-        rgb, alpha, n, interpolate = _pack_color_ramp_lut(from_node)
-        ramp = {
-            "rough_ramp": rgb,
-            "rough_ramp_alpha": alpha,
-            "rough_ramp_n": n,
-            "rough_ramp_interpolate": interpolate,
-            "rough_ramp_fac": 0.5,
-            **_empty_rough_ramp_noise_info(),
-        }
-        fac_sock = None
+        invert_fac = _invert_fac_unlinked(from_node, ctx)
         inputs = getattr(from_node, "inputs", None)
-        if inputs is not None:
-            getter = getattr(inputs, "get", None)
-            fac_sock = getter("Fac") if callable(getter) else None
-        if fac_sock is None or not getattr(fac_sock, "is_linked", False):
-            if fac_sock is not None:
-                v = getattr(fac_sock, "default_value", None)
-                if v is not None:
-                    ramp["rough_ramp_fac"] = float(v)
-            return empty_tex, ramp
-        flinks = list(getattr(fac_sock, "links", None) or [])
-        if len(flinks) != 1:
-            raise QuantTraceSyncError(
-                f"{ctx} Principled.Roughness ColorRamp.Fac has multiple links "
-                f"(Slice 2ba)"
-            )
-        fn = getattr(flinks[0], "from_node", None)
-        fs = getattr(flinks[0], "from_socket", None)
-        fn, fs = _peel_reroute(fn, fs)
-        ftype = getattr(fn, "type", None) if fn is not None else None
-        if ftype == "TEX_IMAGE":
-            tex = _tex_image_from_tex_node(fn, fs, "ColorRamp.Fac", ctx=ctx)
-            return tex, ramp
-        if ftype in ("TEX_NOISE", "NOISE") or (
-            fn is not None
-            and getattr(fn, "bl_idname", "") == "ShaderNodeTexNoise"
-        ):
-            noise = _pack_noise_for_ramp_fac(fn, fs, ctx)
-            ramp.update(noise)
-            return empty_tex, ramp
-        raise QuantTraceSyncError(
-            f"{ctx} Principled.Roughness ColorRamp.Fac from {ftype!r} refused "
-            f"(Slice 2bb: unlinked Fac, TEX_IMAGE Color, or TEX_NOISE "
-            f"Factor/Color; Fresnel/LayerWeight/GROUP/Mix/linked Noise "
-            f"Vector still refuse)"
+        color_sock = (
+            _sock_ident_or_name(inputs, "Color") if inputs is not None else None
         )
+        if color_sock is None or not getattr(color_sock, "is_linked", False):
+            dv = getattr(color_sock, "default_value", None) if color_sock is not None else None
+            try:
+                col = (float(dv[0]), float(dv[1]), float(dv[2]))
+            except (TypeError, IndexError, ValueError):
+                col = (0.0, 0.0, 0.0)
+            return _fold_invert_constant(col, invert_fac, empty_tex, empty_ramp)
+        clinks = list(getattr(color_sock, "links", None) or [])
+        if len(clinks) != 1:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Roughness Invert.Color has multiple links "
+                f"(Slice 2be)"
+            )
+        cn = getattr(clinks[0], "from_node", None)
+        cs = getattr(clinks[0], "from_socket", None)
+        cn, cs = _peel_reroute(cn, cs)
+        if _is_invert_node(cn):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Roughness Invert.Color from nested Invert "
+                f"refused (Slice 2be: one Invert this hour)"
+            )
+        ntype_c = getattr(cn, "type", None) if cn is not None else None
+        if ntype_c == "RGB" or (
+            cn is not None and getattr(cn, "bl_idname", "") == "ShaderNodeRGB"
+        ):
+            dv = getattr(cs, "default_value", None) if cs is not None else None
+            try:
+                col = (float(dv[0]), float(dv[1]), float(dv[2]))
+            except (TypeError, IndexError, ValueError):
+                col = (0.0, 0.0, 0.0)
+            return _fold_invert_constant(col, invert_fac, empty_tex, empty_ramp)
+        if abs(float(invert_fac)) <= 1e-12:
+            invert_enable = 0
+        else:
+            invert_enable = 1
+        from_node, from_sock = cn, cs
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if _is_colorramp_node(from_node):
+        tex, ramp = _pack_rough_colorramp(from_node, from_sock, ctx)
+        return _stamp_rough_invert(tex, ramp, invert_enable, invert_fac)
     if ntype == "TEX_IMAGE":
         tex = _tex_image_from_tex_node(from_node, from_sock, "Roughness", ctx=ctx)
-        return tex, empty_ramp
+        return _stamp_rough_invert(tex, empty_ramp, invert_enable, invert_fac)
+    if invert_enable:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness Invert.Color from {ntype!r} refused "
+            f"(Slice 2be: Invert Color <- TEX_IMAGE Color or ColorRamp Color; "
+            f"unlinked Fac; linked Fac / GROUP / Mix / Noise / nested Invert "
+            f"still refuse)"
+        )
     raise QuantTraceSyncError(
         f"{ctx} Principled.Roughness from {ntype!r} refused "
-        f"(Slice 2bb: ColorRamp or TEX_IMAGE Color only)"
+        f"(Slice 2be: Invert, ColorRamp, or TEX_IMAGE Color only)"
     )
 
 
@@ -2174,13 +2320,15 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
     base_tex, base_gh, peeled_rgb = _base_color_tex_and_gh(
         base_sock, object_name=object_name, mat=mat
     )
-    # Slice 2ba/2bb: Roughness peels REROUTE then ColorRamp (Fac unlinked /
-    # TEX_IMAGE / TEX_NOISE) or TEX_IMAGE.
+    # Slice 2ba/2bb/2be: Roughness peels REROUTE then Invert then ColorRamp
+    # (Fac unlinked / TEX_IMAGE / TEX_NOISE) or TEX_IMAGE.
     _rname, rough_sock = _input_by_names(bsdf, "Roughness")
+    roughness_folded = None
     if rough_sock is not None and getattr(rough_sock, "is_linked", False):
         rough_tex, rough_ramp = _roughness_tex_and_ramp(
             rough_sock, object_name=object_name, mat=mat
         )
+        roughness_folded = rough_ramp.pop("roughness_folded", None)
     else:
         rough_ramp = _empty_rough_ramp_info()
     # 5.x names first; legacy Transmission / Specular / Coat / Sheen / Emission accepted.
@@ -2303,7 +2451,11 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         base_rgb = (float(base[0]), float(base[1]), float(base[2]))
     return {
         "base_color": base_rgb,
-        "roughness": float(bsdf.inputs["Roughness"].default_value),
+        "roughness": (
+            float(roughness_folded)
+            if roughness_folded is not None
+            else float(bsdf.inputs["Roughness"].default_value)
+        ),
         "metallic": float(bsdf.inputs["Metallic"].default_value),
         "ior": float(bsdf.inputs["IOR"].default_value),
         "alpha": float(bsdf.inputs["Alpha"].default_value),
@@ -4539,6 +4691,14 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
             if pr.get("rough_ramp_noise_use_color") is not None
             else 0
         ),
+        "rough_invert_enable": int(
+            pr["rough_invert_enable"]
+            if pr.get("rough_invert_enable") is not None
+            else 0
+        ),
+        "rough_invert_fac": float(
+            pr["rough_invert_fac"] if pr.get("rough_invert_fac") is not None else 1.0
+        ),
         "thin_wall": int(pr.get("thin_wall", 0) or 0),
         "transmission_weight": float(
             pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
@@ -5395,6 +5555,9 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.rough_ramp_noise_gain = _bf("rough_ramp_noise_gain", 1.0)
     desc.rough_ramp_noise_distortion = _bf("rough_ramp_noise_distortion", 0.0)
     desc.rough_ramp_noise_use_color = _bi("rough_ramp_noise_use_color", 0)
+    # Slice 2be: enable 0 / fac 0.0 valid — never `or` on enable/fac.
+    desc.rough_invert_enable = _bi("rough_invert_enable", 0)
+    desc.rough_invert_fac = _bf("rough_invert_fac", 1.0)
     if ramp_list and ramp_n > 0:
         flat = [float(v) for v in ramp_list]
         if len(flat) < ramp_n * 3:
@@ -5789,6 +5952,8 @@ def make_qt_simple_scene_type():
             ("rough_ramp_noise_gain", ctypes.c_float),
             ("rough_ramp_noise_distortion", ctypes.c_float),
             ("rough_ramp_noise_use_color", ctypes.c_int),
+            ("rough_invert_enable", ctypes.c_int),
+            ("rough_invert_fac", ctypes.c_float),
         ]
 
     return QT_SimpleScene
@@ -6246,6 +6411,8 @@ def make_qt_scene_types():
             ("rough_ramp_noise_gain", ctypes.c_float),
             ("rough_ramp_noise_distortion", ctypes.c_float),
             ("rough_ramp_noise_use_color", ctypes.c_int),
+            ("rough_invert_enable", ctypes.c_int),
+            ("rough_invert_fac", ctypes.c_float),
         ]
 
     class QT_Light(ctypes.Structure):

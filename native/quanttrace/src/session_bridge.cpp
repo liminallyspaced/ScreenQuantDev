@@ -74,6 +74,9 @@
  *   (set_dimensions, set_type, set_use_normalize, set_scale, set_detail,
  *   set_roughness, set_lacunarity, set_distortion, set_w, set_offset,
  *   set_gain). Vector unlinked LINK_TEXTURE_GENERATED. Fac or Color.
+ * Slice 2be: InvertNode → Principled.Roughness (rough_invert_enable /
+ *   rough_invert_fac). enable=0 keeps 2ba/2bb/2i bit-identical. Cite
+ *   InvertNode set_fac; Color → Roughness NODE_CONVERT_CF (linear_rgb_to_gray).
  * Slice 2bc: NoiseTextureNode → BumpNode Height (bump_noise_*).
  *   enable=0 keeps 2x bit-identical (TEX_IMAGE Height). Same Noise RNA
  *   as 2bb. Color → Height via NODE_CONVERT_CF; Fac → Height direct.
@@ -360,6 +363,9 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->rough_ramp_noise_gain = 1.0f;
     d->rough_ramp_noise_distortion = 0.0f;
     d->rough_ramp_noise_use_color = 0;
+    /* Slice 2be identity — enable=0 skips InvertNode (2ba/2bb/2i bit-identical). */
+    d->rough_invert_enable = 0;
+    d->rough_invert_fac = 1.0f;
     /* Slice 2bc identity — enable=0 skips Noise on Bump Height (2x bit-identical). */
     d->bump_noise_enable = 0;
     d->bump_noise_dimensions = 3;
@@ -706,6 +712,9 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->rough_ramp_noise_gain = s->rough_ramp_noise_gain;
     mesh->rough_ramp_noise_distortion = s->rough_ramp_noise_distortion;
     mesh->rough_ramp_noise_use_color = s->rough_ramp_noise_use_color;
+    /* Slice 2be: InvertNode → Principled.Roughness. */
+    mesh->rough_invert_enable = s->rough_invert_enable;
+    mesh->rough_invert_fac = s->rough_invert_fac;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1292,12 +1301,15 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             graph->connect(cur, bsdf->input("Base Color"));
         }
     }
-    /* Slice 2ba/2bb: ColorRamp → Principled.Roughness.
+    /* Slice 2ba/2bb/2be: ColorRamp / TEX_IMAGE / Invert → Principled.Roughness.
      * n>0: RGBRampNode LUT (official colorramp_to_array size+1=257).
      * Fac: NoiseTextureNode (2bb enable≠0) else TEX_IMAGE Color (2ba)
      * else set_fac. enable=0 keeps 2ba bit-identical.
-     * Color → Roughness via NODE_CONVERT_CF (same as 2i Color→float).
-     * n==0 + image: keep 2i (image → Roughness directly). */
+     * Color → Roughness via NODE_CONVERT_CF (linear_rgb_to_gray).
+     * n==0 + image: keep 2i (image → Roughness directly).
+     * Slice 2be: InvertNode when rough_invert_enable≠0 (cite InvertNode
+     * set_fac). enable=0 keeps 2ba/2bb/2i bit-identical. */
+    ShaderOutput *rough_color = nullptr;
     if (m->rough_ramp_n > 0 && m->rough_ramp != nullptr) {
         RGBRampNode *ramp = graph->create_node<RGBRampNode>();
         array<packed_float3> ramp_c;
@@ -1348,15 +1360,27 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         else {
             ramp->set_fac(m->rough_ramp_fac);
         }
-        graph->connect(ramp->output("Color"), bsdf->input("Roughness"));
+        rough_color = ramp->output("Color");
     }
     else if (m->rough_image_path && m->rough_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(
             graph.get(), m, m->rough_image_path, m->rough_image_colorspace,
             m->rough_tex_vector_mode, m->rough_map_location, m->rough_map_rotation,
             m->rough_map_scale, m->rough_map_type);
-        /* Color → float: ShaderGraph::connect inserts NODE_CONVERT_CF (average). */
-        graph->connect(img->output("Color"), bsdf->input("Roughness"));
+        rough_color = img->output("Color");
+    }
+    if (m->rough_invert_enable != 0) {
+        InvertNode *inv = graph->create_node<InvertNode>();
+        inv->set_fac(m->rough_invert_fac);
+        if (rough_color) {
+            graph->connect(rough_color, inv->input("Color"));
+        }
+        graph->connect(inv->output("Color"), bsdf->input("Roughness"));
+    }
+    else if (rough_color) {
+        /* Color → float: ShaderGraph::connect inserts NODE_CONVERT_CF
+         * (linear_rgb_to_gray). */
+        graph->connect(rough_color, bsdf->input("Roughness"));
     }
     if (m->metal_image_path && m->metal_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(

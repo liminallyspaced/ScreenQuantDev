@@ -89,6 +89,12 @@
  *   Color → Gamma → HSV → Mix → RGBCurves → Principled Base Color
  *   (Curves closest to Principled — loft Concrete_Facade). Linked Fac /
  *   second Curves / Vector Curves / Float Curve refuse Slice 2bd.
+ * Slice 2be: InvertNode → Principled.Roughness (rough_invert_enable /
+ *   rough_invert_fac after last rough_ramp_noise_*). enable=0 skips
+ *   InvertNode — 2ba/2bb/2i bit-identical. Cite shader_nodes.h InvertNode
+ *   (set_fac; Color in-out). Fac unlinked; Color <- TEX_IMAGE or ColorRamp.
+ *   Color → Roughness via NODE_CONVERT_CF (linear_rgb_to_gray). Linked Fac /
+ *   nested Invert / GROUP / Mix / Noise Color refuse Slice 2be.
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
@@ -600,6 +606,11 @@ typedef struct QT_SimpleScene {
   float rough_ramp_noise_gain;
   float rough_ramp_noise_distortion;
   int rough_ramp_noise_use_color;
+  /* Slice 2be: InvertNode -> Principled.Roughness. enable=0 skips InvertNode
+   * (2ba/2bb/2i bit-identical). Fac unlinked float (Cycles default 1.0).
+   * Color source is existing 2i TEX_IMAGE or 2ba ColorRamp. */
+  int rough_invert_enable;
+  float rough_invert_fac;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -969,6 +980,11 @@ typedef struct QT_Mesh {
   float rough_ramp_noise_gain;
   float rough_ramp_noise_distortion;
   int rough_ramp_noise_use_color;
+  /* Slice 2be: InvertNode -> Principled.Roughness. enable=0 skips InvertNode
+   * (2ba/2bb/2i bit-identical). Fac unlinked float (Cycles default 1.0).
+   * Color source is existing 2i TEX_IMAGE or 2ba ColorRamp. */
+  int rough_invert_enable;
+  float rough_invert_fac;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

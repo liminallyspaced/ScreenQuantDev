@@ -1,6 +1,37 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bd landed** (2026-08-29 8pm PlugWalk ET). RGBCurvesNode → Principled Base Color (`base_curves*` after last `base_mix_*`). n==0 / NULL / fac==0 keeps 2ay/2ax/2f identity skip. Official `curvemapping_color_to_array` LUT 257 (DNA cm[0]=R..[3]=I, EXTRAPOLATED). Mesh analog of world 2as. Loft Cube.001 Concrete_Facade: Fac unlinked 1.0, Color-in Mix MULTIPLY dual packed TEX, extend EXTRAPOLATED, master I mid (0.36818, 0.60625). Isolated Cube.001 PACKS curves_n=257. Named refuse linked Fac / second Curves / Vector/Float Curve. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.57-slice2bd`. Addon `0.3.3`.
+Status: **Slice 2be landed** (2026-08-29 9pm PlugWalk ET). InvertNode → Principled.Roughness (`rough_invert_enable` / `rough_invert_fac` after last `rough_ramp_noise_*`). enable=0 keeps 2ba/2bb/2i identity skip. Cite InvertNode set_fac; Color → Roughness NODE_CONVERT_CF (`linear_rgb_to_gray`). Loft Plane.008 IE_Brushed_Steel_02: Fac unlinked **0.083333**, Color ← packed TEX_IMAGE (Metal010_2K_Roughness.jpg). 1071 loft Invert→Roughness (967 TEX_IMAGE / 104 VALTORGB, Fac unlinked). Named refuse linked Fac / nested Invert / GROUP / Mix / Noise Color. Constant Color folds Rec.709. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.58-slice2be`. Addon `0.3.3`.
+
+## Slice 2be — Invert → Principled.Roughness (2026-08-29 9pm ET)
+
+Loft leftover after 2bd (Roughness from INVERT): object `Plane.008` / material `IE_Brushed_Steel_02`. Principled.Roughness ← Invert Color-out (`INVERT`, node `Invert`). Fac **unlinked** 0.083333 (not 1.0). Color ← TEX_IMAGE Color (`Metal010_2K_Roughness.jpg.004` packed sRGB, Linear, REPEAT, BOX; Vector ← Mapping POINT scale 4.79 ← TEX_COORD Object empty). Claim cube: Non-Color gray checker TEX_IMAGE → Invert Fac=loft 0.083333 → Roughness. Native Color source → InvertNode → Principled.Roughness (NODE_CONVERT_CF).
+
+Cite Cycles `shader_nodes.h` InvertNode set_fac / Color in-out; SVM `invert(color,factor)=factor*(1-color)+(1-factor)*color`. Color→float is `linear_rgb_to_gray` (Rec.709), not average.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| invert CLAIM | 32²/4 | 4.77e-7 | 6.55e-9 | 0 | **PASS** |
+| invert CLAIM | 256²/128 | 5.96e-7 | 4.03e-9 | 0 | **PASS** |
+| invert_full Fac=1 | 32²/4 | 2.38e-7 | 5.54e-9 | 0 | **PASS** |
+| invert_ramp | 32²/4 | 2.98e-7 | 5.85e-9 | 0 | **PASS** |
+| invert_const fold | 32²/4 | 5.36e-6 | 1.38e-7 | 0 | **PASS** |
+| tex 2i (enable=0) | 32²/4 | 3.58e-7 | 6.71e-9 | 0 | **PASS** |
+| ramp 2ba (enable=0) | 32²/4 | 4.77e-7 | 6.32e-9 | 0 | **PASS** |
+| noise 2bb | 32²/4 | 3.28e-5 | 1.94e-7 | 0 | **PASS** |
+| noise 2bc | 32²/4 | 4.65e-6 | 4.22e-8 | 0 | **PASS** |
+| curves 2bd | 32²/4 | 8.34e-7 | 1.50e-9 | 0 | **PASS** |
+| mix 2ay | 32²/4 | 5.36e-7 | 3.54e-9 | 0 | **PASS** |
+| bevel 2az | 32²/4 | 4.77e-6 | 2.05e-8 | 0 | **PASS** |
+| point 2av | 32²/4 | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| live invert vs tex | 32²/4 | 0.00996 | 2.09e-4 | 44 | graph live |
+| Fac←Noise | — | — | — | — | **REFUSE** Slice 2be |
+
+Loft pack: Plane.008 Invert→Roughness cleared. First PACK_FAIL `object='Object003.002' material='Material.003' Principled.Base Color Mix Factor is linked refused (Slice 2ay: unlinked Factor only; Fresnel/texture Fac still refuse)`. Next: Fresnel-Fac Mix / GROUP / Botaniq, leftover Bump Height VALTORGB/SEPARATE/MATH. Not loft Session Δmax.
+
+ABI: `rough_invert_enable` / `rough_invert_fac` after last `rough_ramp_noise_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults 0 / 1.0. Native `0.0.58-slice2be`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-invert-rough-32-pair.png`. Tools `_quanttrace_slice2be_scene/smoke.py`.
 
 ## Slice 2bd — RGB Curves → Principled Base Color (2026-08-29 8pm ET)
 
