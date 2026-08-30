@@ -58,17 +58,20 @@ BALANCED_BLOCKED_KINDS = {
     "CAMERA_CULL",
     "HAIR_RIBBONS",
     "OPAQUE_CUTOUT_SHADOWS",
+    "DEAD_CLOSURE_PRUNE",
 }
 
 # Animation is less forgiving than a still: small per-frame sampling changes
 # become flicker, crawling edges, or denoiser smearing.  Aggressive remains an
-# explicit escape hatch; the two safer profiles obey this additional block.
+# explicit escape hatch for sampling levers; DEAD_CLOSURE_PRUNE is withheld
+# on video even in Aggressive. The two safer profiles obey this block fully.
 VIDEO_BLOCKED_KINDS = {
     "ANIMATED_SEED",
     "DENOISE_ON",
     "DENOISE_PREFILTER",
     "AUTO_SCRAMBLE",
     "LIGHT_TREE",
+    "DEAD_CLOSURE_PRUNE",
 }
 # Never in the default Make it Fast plan (VRAM / draft / opt-in).
 FORBIDDEN_KINDS = {
@@ -298,6 +301,12 @@ def resolve_render_intent(scene, settings):
 def _allowed_by_policy(action, profile, intent):
     if profile == PROFILE_PRESERVE_LOOK:
         return action.kind in PRESERVE_LOOK_KINDS
+    # Graph-write JPEG/opaque Alpha unlink is Aggressive stills only.
+    # Aggressive remains the video escape hatch for sampling levers, but
+    # DEAD_CLOSURE_PRUNE must not flicker a stills-only material write.
+    if action.kind == "DEAD_CLOSURE_PRUNE" and (
+            profile != PROFILE_AGGRESSIVE or intent == INTENT_VIDEO):
+        return False
     if profile == PROFILE_BALANCED and action.kind in BALANCED_BLOCKED_KINDS:
         return False
     if profile != PROFILE_AGGRESSIVE and intent == INTENT_VIDEO:
@@ -797,9 +806,10 @@ def _dead_actions(scene, coverage, caveats):
     actions.extend(_crypto_actions(scene))
     actions.extend(_pass_prune_actions(scene))
     actions.extend(_opaque_cutout_shadow_actions(scene, caveats))
-    # DEAD_CLOSURE_PRUNE lives in dead_closure_prune_actions (manual-later).
-    # Not in the default Auto plan until official Classroom/loft inventory
-    # proves candidates. No time claim.
+    # Auto Aggressive stills: PRUNE_ALPHA only (tier 1). Other PRUNE_* stay
+    # in the manual-later hook at tier 2. Preserve Look / Balanced / Video
+    # withhold via policy. No time claim.
+    actions.extend(dead_closure_prune_actions(scene, caveats, auto_alpha=True))
     # UNUSED_SLOTS lives in unused_slots_actions (manual-later).
     # UNUSED_COLOR_ATTRS lives in unused_color_attrs_actions (manual-later).
     # PORTAL_MESH lives in portal_mesh_actions (manual-later).
@@ -1148,49 +1158,119 @@ def _emission_strength_socket(node):
     return None
 
 
+def _distance_cull_margin_to_write(scene, cycles):
+    """Margin Aggressive CAMERA_CULL will journal for scene distance cull.
+
+    Positive user margins are kept. Missing/None/0 → max(50.0, camera
+    clip_end) when clip_end is a finite number, else 50.0.
+    """
+    current = getattr(cycles, "distance_cull_margin", None) if cycles is not None else None
+    if isinstance(current, (int, float)) and current > 0:
+        return float(current)
+    default_margin = 50.0
+    cam = getattr(scene, "camera", None)
+    data = getattr(cam, "data", None) if cam is not None else None
+    clip_end = getattr(data, "clip_end", None) if data is not None else None
+    if isinstance(clip_end, (int, float)):
+        try:
+            finite = clip_end == clip_end and abs(clip_end) != float("inf")
+        except Exception:
+            finite = False
+        if finite:
+            default_margin = max(50.0, float(clip_end))
+    return default_margin
+
+
+def _cull_scatter_eligible(obj):
+    """Shared protections for CAMERA_CULL camera-only and distance-only sets."""
+    if obj is None or getattr(obj, "hide_render", False) or _protected(obj):
+        return False
+    if getattr(obj, "type", "") in ("LIGHT", "VOLUME", "CAMERA"):
+        return False
+    if _is_emissive(obj) or _instance_carries_light(obj):
+        return False
+    if getattr(obj, "is_shadow_catcher", False):
+        return False
+    oc = getattr(obj, "cycles", None)
+    if oc is not None and getattr(oc, "is_shadow_catcher", False):
+        return False
+    return True
+
+
 def _camera_cull_actions(scene, coverage, caveats):
     """Scatter/tiny only. Scene flag alone does nothing — objects listed too.
 
-    Never lights, heroes, volumes, shadow catchers. Linked scatter/tiny ARE
-    listed (Cycles per-object flag, not hide_render). Shared across local
-    helper scenes is fine: the flag is evaluated against the rendering camera.
-    Distance cull is AND with camera cull; we do not enable both.
+    Never lights, heroes, volumes, cameras, shadow catchers, or emitters.
+    Linked scatter/tiny ARE listed (Cycles per-object flag, not hide_render).
+    Shared across local helper scenes is fine: the flag is evaluated against
+    the rendering camera.
+
+    Cycles ``object_cull.cpp``: both object flags ON → AND (keep nearby
+    off-frustum for reflections). Camera-only and distance-only flags on
+    separate objects give independent cull. Aggressive CAMERA_CULL therefore
+    uses two disjoint sets (kind name stays CAMERA_CULL):
+
+    - ``objects``: camera-cull only (today's tiny/scatter remainder)
+    - ``distance_objects``: distance-cull only (tiny/scatter with
+      ``min_camera_distance`` ≥ the margin that will be written)
+
+    Never put the same name in both lists. Scene may enable both cull flags;
+    object flags choose which test runs. Missing distance RNA → camera path
+    alone (``distance_objects`` ignored).
     """
     if not coverage:
         return []
     cycles = _cycles(scene)
     if cycles is None or not _has_attr(cycles, "use_camera_cull"):
         return []
-    names = []
+    has_distance = _has_attr(cycles, "use_distance_cull")
+    margin = _distance_cull_margin_to_write(scene, cycles) if has_distance else None
+    camera_names = []
+    distance_names = []
     for name, info in _sorted_coverage(coverage):
         if _cov_attr(info, "max_coverage", 1.0) >= TINY_COVERAGE:
             continue
         obj = _get_object(scene, name)
-        if obj is None or getattr(obj, "hide_render", False) or _protected(obj):
-            continue
-        if getattr(obj, "type", "") in ("LIGHT", "VOLUME", "CAMERA"):
-            continue
-        if _is_emissive(obj) or _instance_carries_light(obj):
-            continue
-        if getattr(obj, "is_shadow_catcher", False):
+        if not _cull_scatter_eligible(obj):
             continue
         oc = getattr(obj, "cycles", None)
-        if oc is not None and getattr(oc, "is_shadow_catcher", False):
+        # Partition: far tiny → distance-only; remainder → camera-only.
+        # Disjoint so Cycles never ANDs both flags on the same scatter name
+        # (would keep nearby off-frustum chairs and regress Classroom cull).
+        far_enough = False
+        if has_distance and margin is not None:
+            min_dist = _cov_attr(info, "min_camera_distance", 0.0)
+            try:
+                far_enough = (
+                    isinstance(min_dist, (int, float))
+                    and min_dist == min_dist
+                    and abs(min_dist) != float("inf")
+                    and float(min_dist) >= float(margin)
+                )
+            except Exception:
+                far_enough = False
+        if far_enough:
+            if getattr(oc, "use_distance_cull", False):
+                continue
+            distance_names.append(name)
             continue
         # use_camera_cull is evaluated against the rendering camera, so a
         # chair also linked into a helper scene (Classroom dustParticules)
         # is still safe to tag. hide_render / trim keep used-outside.
         if getattr(oc, "use_camera_cull", False):
             continue
-        names.append(name)
-    if not names and getattr(cycles, "use_camera_cull", False):
+        camera_names.append(name)
+    if not camera_names and not distance_names:
         return []
-    if not names:
-        return []
+    payload = {"objects": camera_names}
+    if has_distance:
+        payload["distance_objects"] = distance_names
     return [SpeedAction(
         "CAMERA_CULL",
-        "%d scatter/tiny object(s) → camera cull, including linked" % len(names),
-        "dead", 1, 0.88, 1, {"objects": names})]
+        ("%d camera-cull + %d distance-cull scatter/tiny "
+         "(independent sets; Cycles AND-when-both)")
+        % (len(camera_names), len(distance_names)),
+        "dead", 1, 0.88, 1, payload)]
 
 
 def _hair_ribbon_actions(scene, coverage):
@@ -1990,16 +2070,34 @@ def _load_dead_closures():
         return None
 
 
-def dead_closure_prune_actions(scene, caveats=None):
-    """Manual-later planner hook for L1 DEAD_CLOSURE_PRUNE.
+def dead_closure_prune_actions(scene, caveats=None, *, auto_alpha=False):
+    """Planner hook for L1 DEAD_CLOSURE_PRUNE.
 
-    NOT called from build_speed_plan / _dead_actions. Auto stays off until
-    official-file inventory proves candidates. time_factor is 1.0 (no claim).
+    Manual-later (default): all PRUNE_CLASSES, tier 2, label says "manual".
+    Auto Aggressive stills: pass auto_alpha=True from _dead_actions —
+    PRUNE_ALPHA records only, tier 1, label does not say "manual".
+    time_factor is 1.0 (no claim). Policy withholds Preserve Look / Balanced
+    / Video; other PRUNE_* stay Manual.
     """
     dead_closures = _load_dead_closures()
     if dead_closures is None:
         return []
-    records = dead_closures.classify_dead_closures(scene)
+    try:
+        records = dead_closures.classify_dead_closures(scene)
+    except Exception:
+        return []
+    if auto_alpha:
+        prunes = [r for r in records
+                  if r.get("class") == dead_closures.PRUNE_ALPHA]
+        n = len(prunes)
+        if n < 1:
+            return []
+        return [SpeedAction(
+            "DEAD_CLOSURE_PRUNE",
+            "%d JPEG / opaque-constant Alpha socket(s) -> unlink (PRUNE_ALPHA)"
+            % n,
+            "dead", 1, 1.0, 1,
+            {"records": prunes})]
     prunes = [r for r in records if r.get("class") in dead_closures.PRUNE_CLASSES]
     n_alpha = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_ALPHA)
     n_vol = sum(1 for r in prunes if r.get("class") == dead_closures.PRUNE_VOLUME)

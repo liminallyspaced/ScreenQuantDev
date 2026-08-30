@@ -653,7 +653,10 @@ def _cull_object_skip(obj, scene, guard_cache):
 
 def _apply_camera_cull(scene, settings, jrnl, payload, cache, skipped, progress):
     jrnl.set_prop(scene, "cycles.use_camera_cull", True, SPEED_TAG)
-    # Distance cull is AND with camera cull — do not enable it here.
+    # Cycles object_cull.cpp: both object flags ON → AND (keep nearby
+    # off-frustum for reflections). Camera-only and distance-only sets are
+    # independent; never set both flags on the same object. Scene may enable
+    # both; object flags choose which test runs.
     # Fast GI stays out. Draft simplify caps (subdiv 2, particles 0.5) stay out.
     jrnl.set_prop(scene, "render.use_simplify", True, SPEED_TAG)
     rend = getattr(scene, "render", None)
@@ -668,9 +671,25 @@ def _apply_camera_cull(scene, settings, jrnl, payload, cache, skipped, progress)
     margin = getattr(cycles, "camera_cull_margin", None) if cycles is not None else None
     if margin is None or margin == 0:
         jrnl.set_prop(scene, "cycles.camera_cull_margin", 0.1, SPEED_TAG)
+    distance_enabled = (
+        cycles is not None and hasattr(cycles, "use_distance_cull"))
+    if distance_enabled:
+        # Prefer scene distance on whenever RNA exists (Manual path / later
+        # objects). Object flags still drive which objects actually cull.
+        jrnl.set_prop(scene, "cycles.use_distance_cull", True, SPEED_TAG)
+        if hasattr(cycles, "distance_cull_margin"):
+            d_margin = getattr(cycles, "distance_cull_margin", None)
+            if d_margin is None or d_margin == 0:
+                default_margin = speed_solver._distance_cull_margin_to_write(
+                    scene, cycles)
+                jrnl.set_prop(
+                    scene, "cycles.distance_cull_margin", default_margin,
+                    SPEED_TAG)
     guard_cache = {}
-    tagged = 0
-    for name in payload.get("objects") or ():
+    camera_names = list(payload.get("objects") or ())
+    camera_set = set(camera_names)
+    camera_tagged = 0
+    for name in camera_names:
         obj = scene.objects.get(name)
         if obj is None:
             skipped.append(_skip("CAMERA_CULL", name, "object missing"))
@@ -680,14 +699,48 @@ def _apply_camera_cull(scene, settings, jrnl, payload, cache, skipped, progress)
             skipped.append(_skip("CAMERA_CULL", name, reason))
             continue
         if jrnl.set_prop(obj, "cycles.use_camera_cull", True, SPEED_TAG):
+            # Never set use_distance_cull on camera-only names (AND regression).
             update = getattr(obj, "update_tag", None)
             if callable(update):
                 update()
-            tagged += 1
+            camera_tagged += 1
         elif speed_solver._is_linked(obj):
             skipped.append(_skip(
                 "CAMERA_CULL", name, "write did not stick (linked?)"))
-    return "camera cull on %d objects" % tagged
+    distance_tagged = 0
+    if distance_enabled:
+        for name in payload.get("distance_objects") or ():
+            if name in camera_set:
+                skipped.append(_skip(
+                    "CAMERA_CULL", name,
+                    "distance+camera overlap blocked (Cycles AND-when-both)"))
+                continue
+            obj = scene.objects.get(name)
+            if obj is None:
+                skipped.append(_skip("CAMERA_CULL", name, "object missing"))
+                continue
+            reason = _cull_object_skip(obj, scene, guard_cache)
+            if reason:
+                skipped.append(_skip("CAMERA_CULL", name, reason))
+                continue
+            oc = getattr(obj, "cycles", None)
+            if oc is None or not hasattr(oc, "use_distance_cull"):
+                skipped.append(_skip(
+                    "CAMERA_CULL", name, "no object distance cull RNA"))
+                continue
+            if jrnl.set_prop(obj, "cycles.use_distance_cull", True, SPEED_TAG):
+                # Never set use_camera_cull on distance-only names.
+                update = getattr(obj, "update_tag", None)
+                if callable(update):
+                    update()
+                distance_tagged += 1
+            elif speed_solver._is_linked(obj):
+                skipped.append(_skip(
+                    "CAMERA_CULL", name, "write did not stick (linked?)"))
+    if distance_enabled:
+        return ("camera cull on %d + distance cull on %d objects"
+                % (camera_tagged, distance_tagged))
+    return "camera cull on %d objects" % camera_tagged
 
 
 def _apply_offscreen_dicing(scene, settings, jrnl, payload, cache, skipped, progress):
@@ -837,6 +890,22 @@ def _apply_device_gpu(scene, settings, jrnl, payload, cache, skipped, progress):
     return None
 
 
+def _apply_dead_closure_prune(scene, settings, jrnl, payload, cache, skipped, progress):
+    """Unlink proven-dead sockets from payload records. Revert is NODE_UNLINK."""
+    try:
+        from ..analysis import dead_closures
+    except Exception:
+        skipped.append(_skip("DEAD_CLOSURE_PRUNE", "-", "dead_closures module missing"))
+        return None
+    records = payload.get("records")
+    if not records:
+        return None
+    applied = dead_closures.apply_dead_closures(scene, jrnl, records=records)
+    if applied:
+        return "unlinked %d dead-closure socket(s)" % len(applied)
+    return None
+
+
 def _object_write_skip(obj, scene, guard_cache):
     from .. import compat
     override = getattr(getattr(obj, "scenequant", None), "override", "AUTO")
@@ -891,4 +960,5 @@ _HANDLERS = {
     "PASS_PRUNE": _apply_pass_prune,
     "CRYPTO_PRUNE": _apply_crypto_prune,
     "DEVICE_GPU": _apply_device_gpu,
+    "DEAD_CLOSURE_PRUNE": _apply_dead_closure_prune,
 }

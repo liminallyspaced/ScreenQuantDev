@@ -27,6 +27,7 @@ _GROUPS = {
     "WORLD_MIS_NONE": ("proven_noop", "Proven dead render work"),
     "VOLUME_BOUNCES_ZERO": ("proven_noop", "Proven dead render work"),
     "HOMOGENEOUS_VOLUME": ("proven_noop", "Proven dead render work"),
+    "DEAD_CLOSURE_PRUNE": ("dead_closure_prune", "JPEG / opaque Alpha unlink"),
 }
 
 

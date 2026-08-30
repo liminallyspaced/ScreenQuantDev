@@ -815,8 +815,8 @@ def test_not_in_default_auto_plan():
                         "speed_solver.py")
     with open(path, encoding="utf-8") as handle:
         src = handle.read()
-    check(src.count("dead_closure_prune_actions(") == 1,
-          "dead_closure_prune_actions is defined once and not called from build_speed_plan")
+    check(src.count("dead_closure_prune_actions(") == 2,
+          "dead_closure_prune_actions is defined once and called from _dead_actions for Auto PRUNE_ALPHA")
 
 
 def speed_solver_scene(objects):
@@ -1453,6 +1453,211 @@ def test_glass_zero_bump_skipped():
           "glass material has no PRUNE_* writes")
 
 
+
+def _plan_mem():
+    return Obj(total_mb=400.0, caveats=[], per_object_geo_mb={}, per_image_mb={})
+
+
+def _plan_settings(profile=None, intent="STILL"):
+    kw = dict(vram_budget_gb=8.0, min_texture_size=256,
+              coverage_frame_samples=5, quality_factor=2.0,
+              speed_render_intent=intent)
+    if profile is not None:
+        kw["speed_profile"] = profile
+    return Obj(**kw)
+
+
+def _alpha_plan_scene():
+    jpeg = _image_alpha_mat("WallPaint", 3, "//wall.jpg", file_format="JPEG")
+    val = _value_alpha_mat("Paint")
+    return speed_solver_scene([
+        _mesh("Wall", material_slots=[Obj(material=jpeg)]),
+        _mesh("Wall2", material_slots=[Obj(material=val)]),
+    ])
+
+
+def test_aggressive_still_prunes_alpha_only():
+    section("Aggressive still JPEG/Value-1.0 Alpha -> DEAD_CLOSURE_PRUNE PRUNE_ALPHA only")
+    scene = _alpha_plan_scene()
+    plan = speed_solver.build_speed_plan(
+        scene, {}, _plan_mem(), _plan_settings("AGGRESSIVE", "STILL"))
+    hits = [a for a in plan.actions if a.kind == "DEAD_CLOSURE_PRUNE"]
+    check(len(hits) == 1, "Aggressive still has one DEAD_CLOSURE_PRUNE")
+    recs = hits[0].payload.get("records") or []
+    check(len(recs) >= 2 and all(r.get("class") == dc.PRUNE_ALPHA for r in recs),
+          "payload records are PRUNE_ALPHA only")
+    check(hits[0].time_factor == 1.0, "time_factor stays 1.0")
+    check(hits[0].tier <= 1, "Auto PRUNE_ALPHA is tier <= 1")
+    check("manual" not in (hits[0].label or "").lower(),
+          "Auto label does not say manual")
+    other = {dc.PRUNE_VOLUME, dc.PRUNE_MIX_TRANSPARENT, dc.PRUNE_DISPLACE,
+             dc.PRUNE_SSS, dc.PRUNE_EMISSION, dc.PRUNE_TRANSMISSION,
+             dc.PRUNE_BUMP, dc.PRUNE_BEVEL}
+    check(not any(r.get("class") in other for r in recs),
+          "Auto payload does not include non-alpha PRUNE_*")
+
+
+def test_preserve_look_and_missing_profile_withhold_prune_alpha():
+    section("Preserve Look / missing profile withhold DEAD_CLOSURE_PRUNE")
+    scene = _alpha_plan_scene()
+    for label, settings in (
+            ("PRESERVE_LOOK", _plan_settings("PRESERVE_LOOK", "STILL")),
+            ("missing profile", _plan_settings(None, "STILL")),
+    ):
+        plan = speed_solver.build_speed_plan(scene, {}, _plan_mem(), settings)
+        kinds = [a.kind for a in plan.actions]
+        check("DEAD_CLOSURE_PRUNE" not in kinds,
+              "%s plan does not include DEAD_CLOSURE_PRUNE" % label)
+
+
+def test_balanced_withholds_prune_alpha():
+    section("Balanced withholds DEAD_CLOSURE_PRUNE")
+    scene = _alpha_plan_scene()
+    plan = speed_solver.build_speed_plan(
+        scene, {}, _plan_mem(), _plan_settings("BALANCED", "STILL"))
+    kinds = [a.kind for a in plan.actions]
+    check("DEAD_CLOSURE_PRUNE" not in kinds,
+          "Balanced plan does not include DEAD_CLOSURE_PRUNE")
+    check("DEAD_CLOSURE_PRUNE" in speed_solver.BALANCED_BLOCKED_KINDS,
+          "DEAD_CLOSURE_PRUNE is in BALANCED_BLOCKED_KINDS")
+    check("DEAD_CLOSURE_PRUNE" in (plan.withheld_kinds or []),
+          "Balanced reports DEAD_CLOSURE_PRUNE as withheld")
+
+
+def test_aggressive_video_withholds_prune_alpha():
+    section("Aggressive VIDEO withholds DEAD_CLOSURE_PRUNE")
+    scene = _alpha_plan_scene()
+    plan = speed_solver.build_speed_plan(
+        scene, {}, _plan_mem(), _plan_settings("AGGRESSIVE", "VIDEO"))
+    kinds = [a.kind for a in plan.actions]
+    check("DEAD_CLOSURE_PRUNE" not in kinds,
+          "Aggressive VIDEO plan does not include DEAD_CLOSURE_PRUNE")
+    check("DEAD_CLOSURE_PRUNE" in speed_solver.VIDEO_BLOCKED_KINDS,
+          "DEAD_CLOSURE_PRUNE is in VIDEO_BLOCKED_KINDS")
+    check("DEAD_CLOSURE_PRUNE" in (plan.withheld_kinds or []),
+          "Aggressive VIDEO reports DEAD_CLOSURE_PRUNE as withheld")
+
+
+def test_aggressive_non_alpha_prunes_stay_manual():
+    section("Aggressive Auto skips VOLUME/SSS/etc; manual hook still returns them")
+    vol = _empty_volume_mat("Hollow")
+    sss = _value_sss_mat("Skin")
+    emit = _value_emission_mat("DarkEmit")
+    scene = speed_solver_scene([
+        _mesh("Box", material_slots=[Obj(material=vol)]),
+        _mesh("Arm", material_slots=[Obj(material=sss)]),
+        _mesh("Card", material_slots=[Obj(material=emit)]),
+    ])
+    plan = speed_solver.build_speed_plan(
+        scene, {}, _plan_mem(), _plan_settings("AGGRESSIVE", "STILL"))
+    kinds = [a.kind for a in plan.actions]
+    check("DEAD_CLOSURE_PRUNE" not in kinds,
+          "no Auto DEAD_CLOSURE_PRUNE without PRUNE_ALPHA")
+    manual = speed_solver.dead_closure_prune_actions(scene)
+    check(len(manual) == 1 and manual[0].kind == "DEAD_CLOSURE_PRUNE",
+          "manual hook still returns non-alpha PRUNE_*")
+    recs = manual[0].payload.get("records") or []
+    classes = {r.get("class") for r in recs}
+    check(dc.PRUNE_VOLUME in classes and dc.PRUNE_SSS in classes
+          and dc.PRUNE_EMISSION in classes,
+          "manual hook payload includes VOLUME/SSS/EMISSION")
+    check(dc.PRUNE_ALPHA not in classes, "this scene has no PRUNE_ALPHA")
+    check(manual[0].tier == 2, "manual-all-classes hook stays tier 2")
+    check("manual" in (manual[0].label or "").lower(),
+          "manual hook label still says manual")
+
+
+def test_empty_aggressive_has_no_dead_closure_prune():
+    section("empty scene Aggressive has no DEAD_CLOSURE_PRUNE")
+    scene = speed_solver_scene([])
+    plan = speed_solver.build_speed_plan(
+        scene, {}, _plan_mem(), _plan_settings("AGGRESSIVE", "STILL"))
+    kinds = [a.kind for a in plan.actions]
+    check("DEAD_CLOSURE_PRUNE" not in kinds,
+          "empty Aggressive plan has no DEAD_CLOSURE_PRUNE")
+
+
+def _load_speed_apply():
+    import importlib.util
+    import types
+    bpy_mod = types.ModuleType("bpy")
+    bpy_mod.types = types.SimpleNamespace()
+    saved = sys.modules.get("bpy")
+    sys.modules["bpy"] = bpy_mod
+    created = []
+
+    def _ensure(name, rel):
+        if name in sys.modules and getattr(sys.modules[name], "__path__", None):
+            return sys.modules[name]
+        mod = types.ModuleType(name)
+        mod.__path__ = [os.path.join(PROJECT_ROOT, *rel.split("/"))]
+        mod.__package__ = name
+        sys.modules[name] = mod
+        created.append(name)
+        return mod
+
+    try:
+        _ensure("scenequant", "scenequant")
+        _ensure("scenequant.analysis", "scenequant/analysis")
+        _ensure("scenequant.planning", "scenequant/planning")
+        _ensure("scenequant.apply", "scenequant/apply")
+        cov = types.ModuleType("scenequant.analysis.coverage")
+        sys.modules["scenequant.analysis.coverage"] = cov
+        presets = types.ModuleType("scenequant.planning.presets")
+        presets.TIER_PERCEPTUAL = ()
+        presets.TIER_LOSSLESS = ()
+        presets.MODE_SET = "set"
+        presets.MODE_MIN = "min"
+        presets.MODE_MAX = "max"
+        sys.modules["scenequant.planning.presets"] = presets
+        sys.modules["scenequant.planning.speed_solver"] = speed_solver
+        for name in ("guards", "objects_apply", "settings_apply"):
+            full = "scenequant.apply.%s" % name
+            sys.modules[full] = types.ModuleType(full)
+        path = os.path.join(PROJECT_ROOT, "scenequant", "apply", "speed_apply.py")
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.apply.speed_apply", path)
+        mod = importlib.util.module_from_spec(spec)
+        mod.__package__ = "scenequant.apply"
+        sys.modules["scenequant.apply.speed_apply"] = mod
+        spec.loader.exec_module(mod)
+    finally:
+        if saved is None:
+            sys.modules.pop("bpy", None)
+        else:
+            sys.modules["bpy"] = saved
+    return mod
+
+
+def test_handler_unlinks_and_revert_restores():
+    section("DEAD_CLOSURE_PRUNE handler unlinks; revert restores NODE_UNLINK")
+    speed_apply = _load_speed_apply()
+    check("DEAD_CLOSURE_PRUNE" in speed_apply._HANDLERS,
+          "DEAD_CLOSURE_PRUNE is registered in _HANDLERS")
+    mat = _value_alpha_mat("Paint")
+    scene = _with_obj(mat, "Wall")
+    alpha = None
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            alpha = node.inputs.get("Alpha")
+    check(alpha is not None and alpha.is_linked, "fixture Alpha starts linked")
+    records = [r for r in dc.classify_dead_closures(scene)
+               if r.get("class") == dc.PRUNE_ALPHA]
+    check(len(records) == 1, "one PRUNE_ALPHA record for handler")
+    jrnl = _Journal()
+    skipped = []
+    msg = speed_apply._HANDLERS["DEAD_CLOSURE_PRUNE"](
+        scene, Obj(), jrnl, {"records": records}, {}, skipped, None)
+    check(not skipped, "handler did not skip")
+    check(msg and "1" in msg, "handler returns a short unlink summary")
+    check(not alpha.is_linked, "handler unlinked Alpha")
+    check(jrnl.entries and jrnl.entries[0]["kind"] == "NODE_UNLINK",
+          "handler journals NODE_UNLINK")
+    restored = dc.revert_dead_closures(scene, jrnl)
+    check(restored == 1 and alpha.is_linked, "revert restores the Alpha link")
+    check(not jrnl.entries, "successful revert consumes the NODE_UNLINK entry")
+
+
 def main():
     test_value_one_prunes_alpha()
     test_jpeg_prunes_alpha()
@@ -1502,6 +1707,13 @@ def main():
     test_not_in_default_auto_plan()
     test_inventory_print_shape()
     test_default_plan_kind_absent_empty()
+    test_aggressive_still_prunes_alpha_only()
+    test_preserve_look_and_missing_profile_withhold_prune_alpha()
+    test_balanced_withholds_prune_alpha()
+    test_aggressive_video_withholds_prune_alpha()
+    test_aggressive_non_alpha_prunes_stay_manual()
+    test_empty_aggressive_has_no_dead_closure_prune()
+    test_handler_unlinks_and_revert_restores()
     finish()
 
 
