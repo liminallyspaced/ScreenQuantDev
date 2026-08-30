@@ -81,6 +81,11 @@
  *   base_mix_fresnel_ior). enable=0 keeps 2ay unlinked Fac bit-identical.
  *   Cite shader_nodes.h FresnelNode set_IOR; output Fac. MixColorNode
  *   Factor socket. Normal unlinked LINK_NORMAL.
+ * Slice 2bh: RGBCurvesNode on Mix A or B (base_mix_curves_*). n==0 / NULL /
+ *   fac==0 skips — 2bg/2ay/2bf/2bd bit-identical. Native order ImageTexture
+ *   → RGBCurves → Mix A/B; then 2bd Curves-after-Mix if base_curves_n>0.
+ *   Cite RGBCurvesNode set_curves/set_min_x/set_max_x/set_fac/set_extrapolate.
+ *   MixColorNode Factor socket is Factor not Fac. Do not reuse base_curves_*.
  * Slice 2bc: NoiseTextureNode → BumpNode Height (bump_noise_*).
  *   enable=0 keeps 2x bit-identical (TEX_IMAGE Height). Same Noise RNA
  *   as 2bb. Color → Height via NODE_CONVERT_CF; Fac → Height direct.
@@ -346,6 +351,14 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->base_curves_max_x = 1.0f;
     d->base_curves_fac = 1.0f;
     d->base_curves_extrapolate = 1;
+    /* Slice 2bh identity — n==0 skips mix-side RGBCurvesNode. */
+    d->base_mix_curves = nullptr;
+    d->base_mix_curves_n = 0;
+    d->base_mix_curves_min_x = 0.0f;
+    d->base_mix_curves_max_x = 1.0f;
+    d->base_mix_curves_fac = 1.0f;
+    d->base_mix_curves_extrapolate = 1;
+    d->base_mix_curves_on_a = 1;
     /* Slice 2az identity — bevel off. */
     d->bevel_enable = 0;
     d->bevel_samples = 4;
@@ -697,6 +710,14 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->base_curves_max_x = s->base_curves_max_x;
     mesh->base_curves_fac = s->base_curves_fac;
     mesh->base_curves_extrapolate = s->base_curves_extrapolate;
+    /* Slice 2bh: mix-side RGB Curves LUT. */
+    mesh->base_mix_curves = s->base_mix_curves;
+    mesh->base_mix_curves_n = s->base_mix_curves_n;
+    mesh->base_mix_curves_min_x = s->base_mix_curves_min_x;
+    mesh->base_mix_curves_max_x = s->base_mix_curves_max_x;
+    mesh->base_mix_curves_fac = s->base_mix_curves_fac;
+    mesh->base_mix_curves_extrapolate = s->base_mix_curves_extrapolate;
+    mesh->base_mix_curves_on_a = s->base_mix_curves_on_a;
     /* Slice 2az: Bevel → Principled.Normal. */
     mesh->bevel_enable = s->bevel_enable;
     mesh->bevel_samples = s->bevel_samples;
@@ -1192,12 +1213,12 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * mode 6: TextureCoordinate Object → Mapping → Image Vector.
      * mode 7: TextureCoordinate Camera → Image Vector (NODE_TEXCO_CAMERA).
      * mode 8: TextureCoordinate Camera → Mapping → Image Vector. */
-    /* Slice 2ax/2ay/2bd: Color source → Gamma (if gamma!=1) → HSV (if not
-     * identity) → MixColorNode (if base_mix_type!=0) → RGBCurvesNode
-     * (if n>0 && fac!=0) → Principled Base Color.
-     * n==0 keeps 2ay/2ax/2f bit-identical. Cite GammaNode/HSVNode/MixColorNode/
-     * RGBCurvesNode (world 2ao/2aq/2as). Curves last (closest to Principled)
-     * matches loft Concrete_Facade: Mix → Curves → Base Color. */
+    /* Slice 2ax/2ay/2bd/2bh: Color source → Gamma (if gamma!=1) → HSV (if not
+     * identity) → [RGBCurves mix-side if base_mix_curves_n>0] → MixColorNode
+     * (if base_mix_type!=0) → RGBCurvesNode (if n>0 && fac!=0) → Principled.
+     * mix-side n==0 keeps 2ay/2bg/2bf/2bd bit-identical. 2bd Curves last
+     * (closest to Principled) matches loft Concrete_Facade: Mix → Curves.
+     * 2bh is Curves ON a Mix input (loft Carpet: TEX → Curves → Mix B). */
     {
         const float3 bcol = make_float3(m->base_color[0], m->base_color[1], m->base_color[2]);
         const bool use_gamma = (m->base_gamma != 1.0f);
@@ -1263,33 +1284,59 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             const float3 other = make_float3(m->base_mix_other[0],
                                              m->base_mix_other[1],
                                              m->base_mix_other[2]);
-            if (m->base_mix_chain_is_a) {
-                if (cur) {
-                    graph->connect(cur, mx->input("A"));
+            ShaderOutput *a_src = m->base_mix_chain_is_a ? cur : b_cur;
+            ShaderOutput *b_src = m->base_mix_chain_is_a ? b_cur : cur;
+            const float3 a_fb = m->base_mix_chain_is_a ? bcol : other;
+            const float3 b_fb = m->base_mix_chain_is_a ? other : bcol;
+            /* Slice 2bh: ImageTexture → RGBCurves → Mix A or B.
+             * n==0 / NULL / fac==0 skips (2ay/2bg/2bf bit-identical).
+             * Do not reuse base_curves_* (Curves after Mix is 2bd). */
+            const bool use_mix_curves = (m->base_mix_curves != nullptr &&
+                                         m->base_mix_curves_n > 0 &&
+                                         m->base_mix_curves_fac != 0.0f);
+            if (use_mix_curves) {
+                RGBCurvesNode *mc = graph->create_node<RGBCurvesNode>();
+                array<packed_float3> mcurves;
+                mcurves.resize(m->base_mix_curves_n);
+                for (int i = 0; i < m->base_mix_curves_n; i++) {
+                    const float *p = m->base_mix_curves + i * 3;
+                    mcurves[i] = make_float3(p[0], p[1], p[2]);
+                }
+                mc->set_curves(mcurves);
+                mc->set_min_x(m->base_mix_curves_min_x);
+                mc->set_max_x(m->base_mix_curves_max_x);
+                mc->set_fac(m->base_mix_curves_fac);
+                mc->set_extrapolate(m->base_mix_curves_extrapolate != 0);
+                if (m->base_mix_curves_on_a) {
+                    if (a_src) {
+                        graph->connect(a_src, mc->input("Color"));
+                    }
+                    else {
+                        mc->set_value(a_fb);
+                    }
+                    a_src = mc->output("Color");
                 }
                 else {
-                    mx->set_a(bcol);
-                }
-                if (b_cur) {
-                    graph->connect(b_cur, mx->input("B"));
-                }
-                else {
-                    mx->set_b(other);
+                    if (b_src) {
+                        graph->connect(b_src, mc->input("Color"));
+                    }
+                    else {
+                        mc->set_value(b_fb);
+                    }
+                    b_src = mc->output("Color");
                 }
             }
+            if (a_src) {
+                graph->connect(a_src, mx->input("A"));
+            }
             else {
-                if (b_cur) {
-                    graph->connect(b_cur, mx->input("A"));
-                }
-                else {
-                    mx->set_a(other);
-                }
-                if (cur) {
-                    graph->connect(cur, mx->input("B"));
-                }
-                else {
-                    mx->set_b(bcol);
-                }
+                mx->set_a(a_fb);
+            }
+            if (b_src) {
+                graph->connect(b_src, mx->input("B"));
+            }
+            else {
+                mx->set_b(b_fb);
             }
             cur = mx->output("Result");
         }

@@ -95,7 +95,15 @@
 #   Concrete_Facade: dual TEX Mix → Curves → Base Color).
 # Slice 2bg: nested constant Mix / Curves(constant) on Mix A/B fold to
 #   dual-constant MixColorNode (optional Fac←Fresnel 2bf). No new C++ ABI.
-#   Curves Color-in←TEX_IMAGE on Mix side / nested non-constant Mix refuse.
+#   Curves Color-in←TEX_IMAGE on Mix side is Slice 2bh (not 2bg refuse).
+# Slice 2bh: RGB Curves ← TEX_IMAGE on Mix A/B of Principled Base Color
+#   (base_mix_curves_* after last base_curves_*). One-side LUT only.
+#   Native: ImageTexture → RGBCurves → Mix A or B; other side 2ay
+#   (const RGB or second TEX_IMAGE); then 2bd Curves-after-Mix if n>0.
+#   n==0 / NULL / fac==0 skips mix-side RGBCurvesNode (2bg/2ay/2bf/2bd
+#   bit-identical). Do not reuse base_curves_* (different graph position).
+#   Linked Fac / Vector Curves / Float Curve / second Curves on same side /
+#   Noise Color-in / GROUP / Fac←NEW_GEOMETRY/INVERT refuse Slice 2bh.
 # Slice 2be: Invert → Principled.Roughness (rough_invert_enable / fac).
 #   enable=0 skips InvertNode (2ba/2bb/2i bit-identical). Unlinked Fac;
 #   Color <- TEX_IMAGE or ColorRamp (or constant Color fold via Rec.709
@@ -1589,6 +1597,14 @@ def _base_mix_identity():
         "base_mix_b_image_colorspace": "",
         "base_mix_fresnel_enable": 0,
         "base_mix_fresnel_ior": 1.45,
+        # Slice 2bh identity — n==0 skips mix-side RGBCurvesNode.
+        "base_mix_curves": None,
+        "base_mix_curves_n": 0,
+        "base_mix_curves_min_x": 0.0,
+        "base_mix_curves_max_x": 1.0,
+        "base_mix_curves_fac": 1.0,
+        "base_mix_curves_extrapolate": 1,
+        "base_mix_curves_on_a": 1,
     }
 
 
@@ -1857,12 +1873,122 @@ def _try_eval_linked_curves_constant_side(sock, ctx: str):
             color_sock = _sock_ident_or_name(inputs, "Color")
     cin = _constant_rgb_from_sock_or_link(color_sock, ctx)
     if cin is None:
+        # Slice 2bh: TEX_IMAGE Color-in is packed as mix-side LUT, not folded.
+        tex = _mix_side_tex_node(color_sock)
+        if tex is not None:
+            return None
+        ntype_in = "?"
+        if color_sock is not None and getattr(color_sock, "is_linked", False):
+            cl = list(getattr(color_sock, "links", None) or [])
+            if cl:
+                cn = getattr(cl[0], "from_node", None)
+                cs = getattr(cl[0], "from_socket", None)
+                cn, cs = _peel_reroute(cn, cs)
+                ntype_in = getattr(cn, "type", None) if cn is not None else "?"
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color Mix Curves Color-in not constant refused "
-            "(Slice 2bg: constant / nested-constant-Mix Color-in only; "
-            "TEX_IMAGE under Curves-on-Mix-side still refuse)"
+            f"{ctx} Principled.Base Color Mix Curves Color-in from {ntype_in!r} refused "
+            "(Slice 2bh: constant fold is 2bg; TEX_IMAGE Color is mix-side LUT; "
+            "Noise/GROUP/nested Mix/Invert Color-in still refuse)"
         )
     return _eval_rgb_curves_constant(fn, cin, ctx)
+
+
+def _tex_color_out_sock(tex_node):
+    """Color output socket of a TEX_IMAGE node."""
+    outs = getattr(tex_node, "outputs", None)
+    if outs is None:
+        return None
+    g = getattr(outs, "get", None)
+    if callable(g):
+        sock = g("Color")
+        if sock is not None:
+            return sock
+    try:
+        return outs[0]
+    except (IndexError, TypeError, KeyError):
+        return None
+
+
+def _base_mix_curves_identity():
+    """Slice 2bh identity — skip mix-side RGBCurvesNode (2ay/2bg bit-identical)."""
+    return {
+        "base_mix_curves": None,
+        "base_mix_curves_n": 0,
+        "base_mix_curves_min_x": 0.0,
+        "base_mix_curves_max_x": 1.0,
+        "base_mix_curves_fac": 1.0,
+        "base_mix_curves_extrapolate": 1,
+        "base_mix_curves_on_a": 1,
+    }
+
+
+def _try_pack_mix_side_curves_tex(sock, ctx: str):
+    """If Mix A/B ← CURVE_RGB Color with TEX_IMAGE Color-in, return (tex, curves_dict).
+
+    None when the side is not Curves, or Curves with constant Color-in (2bg fold).
+    Raises named Slice 2bh for linked Fac, Noise/GROUP/nested Mix Color-in,
+    Vector/Float Curve, non-Color out.
+    Fac==0 packs n==0 so native skips (bare TEX_IMAGE on that Mix side).
+    """
+    if sock is None or not getattr(sock, "is_linked", False):
+        return None
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        return None
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    ntype = getattr(fn, "type", None) if fn is not None else None
+    fsname = str(getattr(fs, "name", "") or "") if fs is not None else ""
+    if ntype in ("CURVE_VEC", "CURVE_VECTOR", "CURVE_FLOAT"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix {ntype!r} on Mix side refused "
+            "(Slice 2bh: ShaderNodeRGBCurve only; Vector/Float Curve still refuse)"
+        )
+    if ntype != "CURVE_RGB":
+        return None
+    if fsname not in ("Color", "color", ""):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix Curves out {fsname!r} refused "
+            "(Slice 2bh: Color out only)"
+        )
+    inputs = getattr(fn, "inputs", None)
+    color_sock = None
+    if inputs is not None:
+        g = getattr(inputs, "get", None)
+        if callable(g):
+            color_sock = g("Color")
+        if color_sock is None:
+            color_sock = _sock_ident_or_name(inputs, "Color")
+    # Constant Color-in Curves stay 2bg fold — not a mix-side LUT.
+    cin = _constant_rgb_from_sock_or_link(color_sock, ctx)
+    if cin is not None:
+        return None
+    tex = _mix_side_tex_node(color_sock)
+    if tex is None:
+        ntype_in = "?"
+        if color_sock is not None and getattr(color_sock, "is_linked", False):
+            cl = list(getattr(color_sock, "links", None) or [])
+            if cl:
+                cn = getattr(cl[0], "from_node", None)
+                cs = getattr(cl[0], "from_socket", None)
+                cn, cs = _peel_reroute(cn, cs)
+                ntype_in = getattr(cn, "type", None) if cn is not None else "?"
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix Curves Color-in from {ntype_in!r} refused "
+            "(Slice 2bh: TEX_IMAGE Color only; Noise/GROUP/nested Mix/Invert still refuse)"
+        )
+    packed = _pack_rgb_curves_lut(fn, ctx=ctx, slice_tag="2bh")
+    ident = dict(_base_mix_curves_identity())
+    if float(packed["fac"]) == 0.0:
+        return tex, ident
+    ident["base_mix_curves"] = packed["curves"]
+    ident["base_mix_curves_n"] = packed["n"]
+    ident["base_mix_curves_min_x"] = packed["min_x"]
+    ident["base_mix_curves_max_x"] = packed["max_x"]
+    ident["base_mix_curves_fac"] = packed["fac"]
+    ident["base_mix_curves_extrapolate"] = packed["extrapolate"]
+    return tex, ident
 
 
 def _fold_constant_mix_base_rgb(mix_node, ctx: str):
@@ -1932,6 +2058,8 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
     Shape 3 (Slice 2bg): both linked, but one side is both-unlinked constant Mix
     → fold that side to RGB so the outer Mix becomes one-side-linked (other side
     stays chain: TEX_IMAGE / Curves / Gamma…). Nested Mix with linked inputs refuse.
+    Shape 4 (Slice 2bh): RGB Curves ← TEX_IMAGE Color on one Mix A/B side
+    (other side const RGB or TEX_IMAGE). Mix-side LUT, not base_curves_*.
     Both-unlinked constants: leave Mix in place (fold later; mix_type stays 0).
     Linked Fac: Fresnel Factor (IOR+Normal unlinked) is Slice 2bf;
     other Fac sources / VECTOR / unsupported blend / both-linked non-fold refuse.
@@ -2033,9 +2161,29 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
     if a_linked and b_linked:
         tex_a = _mix_side_tex_node(a_sock)
         tex_b = _mix_side_tex_node(b_sock)
-        if tex_a is not None and tex_b is not None:
-            key_a = _tex_vector_source_key(tex_a)
-            key_b = _tex_vector_source_key(tex_b)
+        # Slice 2bh: RGB Curves ← TEX_IMAGE on one Mix side (loft Carpet:
+        # A=TEX_IMAGE, B=Curves←same TEX, Fac←Fresnel). One LUT only.
+        curv_tex_a = _try_pack_mix_side_curves_tex(a_sock, ctx)
+        curv_tex_b = _try_pack_mix_side_curves_tex(b_sock, ctx)
+        if curv_tex_a is not None and curv_tex_b is not None:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix both sides RGB Curves←TEX_IMAGE refused "
+                "(Slice 2bh: one mix-side LUT only)"
+            )
+        side_a = tex_a
+        side_b = tex_b
+        mix_curves = dict(_base_mix_curves_identity())
+        if curv_tex_a is not None:
+            side_a = curv_tex_a[0]
+            mix_curves = dict(curv_tex_a[1])
+            mix_curves["base_mix_curves_on_a"] = 1
+        if curv_tex_b is not None:
+            side_b = curv_tex_b[0]
+            mix_curves = dict(curv_tex_b[1])
+            mix_curves["base_mix_curves_on_a"] = 0
+        if side_a is not None and side_b is not None:
+            key_a = _tex_vector_source_key(side_a)
+            key_b = _tex_vector_source_key(side_b)
             if key_a != key_b:
                 raise QuantTraceSyncError(
                     f"{ctx} Principled.Base Color Mix dual TEX_IMAGE Vector graphs differ "
@@ -2048,12 +2196,10 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
             mix["base_mix_chain_is_a"] = 1
             mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
             mix["base_mix_clamp_result"] = 1 if clamp_result else 0
-            # B image path filled by caller after packing tex_b.
-            a_links = list(getattr(a_sock, "links", None) or [])
-            fn = getattr(a_links[0], "from_node", None)
-            fs = getattr(a_links[0], "from_socket", None)
-            fn, fs = _peel_reroute(fn, fs)
-            return fn, fs, mix, tex_b
+            mix.update(mix_curves)
+            # B image path filled by caller after packing side_b.
+            return side_a, _tex_color_out_sock(side_a), mix, side_b
+        # Slice 2bh: Curves←TEX on one side + constant on the other (folded Mix / Curves).
         # Slice 2bg: fold constant nested Mix and/or Curves(constant) on A/B.
         # Native mesh order is Color→Mix→Curves (2bd Concrete_Facade). Loft
         # Material.003 is Mix(const, Curves(const)) — fold Curves on constants
@@ -2075,13 +2221,17 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
             mix["_chain_const_rgb"] = const_a
             return None, None, mix, None
         if const_a is not None and const_b is None:
-            # A constant; B is chain (TEX_IMAGE / Gamma…).
+            # A constant; B is chain (TEX_IMAGE / Curves←TEX / Gamma…).
             mix["base_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
             mix["base_mix_fac"] = float(fac)
             mix["base_mix_other"] = const_a
             mix["base_mix_chain_is_a"] = 0
             mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
             mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+            if curv_tex_b is not None:
+                mix.update(curv_tex_b[1])
+                mix["base_mix_curves_on_a"] = 0
+                return curv_tex_b[0], _tex_color_out_sock(curv_tex_b[0]), mix, None
             links = list(getattr(b_sock, "links", None) or [])
             if len(links) != 1:
                 raise QuantTraceSyncError(
@@ -2099,6 +2249,10 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
             mix["base_mix_chain_is_a"] = 1
             mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
             mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+            if curv_tex_a is not None:
+                mix.update(curv_tex_a[1])
+                mix["base_mix_curves_on_a"] = 1
+                return curv_tex_a[0], _tex_color_out_sock(curv_tex_a[0]), mix, None
             links = list(getattr(a_sock, "links", None) or [])
             if len(links) != 1:
                 raise QuantTraceSyncError(
@@ -2109,10 +2263,16 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
             fs = getattr(links[0], "from_socket", None)
             fn, fs = _peel_reroute(fn, fs)
             return fn, fs, mix, None
+        # One side Curves←TEX, other neither const nor TEX (leftover).
+        if curv_tex_a is not None or curv_tex_b is not None:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix Curves←TEX_IMAGE other side refused "
+                "(Slice 2bh: other Mix input const RGB or TEX_IMAGE Color only)"
+            )
         raise QuantTraceSyncError(
             f"{ctx} Principled.Base Color Mix both sides linked refused "
-            "(Slice 2bg: dual TEX_IMAGE Color or constant nested Mix / "
-            "Curves(constant) fold; nested non-constant Mix still refuse)"
+            "(Slice 2bh: dual TEX_IMAGE Color, Curves←TEX_IMAGE on one Mix side, "
+            "or constant nested Mix / Curves(constant) fold; nested non-constant Mix still refuse)"
         )
 
     # Exactly one side linked = chain; other must be unlinked constant RGB.
@@ -2148,6 +2308,14 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
     mix["base_mix_chain_is_a"] = int(chain_is_a)
     mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
     mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+    # Slice 2bh: chain is RGB Curves ← TEX_IMAGE (CLAIM: TEX→Curves→Mix A).
+    # Pack mix-side LUT and peel Color-in as the chain (do not reuse 2bd
+    # base_curves_* — that is Curves AFTER Mix).
+    curv_tex = _try_pack_mix_side_curves_tex(chain_sock, ctx)
+    if curv_tex is not None:
+        mix.update(curv_tex[1])
+        mix["base_mix_curves_on_a"] = int(chain_is_a)
+        return curv_tex[0], _tex_color_out_sock(curv_tex[0]), mix, None
     links = list(getattr(chain_sock, "links", None) or [])
     if len(links) != 1:
         raise QuantTraceSyncError(
@@ -5051,6 +5219,26 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "base_curves_extrapolate": int(
             pr["base_curves_extrapolate"] if pr.get("base_curves_extrapolate") is not None else 1
         ),
+        # Slice 2bh: mix-side LUT. n==0 / fac 0.0 valid — never `or`.
+        "base_mix_curves": list(pr.get("base_mix_curves") or []) if pr.get("base_mix_curves") else None,
+        "base_mix_curves_n": int(
+            pr["base_mix_curves_n"] if pr.get("base_mix_curves_n") is not None else 0
+        ),
+        "base_mix_curves_min_x": float(
+            pr["base_mix_curves_min_x"] if pr.get("base_mix_curves_min_x") is not None else 0.0
+        ),
+        "base_mix_curves_max_x": float(
+            pr["base_mix_curves_max_x"] if pr.get("base_mix_curves_max_x") is not None else 1.0
+        ),
+        "base_mix_curves_fac": float(
+            pr["base_mix_curves_fac"] if pr.get("base_mix_curves_fac") is not None else 1.0
+        ),
+        "base_mix_curves_extrapolate": int(
+            pr["base_mix_curves_extrapolate"] if pr.get("base_mix_curves_extrapolate") is not None else 1
+        ),
+        "base_mix_curves_on_a": int(
+            pr["base_mix_curves_on_a"] if pr.get("base_mix_curves_on_a") is not None else 1
+        ),
     }
     out.update(_pack_tex_ob_fields(pr, depsgraph=depsgraph))
     return out
@@ -5827,6 +6015,29 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     else:
         desc.base_curves = None
         desc.base_curves_n = 0
+    # Slice 2bh: mix-side LUT. n==0 skip; fac 0.0 / on_a 0 valid — never `or`.
+    desc.base_mix_curves_min_x = _bf("base_mix_curves_min_x", 0.0)
+    desc.base_mix_curves_max_x = _bf("base_mix_curves_max_x", 1.0)
+    desc.base_mix_curves_fac = _bf("base_mix_curves_fac", 1.0)
+    _exm = packed.get("base_mix_curves_extrapolate", 1)
+    desc.base_mix_curves_extrapolate = 1 if _exm is None else int(_exm)
+    desc.base_mix_curves_on_a = _bi("base_mix_curves_on_a", 1)
+    mcurves_list = packed.get("base_mix_curves") or []
+    mcurves_n = packed.get("base_mix_curves_n", 0)
+    mcurves_n = 0 if mcurves_n is None else int(mcurves_n)
+    if mcurves_list and mcurves_n > 0:
+        mflat = [float(v) for v in mcurves_list]
+        if len(mflat) < mcurves_n * 3:
+            raise QuantTraceSyncError(
+                f"base_mix_curves len {len(mflat)} < n*3={mcurves_n * 3} (Slice 2bh)"
+            )
+        mcurves_buf = (ctypes.c_float * (mcurves_n * 3))(*mflat[: mcurves_n * 3])
+        keep.append(mcurves_buf)
+        desc.base_mix_curves = ctypes.cast(mcurves_buf, ctypes.POINTER(ctypes.c_float))
+        desc.base_mix_curves_n = mcurves_n
+    else:
+        desc.base_mix_curves = None
+        desc.base_mix_curves_n = 0
     # Slice 2az: bevel_enable 0 / samples 4 / radius 0.05 — never `or` on samples.
     desc.bevel_enable = _bi("bevel_enable", 0)
     desc.bevel_samples = _bi("bevel_samples", 4)
@@ -6230,6 +6441,13 @@ def make_qt_simple_scene_type():
             ("base_curves_max_x", ctypes.c_float),
             ("base_curves_fac", ctypes.c_float),
             ("base_curves_extrapolate", ctypes.c_int),
+            ("base_mix_curves", ctypes.POINTER(ctypes.c_float)),
+            ("base_mix_curves_n", ctypes.c_int),
+            ("base_mix_curves_min_x", ctypes.c_float),
+            ("base_mix_curves_max_x", ctypes.c_float),
+            ("base_mix_curves_fac", ctypes.c_float),
+            ("base_mix_curves_extrapolate", ctypes.c_int),
+            ("base_mix_curves_on_a", ctypes.c_int),
             ("bevel_enable", ctypes.c_int),
             ("bevel_samples", ctypes.c_int),
             ("bevel_radius", ctypes.c_float),
@@ -6691,6 +6909,13 @@ def make_qt_scene_types():
             ("base_curves_max_x", ctypes.c_float),
             ("base_curves_fac", ctypes.c_float),
             ("base_curves_extrapolate", ctypes.c_int),
+            ("base_mix_curves", ctypes.POINTER(ctypes.c_float)),
+            ("base_mix_curves_n", ctypes.c_int),
+            ("base_mix_curves_min_x", ctypes.c_float),
+            ("base_mix_curves_max_x", ctypes.c_float),
+            ("base_mix_curves_fac", ctypes.c_float),
+            ("base_mix_curves_extrapolate", ctypes.c_int),
+            ("base_mix_curves_on_a", ctypes.c_int),
             ("bevel_enable", ctypes.c_int),
             ("bevel_samples", ctypes.c_int),
             ("bevel_radius", ctypes.c_float),

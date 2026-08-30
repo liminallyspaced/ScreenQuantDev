@@ -100,6 +100,13 @@
  *   Fac bit-identical. Cite shader_nodes.h FresnelNode set_IOR; Normal
  *   unlinked LINK_NORMAL. MixColorNode Factor socket (not Fac). Linked
  *   Fresnel Normal/IOR, TEX_IMAGE/Noise/LayerWeight/GROUP/Geometry Fac refuse.
+ * Slice 2bh: RGB Curves ← TEX_IMAGE on Mix A/B (base_mix_curves_* after
+ *   last base_curves_*). n==0 / NULL / fac==0 skips mix-side RGBCurvesNode
+ *   — 2bg/2ay/2bf/2bd bit-identical. Native: ImageTexture → RGBCurves →
+ *   Mix A or B; other Mix input stays 2ay; then 2bd Curves-after-Mix if
+ *   base_curves_n>0. Cite RGBCurvesNode set_curves/set_min_x/set_max_x/
+ *   set_fac/set_extrapolate. MixColorNode Factor socket is Factor not Fac.
+ *   Do not reuse base_curves_* (different graph position).
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
@@ -582,6 +589,17 @@ typedef struct QT_SimpleScene {
   float base_curves_max_x;  /* default 1 */
   float base_curves_fac;    /* default 1 */
   int base_curves_extrapolate; /* default 1 */
+  /* Slice 2bh: RGB Curves LUT on Mix A or B (not base_curves_* after Mix).
+   * NULL / n==0 / fac==0 skips mix-side RGBCurvesNode — 2bg/2ay/2bf/2bd
+   * bit-identical. Official Cycles curvemapping_color_to_array (257).
+   * on_a 1 = wrap Mix A; 0 = wrap Mix B. One LUT only. */
+  const float *base_mix_curves; /* n * 3 RGB floats; NULL / n==0 = skip */
+  int base_mix_curves_n;
+  float base_mix_curves_min_x;  /* default 0 */
+  float base_mix_curves_max_x;  /* default 1 */
+  float base_mix_curves_fac;    /* default 1 */
+  int base_mix_curves_extrapolate; /* default 1 */
+  int base_mix_curves_on_a; /* 1 = Mix A, 0 = Mix B; unused when n==0 */
   /* Slice 2az: Bevel → Principled.Normal (0 = off, bit-identical 2ay/2x/2j).
    * samples default 4; radius unlinked float (Blender 5.2 RNA 0.05).
    * Nested Normal via bump_* / normal_* (NormalMap → Bump.Normal OK). */
@@ -964,6 +982,17 @@ typedef struct QT_Mesh {
   float base_curves_max_x;  /* default 1 */
   float base_curves_fac;    /* default 1 */
   int base_curves_extrapolate; /* default 1 */
+  /* Slice 2bh: RGB Curves LUT on Mix A or B (not base_curves_* after Mix).
+   * NULL / n==0 / fac==0 skips mix-side RGBCurvesNode — 2bg/2ay/2bf/2bd
+   * bit-identical. Official Cycles curvemapping_color_to_array (257).
+   * on_a 1 = wrap Mix A; 0 = wrap Mix B. One LUT only. */
+  const float *base_mix_curves; /* n * 3 RGB floats; NULL / n==0 = skip */
+  int base_mix_curves_n;
+  float base_mix_curves_min_x;  /* default 0 */
+  float base_mix_curves_max_x;  /* default 1 */
+  float base_mix_curves_fac;    /* default 1 */
+  int base_mix_curves_extrapolate; /* default 1 */
+  int base_mix_curves_on_a; /* 1 = Mix A, 0 = Mix B; unused when n==0 */
   /* Slice 2az: Bevel → Principled.Normal (0 = off, bit-identical 2ay/2x/2j).
    * samples default 4; radius unlinked float (Blender 5.2 RNA 0.05).
    * Nested Normal via bump_* / normal_* (NormalMap → Bump.Normal OK). */

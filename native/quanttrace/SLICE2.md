@@ -1,6 +1,33 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bg landed** (2026-08-29 11pm PlugWalk ET). Nested constant Mix and/or RGB Curves(constant) on Mix A/B of Principled.Base Color fold to dual-constant MixColorNode (optional Fac←Fresnel 2bf). **No new C++ ABI** — enable=0 / no nested fold keeps 2ay mix, 2bf fresnel, 2bd curves bit-identical. Cite MixColorNode; RGBCurvesNode evaluate at pack-time for constant Color-in; existing `base_mix_*` / `base_mix_fresnel_*`. Native mesh order remains Color→Mix→Curves (2bd); loft Material.003 Mix(const, Curves(const)) is rewritten as Mix(const, curved_const). Loft Object003.002 Material.003 cleared. First PACK_FAIL now Object003.015 Carpet Soft Rug Curves←TEX_IMAGE on Mix side. Named refuse nested non-constant Mix / Curves Color-in TEX_IMAGE / Fac←Noise/NEW_GEOMETRY/Invert. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.60-slice2bg`. Addon `0.3.3`.
+Status: **Slice 2bh landed** (2026-08-30 12am PlugWalk ET). RGB Curves ← TEX_IMAGE on Mix A/B of Principled.Base Color as a **new mix-side LUT** (`base_mix_curves_*` after last `base_curves_*`). Census: loft Carpet Mix MIX clamp_factor Fac←Fresnel IOR=1.45; A=packed sRGB TEX_IMAGE unlinked Vector; B=RGB Curves Fac=1 Color-in=same TEX; I mid (0.272727, 0.725); 10 loft Mix→Base Color Curves←TEX_IMAGE all on B only (0 both-sides LUTs). n==0 / NULL / fac==0 skips mix-side RGBCurvesNode — 2bg/2ay/2bf/2bd bit-identical. Do not reuse `base_curves_*` (Curves AFTER Mix is 2bd). Native ImageTexture → RGBCurves → Mix A or B; other side 2ay; then 2bd if `base_curves_n>0`. Cite RGBCurvesNode set_curves/set_min_x/set_max_x/set_fac/set_extrapolate; MixColorNode Factor socket is Factor not Fac. Loft Object003.015 Carpet cleared. First PACK_FAIL Plane.002 Rope Normal Map Color not TEX_IMAGE. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.61-slice2bh`. Addon `0.3.3`.
+
+
+## Slice 2bh — RGB Curves ← TEX_IMAGE on Mix A/B → Base Color (2026-08-30 12am ET)
+
+Loft leftover after 2bg (Curves Color-in TEX_IMAGE on Mix side): object `Object003.015` / material `Carpet Soft Rug Dark Grey Pattern 2`. Principled.Base Color ← Mix RGBA MIX clamp_factor, Fac ← Fresnel IOR=1.45. A ← packed `44d2448fc689.jpg` sRGB TEX_IMAGE Color (Linear, FLAT, REPEAT, Vector unlinked). B ← RGB Curves (master I mid `(0.272727, 0.725)`, R/G/B identity, Fac unlinked 1, EXTRAPOLATED) ← same TEX_IMAGE Color. Census: 10 loft Mix→Base Color Curves←TEX_IMAGE (all on B, other A=TEX_IMAGE); 0 both-sides independent LUTs; 5 leftover Curves←MIX. Claim cube: 8×8 sRGB checker TEX_IMAGE → unlinked-Fac RGB Curves (master I mid_y=0.35 like 2bd) → Mix A, Mix B const (0,0,0), Fac unlinked 0.5 MIX. Native ImageTexture → RGBCurves → Mix A; other Mix input 2ay const; 2bd Curves-after-Mix n==0.
+
+Cite Cycles `shader_nodes.h` RGBCurvesNode set_curves/set_min_x/set_max_x/set_fac/set_extrapolate; MixColorNode Factor (not Fac). Official LUT 257 via `curvemapping_color_to_array` (DNA cm[0]=R,[1]=G,[2]=B,[3]=I; EXTRAPOLATED → extrapolate=1). enable=0 / n==0 / fac==0 keeps 2bg/2ay/2bf/2bd bit-identical.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| mix-side CLAIM | 32²/4 | 1.34e-6 | 1.18e-9 | 0 | **PASS** |
+| mix-side CLAIM | 256²/128 | 4.17e-7 | 3.95e-10 | 0 | **PASS** |
+| mix 2ay (n==0) | 32²/4 | 5.36e-7 | 3.54e-9 | 0 | **PASS** |
+| curves 2bd (mix n==0) | 32²/4 | 8.34e-7 | 1.50e-9 | 0 | **PASS** |
+| fresnel 2bf | 32²/4 | 9.54e-7 | 6.36e-9 | 0 | **PASS** |
+| nested 2bg | 32²/4 | 1.79e-7 | 5.11e-10 | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| live stock CLAIM vs Mix A=TEX bypass | 32²/4 | 0.147 | 6.69e-4 | 29 | graph live |
+| Fac←Noise on Curves | — | — | — | — | **REFUSE** Slice 2bh |
+| Curves Color-in←Noise | — | — | — | — | **REFUSE** Slice 2bh |
+
+Loft pack: Object003.015 Carpet Soft Rug Curves←TEX_IMAGE on Mix B accepted (10 mix-side LUTs). First PACK_FAIL `Principled.Normal Map Color link is not TEX_IMAGE (Slice 2f/2h/2i)` (object `Plane.002` / material `Rope`). Next: Normal Map Color non-TEX_IMAGE, leftover Curves←MIX, Fac←NEW_GEOMETRY/INVERT, GROUP/Botaniq, Bump Height VALTORGB/SEPARATE/MATH. Not loft Session Δmax.
+
+ABI: `base_mix_curves` / `base_mix_curves_n` / `base_mix_curves_min_x` / `base_mix_curves_max_x` / `base_mix_curves_fac` / `base_mix_curves_extrapolate` / `base_mix_curves_on_a` after last `base_curves_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults NULL / 0 / 0 / 1 / 1 / 1 / 1. Native `0.0.61-slice2bh`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-mix-side-curves-32-pair.png`. Tools `_quanttrace_slice2bh_scene/smoke.py` + `_quanttrace_slice2bh_census.py`.
+
 
 ## Slice 2bg — nested constant Mix / Curves(constant) on Mix A/B → Base Color (2026-08-29 11pm ET)
 
