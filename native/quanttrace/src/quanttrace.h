@@ -759,14 +759,26 @@ typedef struct QT_SimpleScene {
   /* Slice 2bq: second nested MixClosure hop (Mix Shader.004 after Mix.005).
    * mix_nested_closure*_kind 2 = NestedMix2. When nested kinds stay 0/1,
    * bit-identical to Slice 2bp (no nested2 MixClosureNode).
-   * Nested2 Fac: unlinked float or LightPath (not ColorRamp this turn).
+   * Nested2 Fac: unlinked float, LightPath, or ColorRamp (Slice 2br).
    * Nested2 leaves: Glass+Transparent only.
-   * Cite MixClosureNode nesting; GlassBsdfNode; TransparentBsdfNode. */
+   * Cite MixClosureNode nesting; GlassBsdfNode; TransparentBsdfNode;
+   * RGBRampNode (Slice 2br). */
   float mix_nested2_fac;
   int mix_nested2_lightpath_enable;
   int mix_nested2_lightpath_output; /* QT_LIGHTPATH_* */
   int mix_nested2_closure1_kind; /* 0=Glass 1=Transparent */
   int mix_nested2_closure2_kind; /* 0=Glass 1=Transparent */
+  /* Slice 2br: nested2 Mix Fac ← ColorRamp (RGBRampNode).
+   * enable=0 || n==0 skips RGBRampNode — 2bq bit-identical (set_fac / LightPath).
+   * Official colorramp_to_array LUT size+1=257. Fac unlinked float only this
+   * slice (Noise/TEX/Fresnel/GROUP/MATH Fac named REFUSE). Color out → Fac
+   * (loft ColorRamp.002); Alpha out refuse. Cite RGBRampNode / MixClosureNode. */
+  int mix_nested2_ramp_enable;
+  const float *mix_nested2_ramp; /* n*3 RGB */
+  const float *mix_nested2_ramp_alpha; /* n */
+  int mix_nested2_ramp_n; /* 0 = skip */
+  int mix_nested2_ramp_interpolate; /* 1 LINEAR/EASE/etc; 0 CONSTANT */
+  float mix_nested2_ramp_fac; /* ColorRamp.Fac unlinked float */
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1256,6 +1268,13 @@ typedef struct QT_Mesh {
   int mix_nested2_lightpath_output;
   int mix_nested2_closure1_kind;
   int mix_nested2_closure2_kind;
+  /* Slice 2br: nested2 Mix Fac ← ColorRamp (same layout as QT_SimpleScene). */
+  int mix_nested2_ramp_enable;
+  const float *mix_nested2_ramp;
+  const float *mix_nested2_ramp_alpha;
+  int mix_nested2_ramp_n;
+  int mix_nested2_ramp_interpolate;
+  float mix_nested2_ramp_fac;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

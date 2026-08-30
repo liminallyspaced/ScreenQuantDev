@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.68-slice2bo` — Mix Fac←MATH Light Path nest + Glass+Transparent. Addon still `0.3.3`.
+**Current native:** `0.0.71-slice2br` — Mix Fac←MATH Light Path nest + Glass+Transparent. Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.68-slice2bo` (Mix Fac MATH + GlassBsdfNode).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.71-slice2br` (nested2 Mix Fac←ColorRamp + GlassBsdfNode).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -17,6 +17,7 @@ this tree never feeds Auto clocks.
 | Slice | Status | What |
 |---|---|---|
 | **1 — hello lib** | done | Shared `libquanttrace` exporting `quanttrace_version()` / `quanttrace_is_tracer()`. |
+| **2br — nested2 Mix Fac←ColorRamp** | **PASS** | CLAIM 32²/4 Δmax **1.91e-6**; 256²/128 Δmax **6.63e-4**. Native `0.0.71-slice2br`. |
 | **2 — cube pixel-match + F12** | **PASS** | 256²/128 stock vs Session / F12 Δmax **4.77e-7**. `is_tracer=1` (QT_WITH_CYCLES). |
 | **2b — depsgraph simple sync** | **PASS** | Stock vs depsgraph-fed Session 256²/128 Δmax **5.96e-7**. `QT_SimpleScene` + `sync.py`. Simple scenes only. |
 | **2c — multi-mesh + multi-AREA** | **32/4 PASS, 256/128 1-px FAIL** | `QT_Scene` + `pack_scene`. Still-life 32²/4 Δmax **2.68e-6**. 256²/128 Δmax **0.00668** (1 silhouette pixel). Caps 32/16. |

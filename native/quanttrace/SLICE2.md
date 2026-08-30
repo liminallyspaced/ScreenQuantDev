@@ -1,7 +1,29 @@
 # QuantTrace Slice 2 — Scene sync research
 
-Status: **Slice 2bq landed** (2026-08-30 9am PlugWalk ET). Second nested MixClosure hop (`mix_nested_closure*_kind` 2=NestedMix2; `mix_nested2_*` after `mix_nested_*`). Nested2 Fac unlinked|LightPath; leaves Glass+Transparent. nested kinds 0/1 keep Slice 2bp bit-identical. Census loft `Realistic_Glass_01` Mix Shader.004: Fac←ColorRamp.002; Shader=Add (Glossy/SSS/Translucent); Shader_001=Glass Color+Rough linked. CLAIM packs Outer MATH + Mix.005 Is Shadow + Mix.004 Fac=0.35 Glass+Transparent. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — nested2 Fac←ColorRamp Slice 2bq. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.70-slice2bq`. Addon `0.3.3`.
+Status: **Slice 2br landed** (2026-08-30 10am PlugWalk ET). Nested2 Mix Fac←ColorRamp (`mix_nested2_ramp_*` after `mix_nested2_*`). enable=0 / n=0 skips RGBRampNode — 2bq set_fac/LightPath bit-identical. Reuse official colorramp_to_array LUT 257. ColorRamp.Fac unlinked float only (Noise/TEX/Fresnel/GROUP/MATH refuse). Census loft ColorRamp.002: LINEAR RGB, Color out, 2 stops 0.387 black / 0.877 white, Fac←MATH Backfacing×HueSat leftover. CLAIM Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp Glass+Transparent. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now ColorRamp.Fac←MATH Slice 2br (ColorRamp Mix Fac itself accepted). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.71-slice2br`. Addon `0.3.3`.
 
+
+
+## Slice 2br — nested2 Mix Fac ← ColorRamp (2026-08-30 10am ET)
+
+Cite Cycles `shader_nodes.h` RGBRampNode (Fac in, Color/Alpha out; set_ramp / set_ramp_alpha / set_interpolate), MixClosureNode Fac. Do **not** evaluate Light Path at pack time. Reuse `_pack_color_ramp_lut` (official colorramp_to_array size+1=257). ColorRamp.Fac←Noise/TEX/Fresnel/GROUP/MATH / Alpha out / Add / third Mix / linked Glass.Color refuse named Slice 2br.
+
+| plate | res/spp | Δmax | MAE | px≥1e-3 | gate |
+|---|---|---|---|---|---|
+| CLAIM Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp (loft stops) Glass+Transparent | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| CLAIM same | 256²/128 | **6.63e-4** | 2.45e-8 | **0** | **PASS** |
+| identity nested2 (2bq Fac 0.35, ramp off) | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| identity nested_mix (2bp) | 32²/4 | **1.91e-6** | 3.70e-8 | **0** | **PASS** |
+| identity glass_only (2bm) | 32²/4 | **1.19e-5** | 4.81e-8 | **0** | **PASS** |
+| mix 2ay / invert 2be / bump_sep 2bl / hdr 2aa | 32²/4 | 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4 | — | **0** | **PASS** |
+| live stock CLAIM vs Session ramp-bypass (unlinked Fac 0.35, no ramp) | 32²/4 | **0.108** | 1.20e-3 | 66 | live (graph) |
+| refuse_noise / refuse_add / refuse_third / refuse_linked | — | — | — | — | **REFUSE** Slice 2br |
+
+Loft pack: Mix.004 Fac←ColorRamp accepted into packer; ColorRamp.Fac←MATH still refuses. First PACK_FAIL `G-__555573` / `Realistic_Glass_01` — `nested2 Mix ColorRamp.Fac←MATH refused (Slice 2br: ColorRamp.Fac unlinked float only; …)`. Next: ColorRamp.Fac←MATH (Backfacing×HueSat) / Add+Glossy/SSS / linked Glass.Color / Transparent.Color linked / Alpha out. Not loft Session Δmax.
+
+ABI: `mix_nested2_ramp_enable` / `mix_nested2_ramp` / `mix_nested2_ramp_alpha` / `mix_nested2_ramp_n` / `mix_nested2_ramp_interpolate` / `mix_nested2_ramp_fac` after `mix_nested2_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults keep 2bq bit-identical. Native `0.0.71-slice2br`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-colorramp-fac-32-pair.png`. Tools `_quanttrace_slice2br_scene/smoke.py` + `_quanttrace_slice2br_census.py`.
 
 ## Slice 2bq — second nested Mix Shader hop (2026-08-30 9am ET)
 

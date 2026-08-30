@@ -126,6 +126,9 @@
  *   mix_nested_closure*_kind 2 = NestedMix2). nested kinds 0/1 keep 2bp
  *   bit-identical (no nested2 MixClosureNode). Nested2 Fac unlinked|LightPath;
  *   leaves Glass+Transparent. Cite MixClosureNode nesting.
+ * Slice 2br: nested2 Mix Fac ← ColorRamp (mix_nested2_ramp_*). enable=0 ||
+ *   n==0 skips RGBRampNode — 2bq set_fac/LightPath bit-identical. Cite
+ *   RGBRampNode set_ramp/set_ramp_alpha/set_interpolate → MixClosure Fac.
  *   enable=0 keeps 2bc/2x bit-identical. Cite SeparateColorNode
  *   set_color_type NODE_COMBSEP_COLOR_RGB; float Red/Green/Blue → Height
  *   (no NODE_CONVERT_CF). Loft Sideboard: Blue ← TEX_IMAGE Color.
@@ -478,6 +481,13 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->mix_nested2_lightpath_output = QT_LIGHTPATH_SHADOW_RAY;
     d->mix_nested2_closure1_kind = 0;
     d->mix_nested2_closure2_kind = 1;
+    /* Slice 2br identity — enable=0 / n=0 skips RGBRampNode (2bq bit-identical). */
+    d->mix_nested2_ramp_enable = 0;
+    d->mix_nested2_ramp = nullptr;
+    d->mix_nested2_ramp_alpha = nullptr;
+    d->mix_nested2_ramp_n = 0;
+    d->mix_nested2_ramp_interpolate = 1;
+    d->mix_nested2_ramp_fac = 0.5f;
     /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
     d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
     d->spec_tint_mix_type = 0;
@@ -925,6 +935,12 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->mix_nested2_lightpath_output = s->mix_nested2_lightpath_output;
     mesh->mix_nested2_closure1_kind = s->mix_nested2_closure1_kind;
     mesh->mix_nested2_closure2_kind = s->mix_nested2_closure2_kind;
+    mesh->mix_nested2_ramp_enable = s->mix_nested2_ramp_enable;
+    mesh->mix_nested2_ramp = s->mix_nested2_ramp;
+    mesh->mix_nested2_ramp_alpha = s->mix_nested2_ramp_alpha;
+    mesh->mix_nested2_ramp_n = s->mix_nested2_ramp_n;
+    mesh->mix_nested2_ramp_interpolate = s->mix_nested2_ramp_interpolate;
+    mesh->mix_nested2_ramp_fac = s->mix_nested2_ramp_fac;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1556,7 +1572,30 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         };
         auto make_nested2 = [&]() -> ShaderOutput * {
             MixClosureNode *n2 = graph->create_node<MixClosureNode>();
-            if (m->mix_nested2_lightpath_enable != 0) {
+            /* Slice 2br: RGBRampNode Color → MixClosure Fac when enable && n>0.
+             * enable=0 keeps 2bq LightPath / set_fac path bit-identical. */
+            if (m->mix_nested2_ramp_enable != 0 && m->mix_nested2_ramp_n > 0 &&
+                m->mix_nested2_ramp != nullptr) {
+                RGBRampNode *ramp = graph->create_node<RGBRampNode>();
+                array<packed_float3> ramp_c;
+                array<float> ramp_a;
+                ramp_c.resize(m->mix_nested2_ramp_n);
+                ramp_a.resize(m->mix_nested2_ramp_n);
+                for (int i = 0; i < m->mix_nested2_ramp_n; i++) {
+                    const float *pt = m->mix_nested2_ramp + i * 3;
+                    ramp_c[i] = make_float3(pt[0], pt[1], pt[2]);
+                    ramp_a[i] = (m->mix_nested2_ramp_alpha != nullptr)
+                                    ? m->mix_nested2_ramp_alpha[i]
+                                    : 1.0f;
+                }
+                ramp->set_ramp(ramp_c);
+                ramp->set_ramp_alpha(ramp_a);
+                ramp->set_interpolate(m->mix_nested2_ramp_interpolate != 0);
+                ramp->set_fac(m->mix_nested2_ramp_fac);
+                /* loft ColorRamp.002 Color out → Fac (CF convert). */
+                graph->connect(ramp->output("Color"), n2->input("Fac"));
+            }
+            else if (m->mix_nested2_lightpath_enable != 0) {
                 LightPathNode *n2lp = graph->create_node<LightPathNode>();
                 graph->connect(n2lp->output(qt_lightpath_out_name(
                                    m->mix_nested2_lightpath_output)),
