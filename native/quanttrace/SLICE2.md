@@ -1,7 +1,34 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bk landed** (2026-08-30 3am PlugWalk ET). Mix → Principled.Specular Tint (`specular_tint[3]` + `spec_tint_mix_*` + `spec_tint_gamma` / `spec_tint_hsv_*` after last `spec_tint_*`). Census: loft Sideboard Specular Tint ← Mix RGBA MIX Fac=0.25 clamp_factor, A=const white, B ← HueSat ← Gamma ← TEX_IMAGE (packed diffuse sRGB, Vector unlinked); 5 loft Mix→Specular Tint (2 Sideboard Gamma/HSV chain; 1 Plant const fold; 2 Pot Fac←GROUP refuse). Constant Mix folds Python-only into `specular_tint`. mix_type=0 + identity gamma/hsv + empty path keeps 2u bit-identical. Fac←Fresnel/GROUP/Noise named refuse Slice 2bk; Curves-on-Mix-side refuse. Loft Sideboard Specular Tint Mix cleared. First PACK_FAIL `Principled.Normal Bump Height from 'SEPARATE_COLOR' refused (Slice 2bc)` (Sideboard Bump.Height ← Separate.Blue). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.64-slice2bk`. Addon `0.3.3`.
+Status: **Slice 2bl landed** (2026-08-30 4am PlugWalk ET). Bump Height ← SEPARATE_COLOR (`bump_separate_enable` / `bump_separate_channel` after `bump_noise_*`). Census: loft Sideboard Bump.Height ← Separate RGB.Blue ← TEX_IMAGE Color (×2 materials). enable=0 keeps 2bc/2x bit-identical. HSV/HSL / Invert←Separate into Height named refuse Slice 2bl. Constant Separate folds (empty height). Loft Sideboard Bump Height SEPARATE cleared. First PACK_FAIL `object='G-__555573' material='Realistic_Glass_01' material has no Principled BSDF (Slice 2b)`. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.65-slice2bl`. Addon `0.3.3`.
 
+
+
+## Slice 2bl — Bump Height ← SEPARATE_COLOR (2026-08-30 4am ET)
+
+Loft leftover after 2bk (Bump Height from SEPARATE_COLOR): object `Chocofur_Free_Sideboard_01` / materials `Chocofur_Free_Sideboard_01.001` + `Chocofur_Free_Sideboard_01`. Principled.Normal ← Bump; Height ← Separate RGB **Blue** (`SEPARATE_COLOR`). Mode **RGB**. Color ← TEX_IMAGE Color (packed diffuse, Vector unlinked). Census: 2 loft SEPARATE→Bump.Height both Blue ← TEX_IMAGE Color. Claim cube: Non-Color RGB (R=10, G=40, Blue=height hill) TEX_IMAGE → Separate.Blue → Bump.Height (proves channel ≠ CF-gray).
+
+Cite Cycles `shader_nodes.h` SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB; Red/Green/Blue float outs → BumpNode Height (no NODE_CONVERT_CF). enable=0 / empty path keeps 2bc/2x Color→CF Height bit-identical. Constant Color/RGB → Separate folds (empty bump image; flat Height).
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| Sideboard CLAIM Blue | 32²/4 | 2.38e-7 | 5.19e-9 | 0 | **PASS** |
+| Sideboard CLAIM Blue | 256²/128 | 4.77e-7 | — | 0 | **PASS** |
+| separate_r / separate_g | 32²/4 | 3.58e-7 | — | 0 | **PASS** |
+| separate_const fold | 32²/4 | 3.58e-7 | — | 0 | **PASS** |
+| bump 2x | 32²/4 | 2.38e-7 | — | 0 | **PASS** |
+| noise 2bc | 32²/4 | 4.65e-6 | — | 0 | **PASS** |
+| separate 2bj | 32²/4 | 3.58e-7 | — | 0 | **PASS** |
+| mix 2ay | 32²/4 | 5.36e-7 | — | 0 | **PASS** |
+| invert 2be | 32²/4 | 4.77e-7 | — | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | — | 0 | **PASS** |
+| HSV Separate / Invert←Separate | — | — | — | — | **REFUSE** Slice 2bl |
+
+Loft pack: Sideboard Bump Height SEPARATE cleared. First PACK_FAIL `object='G-__555573' material='Realistic_Glass_01' material has no Principled BSDF (Slice 2b)`. Next: non-Principled glass / leftover GROUP/Botaniq / VALTORGB/MATH on Height. Not loft Session Δmax.
+
+ABI: `bump_separate_enable` / `bump_separate_channel` (0=Red 1=Green 2=Blue) after `bump_noise_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults 0 / 2. Native `0.0.65-slice2bl`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-bump-separate-32-pair.png`. Tools `_quanttrace_slice2bl_scene/smoke.py` + `_quanttrace_slice2bl_census.py`.
 
 
 ## Slice 2bk — Mix → Principled.Specular Tint (2026-08-30 3am ET)

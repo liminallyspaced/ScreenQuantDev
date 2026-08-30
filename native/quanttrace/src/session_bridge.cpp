@@ -105,6 +105,11 @@
  *   enable=0 keeps 2x bit-identical (TEX_IMAGE Height). Same Noise RNA
  *   as 2bb. Color → Height via NODE_CONVERT_CF; Fac → Height direct.
  *   Fill ATTR_STD_GENERATED when enable≠0.
+ * Slice 2bl: SeparateColorNode channel → Bump Height
+ *   (bump_separate_enable / bump_separate_channel after bump_noise_*).
+ *   enable=0 keeps 2bc/2x bit-identical. Cite SeparateColorNode
+ *   set_color_type NODE_COMBSEP_COLOR_RGB; float Red/Green/Blue → Height
+ *   (no NODE_CONVERT_CF). Loft Sideboard: Blue ← TEX_IMAGE Color.
  * Slice 2ap: BrightContrastNode on world Color (world_bright / world_contrast).
  *   Identity (bright=0, contrast=0) skips — 2ao/2an/2am/2aa/2al bit-identical.
  *   Loft: Color → Gamma → HSV → BrightContrast → Background. Cite
@@ -438,6 +443,9 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->bump_noise_gain = 1.0f;
     d->bump_noise_distortion = 0.0f;
     d->bump_noise_use_color = 0;
+    /* Slice 2bl identity — enable=0 skips SeparateColor on Bump Height. */
+    d->bump_separate_enable = 0;
+    d->bump_separate_channel = 2; /* Blue — loft Sideboard default */
     /* Slice 2ap identity — bright=0 contrast=0 (memset is fine; set explicit). */
     d->world_bright = 0.0f;
     d->world_contrast = 0.0f;
@@ -734,6 +742,8 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->bump_noise_gain = s->bump_noise_gain;
     mesh->bump_noise_distortion = s->bump_noise_distortion;
     mesh->bump_noise_use_color = s->bump_noise_use_color;
+    mesh->bump_separate_enable = s->bump_separate_enable;
+    mesh->bump_separate_channel = s->bump_separate_channel;
     mesh->thin_wall = s->thin_wall;
     mesh->transmission_weight = s->transmission_weight;
     mesh->tex_ob_use_transform = s->tex_ob_use_transform;
@@ -1615,7 +1625,24 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
                     graph.get(), m, m->bump_image_path, m->bump_image_colorspace,
                     m->bump_tex_vector_mode, m->bump_map_location, m->bump_map_rotation,
                     m->bump_map_scale, m->bump_map_type);
-                graph->connect(img->output("Color"), bump->input("Height"));
+                if (m->bump_separate_enable != 0) {
+                    /* Slice 2bl: TEX Color → SeparateColor RGB → channel float → Height.
+                     * enable=0 keeps 2x Color→CF Height bit-identical. */
+                    SeparateColorNode *sep = graph->create_node<SeparateColorNode>();
+                    sep->set_color_type(NODE_COMBSEP_COLOR_RGB);
+                    graph->connect(img->output("Color"), sep->input("Color"));
+                    const char *chan = "Green";
+                    if (m->bump_separate_channel == 0) {
+                        chan = "Red";
+                    }
+                    else if (m->bump_separate_channel == 2) {
+                        chan = "Blue";
+                    }
+                    graph->connect(sep->output(chan), bump->input("Height"));
+                }
+                else {
+                    graph->connect(img->output("Color"), bump->input("Height"));
+                }
             }
             if (nmap) {
                 graph->connect(nmap->output("Normal"), bump->input("Normal"));

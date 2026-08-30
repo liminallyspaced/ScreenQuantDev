@@ -95,6 +95,11 @@
  *   (set_fac; Color in-out). Fac unlinked; Color <- TEX_IMAGE or ColorRamp.
  *   Color → Roughness via NODE_CONVERT_CF (linear_rgb_to_gray). Linked Fac /
  *   nested Invert / GROUP / Mix / Noise Color refuse Slice 2be.
+ * Slice 2bl: SeparateColorNode channel → Bump Height
+ *   (bump_separate_enable / bump_separate_channel after bump_noise_*).
+ *   enable=0 skips SeparateColorNode — 2bc/2x bit-identical.
+ *   Cite SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB;
+ *   float channel → Height. Loft Sideboard: Blue ← TEX_IMAGE Color.
  * Slice 2bj: SeparateColorNode channel → Principled.Roughness
  *   (rough_separate_enable / rough_separate_channel after rough_invert_*).
  *   enable=0 skips SeparateColorNode — 2be/2ba/2bb/2i bit-identical.
@@ -576,6 +581,13 @@ typedef struct QT_SimpleScene {
   float bump_noise_gain;
   float bump_noise_distortion;
   int bump_noise_use_color;
+  /* Slice 2bl: SeparateColorNode channel → Bump Height.
+   * enable=0 skips SeparateColorNode — 2bc/2x bit-identical.
+   * channel 0=Red 1=Green 2=Blue (loft Sideboard Blue).
+   * Cite SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB;
+   * float channel → Height (no NODE_CONVERT_CF). */
+  int bump_separate_enable;
+  int bump_separate_channel;
   /* Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight.
    * thin_wall: 0/1 from unlinked BOOLEAN RNA default_value.
    * transmission_weight: unlinked Transmission Weight RNA default (0 if missing).
@@ -1011,6 +1023,13 @@ typedef struct QT_Mesh {
   float bump_noise_gain;
   float bump_noise_distortion;
   int bump_noise_use_color;
+  /* Slice 2bl: SeparateColorNode channel → Bump Height.
+   * enable=0 skips SeparateColorNode — 2bc/2x bit-identical.
+   * channel 0=Red 1=Green 2=Blue (loft Sideboard Blue).
+   * Cite SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB;
+   * float channel → Height (no NODE_CONVERT_CF). */
+  int bump_separate_enable;
+  int bump_separate_channel;
   /* Slice 2y: Principled Thin Wall BOOLEAN + unlinked Transmission Weight. */
   int thin_wall;
   float transmission_weight;

@@ -119,6 +119,11 @@
 #   SeparateColorNode — 2be/2ba/2bb/2i bit-identical. RGB mode only;
 #   channel 0=Red/1=Green/2=Blue from TEX_IMAGE Color (or constant fold).
 #   HSV/HSL / Invert←Separate / GROUP / Mix named refuse Slice 2bj.
+# Slice 2bl: SEPARATE_COLOR → Bump.Height (bump_separate_enable /
+#   bump_separate_channel after bump_noise_*). enable=0 skips
+#   SeparateColorNode — 2bc/2x bit-identical. RGB mode only; loft
+#   Sideboard Blue ← TEX_IMAGE Color (or constant fold). HSV/HSL /
+#   Invert←Separate into Height / GROUP / Mix named refuse Slice 2bl.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -804,12 +809,21 @@ def _empty_bump_noise_info(prefix: str = "bump_") -> dict:
     }
 
 
+def _empty_bump_separate_info(prefix: str = "bump_") -> dict:
+    """Slice 2bl identity — enable=0 skips SeparateColor on Bump Height."""
+    return {
+        f"{prefix}separate_enable": 0,
+        f"{prefix}separate_channel": 2,  # Blue (loft Sideboard)
+    }
+
+
 def _empty_bump_info(prefix: str = "bump_") -> dict:
     out = _prefix_tex(_empty_tex_info(), prefix)
     out[f"{prefix}strength"] = 1.0
     out[f"{prefix}distance"] = 0.001
     out[f"{prefix}invert"] = 0
     out.update(_empty_bump_noise_info(prefix))
+    out.update(_empty_bump_separate_info(prefix))
     return out
 
 
@@ -1034,6 +1048,92 @@ def _pack_noise_for_ramp_fac(fn, fs, ctx: str) -> dict:
         slice_tag="Slice 2bb",
         key_prefix="rough_ramp_noise_",
     )
+
+
+
+def _pack_bump_separate(from_node, from_sock, *, label: str = "Normal", prefix: str = "bump_") -> dict:
+    """Slice 2bl: SEPARATE_COLOR.{R|G|B} <- TEX_IMAGE Color (or constant fold)."""
+    ctx_label = f"Principled.{label} Bump Height"
+    mode = str(getattr(from_node, "mode", "RGB") or "RGB").upper()
+    if mode != "RGB":
+        raise QuantTraceSyncError(
+            f"{ctx_label} Separate Color mode={mode!r} refused "
+            f"(Slice 2bl: RGB only; HSV/HSL still refuse)"
+        )
+    out_name = getattr(from_sock, "name", "") if from_sock is not None else ""
+    channel_map = {
+        "Red": 0, "R": 0,
+        "Green": 1, "G": 1,
+        "Blue": 2, "B": 2,
+    }
+    if out_name not in channel_map:
+        raise QuantTraceSyncError(
+            f"{ctx_label} Separate output {out_name!r} refused "
+            f"(Slice 2bl: Red/Green/Blue only)"
+        )
+    channel = channel_map[out_name]
+    inputs = getattr(from_node, "inputs", None)
+    color_sock = _sock_ident_or_name(inputs, "Color") if inputs is not None else None
+    # Constant fold: unlinked Color / RGB node → no height source (flat bump).
+    def _fold_const(col):
+        # Constant Height → dH=0; skip bump image/noise/separate (2x empty).
+        out = {**_prefix_tex(_empty_tex_info(), prefix), **_empty_bump_noise_info(prefix)}
+        out[f"{prefix}separate_enable"] = 0
+        out[f"{prefix}separate_channel"] = int(channel)
+        out["_bump_separate_folded"] = float(col[channel] if isinstance(col, (tuple, list)) else 0.0)
+        return out
+
+    if color_sock is None or not getattr(color_sock, "is_linked", False):
+        dv = getattr(color_sock, "default_value", None) if color_sock is not None else None
+        try:
+            col = (float(dv[0]), float(dv[1]), float(dv[2]))
+        except (TypeError, IndexError, ValueError):
+            col = (0.0, 0.0, 0.0)
+        return _fold_const(col)
+    clinks = list(getattr(color_sock, "links", None) or [])
+    if len(clinks) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx_label} Separate.Color has multiple links (Slice 2bl)"
+        )
+    cn = getattr(clinks[0], "from_node", None)
+    cs = getattr(clinks[0], "from_socket", None)
+    cn, cs = _peel_reroute(cn, cs)
+    ntype_c = getattr(cn, "type", None) if cn is not None else None
+    if ntype_c == "RGB" or (
+        cn is not None and getattr(cn, "bl_idname", "") == "ShaderNodeRGB"
+    ):
+        dv = getattr(cs, "default_value", None) if cs is not None else None
+        try:
+            col = (float(dv[0]), float(dv[1]), float(dv[2]))
+        except (TypeError, IndexError, ValueError):
+            col = (0.0, 0.0, 0.0)
+        return _fold_const(col)
+    if ntype_c != "TEX_IMAGE":
+        raise QuantTraceSyncError(
+            f"{ctx_label} Separate.Color from {ntype_c!r} refused "
+            f"(Slice 2bl: TEX_IMAGE Color or constant RGB only; GROUP / Mix / "
+            f"Noise / Invert still refuse)"
+        )
+    out_c = getattr(cs, "name", "") if cs is not None else ""
+    if out_c not in ("Color", "color"):
+        raise QuantTraceSyncError(
+            f"{ctx_label} Separate.Color from TEX_IMAGE "
+            f"output {out_c!r} refused (Slice 2bl: Color only)"
+        )
+    class _L:
+        pass
+    class _S:
+        pass
+    link = _L()
+    link.from_node = cn
+    link.from_socket = cs
+    dummy = _S()
+    dummy.links = [link]
+    tex = _tex_image_from_sock(dummy, f"{label} Bump Height")
+    out = {**_prefix_tex(tex, prefix), **_empty_bump_noise_info(prefix)}
+    out[f"{prefix}separate_enable"] = 1
+    out[f"{prefix}separate_channel"] = int(channel)
+    return out
 
 
 def _pack_noise_for_bump_height(fn, fs, *, label: str = "Normal") -> dict:
@@ -1444,8 +1544,8 @@ def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> di
         )
     if height_sock is None or not getattr(height_sock, "is_linked", False):
         raise QuantTraceSyncError(
-            "Bump Height must be TEX_IMAGE Color or TEX_NOISE Factor/Color "
-            "(Slice 2bc)"
+            "Bump Height must be TEX_IMAGE Color, TEX_NOISE Factor/Color, "
+            "or SEPARATE_COLOR RGB channel (Slice 2bl)"
         )
     hlinks = list(getattr(height_sock, "links", None) or [])
     if len(hlinks) != 1:
@@ -1455,11 +1555,19 @@ def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> di
     hn, hs = _peel_reroute(hn, hs)
     htype = getattr(hn, "type", None) if hn is not None else None
     noise_info = _empty_bump_noise_info(prefix)
+    sep_info = _empty_bump_separate_info(prefix)
     if htype in ("TEX_NOISE", "NOISE") or (
         hn is not None and getattr(hn, "bl_idname", "") == "ShaderNodeTexNoise"
     ):
         noise_info = _pack_noise_for_bump_height(hn, hs, label=label)
         tex = _empty_tex_info()
+        out = {**_prefix_tex(tex, prefix), **normal_info, **noise_info, **sep_info}
+    elif htype in ("SEPARATE_COLOR", "SEPRGB"):
+        packed_sep = _pack_bump_separate(hn, hs, label=label, prefix=prefix)
+        # packed_sep already includes prefix_tex + noise empty + separate_*
+        out = {**packed_sep, **normal_info}
+        # drop private fold marker from mesh ABI
+        out.pop("_bump_separate_folded", None)
     elif htype == "TEX_IMAGE":
         class _L:
             pass
@@ -1471,13 +1579,33 @@ def _bump_from_sock(sock, *, prefix: str = "bump_", label: str = "Normal") -> di
         dummy = _S()
         dummy.links = [link]
         tex = _tex_image_from_sock(dummy, f"{label} Bump Height")
+        out = {**_prefix_tex(tex, prefix), **normal_info, **noise_info, **sep_info}
+    elif htype == "INVERT":
+        # Named REFUSE: Invert←Separate into Height (Slice 2bl).
+        inv_color = None
+        if hn is not None and getattr(hn, "inputs", None) is not None:
+            inv_color = _sock_ident_or_name(hn.inputs, "Color")
+        if inv_color is not None and getattr(inv_color, "is_linked", False):
+            il = list(getattr(inv_color, "links", None) or [])
+            if len(il) == 1:
+                inn, _ = _peel_reroute(il[0].from_node, il[0].from_socket)
+                if getattr(inn, "type", None) in ("SEPARATE_COLOR", "SEPRGB"):
+                    raise QuantTraceSyncError(
+                        f"Principled.{label} Bump Height Invert.Color from "
+                        f"SEPARATE_COLOR refused (Slice 2bl: Invert←Separate "
+                        f"into Height still refuse)"
+                    )
+        raise QuantTraceSyncError(
+            f"Principled.{label} Bump Height from 'INVERT' refused "
+            f"(Slice 2bl: TEX_IMAGE Color, TEX_NOISE Factor/Color, or "
+            f"SEPARATE_COLOR RGB channel; Invert/VALTORGB/MATH/GROUP still refuse)"
+        )
     else:
         raise QuantTraceSyncError(
             f"Principled.{label} Bump Height from {htype!r} refused "
-            f"(Slice 2bc: TEX_IMAGE Color or TEX_NOISE Factor/Color; "
-            f"VALTORGB/SEPARATE_COLOR/MATH/GROUP still refuse)"
+            f"(Slice 2bl: TEX_IMAGE Color, TEX_NOISE Factor/Color, or "
+            f"SEPARATE_COLOR RGB channel; VALTORGB/MATH/GROUP/Invert still refuse)"
         )
-    out = {**_prefix_tex(tex, prefix), **normal_info, **noise_info}
     strength = 1.0
     if strength_sock is not None:
         strength = float(getattr(strength_sock, "default_value", 1.0))
@@ -5834,6 +5962,16 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
             if pr.get("bump_noise_use_color") is not None
             else 0
         ),
+        "bump_separate_enable": int(
+            pr["bump_separate_enable"]
+            if pr.get("bump_separate_enable") is not None
+            else 0
+        ),
+        "bump_separate_channel": int(
+            pr["bump_separate_channel"]
+            if pr.get("bump_separate_channel") is not None
+            else 2
+        ),
         "bevel_enable": int(pr.get("bevel_enable", 0) or 0),
         "bevel_samples": int(
             pr["bevel_samples"] if pr.get("bevel_samples") is not None else 4
@@ -6771,6 +6909,8 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.bump_noise_gain = _bn_f("bump_noise_gain", 1.0)
     desc.bump_noise_distortion = _bn_f("bump_noise_distortion", 0.0)
     desc.bump_noise_use_color = _bn_i("bump_noise_use_color", 0)
+    desc.bump_separate_enable = _bn_i("bump_separate_enable", 0)
+    desc.bump_separate_channel = _bn_i("bump_separate_channel", 2)
     desc.thin_wall = int(packed.get("thin_wall", 0) or 0)
     desc.transmission_weight = float(
         packed.get("transmission_weight", 0.0) if packed.get("transmission_weight") is not None else 0.0
@@ -7258,6 +7398,8 @@ def make_qt_simple_scene_type():
             ("bump_noise_gain", ctypes.c_float),
             ("bump_noise_distortion", ctypes.c_float),
             ("bump_noise_use_color", ctypes.c_int),
+            ("bump_separate_enable", ctypes.c_int),
+            ("bump_separate_channel", ctypes.c_int),
             ("thin_wall", ctypes.c_int),
             ("transmission_weight", ctypes.c_float),
             ("tex_ob_use_transform", ctypes.c_int),
@@ -7746,6 +7888,8 @@ def make_qt_scene_types():
             ("bump_noise_gain", ctypes.c_float),
             ("bump_noise_distortion", ctypes.c_float),
             ("bump_noise_use_color", ctypes.c_int),
+            ("bump_separate_enable", ctypes.c_int),
+            ("bump_separate_channel", ctypes.c_int),
             ("thin_wall", ctypes.c_int),
             ("transmission_weight", ctypes.c_float),
             ("tex_ob_use_transform", ctypes.c_int),
