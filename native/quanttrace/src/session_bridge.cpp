@@ -129,6 +129,10 @@
  * Slice 2br: nested2 Mix Fac ← ColorRamp (mix_nested2_ramp_*). enable=0 ||
  *   n==0 skips RGBRampNode — 2bq set_fac/LightPath bit-identical. Cite
  *   RGBRampNode set_ramp/set_ramp_alpha/set_interpolate → MixClosure Fac.
+ * Slice 2bs: ColorRamp.Fac <- MATH (mix_nested2_ramp_math_*). enable=0 keeps
+ *   2br set_fac bit-identical. Wire MathNode +/- GeometryNode Backfacing +/-
+ *   HSVNode (Color<-LightPath Ray Length) -> RGBRampNode Fac. Cite MathNode,
+ *   GeometryNode, HSVNode, LightPathNode.
  *   enable=0 keeps 2bc/2x bit-identical. Cite SeparateColorNode
  *   set_color_type NODE_COMBSEP_COLOR_RGB; float Red/Green/Blue → Height
  *   (no NODE_CONVERT_CF). Loft Sideboard: Blue ← TEX_IMAGE Color.
@@ -488,6 +492,37 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->mix_nested2_ramp_n = 0;
     d->mix_nested2_ramp_interpolate = 1;
     d->mix_nested2_ramp_fac = 0.5f;
+    /* Slice 2bs identity — math enable=0 keeps 2br set_fac bit-identical. */
+    d->mix_nested2_ramp_math_enable = 0;
+    d->mix_nested2_ramp_math_op = 0;
+    d->mix_nested2_ramp_math_a_kind = 0;
+    d->mix_nested2_ramp_math_a_const = 0.0f;
+    d->mix_nested2_ramp_math_a_lightpath = 0;
+    d->mix_nested2_ramp_math_a_op = 0;
+    d->mix_nested2_ramp_math_a1_kind = 0;
+    d->mix_nested2_ramp_math_a1_const = 0.0f;
+    d->mix_nested2_ramp_math_a1_lightpath = 0;
+    d->mix_nested2_ramp_math_a2_kind = 0;
+    d->mix_nested2_ramp_math_a2_const = 0.0f;
+    d->mix_nested2_ramp_math_a2_lightpath = 0;
+    d->mix_nested2_ramp_math_b_kind = 0;
+    d->mix_nested2_ramp_math_b_const = 0.0f;
+    d->mix_nested2_ramp_math_b_lightpath = 0;
+    d->mix_nested2_ramp_math_b_op = 0;
+    d->mix_nested2_ramp_math_b1_kind = 0;
+    d->mix_nested2_ramp_math_b1_const = 0.0f;
+    d->mix_nested2_ramp_math_b1_lightpath = 0;
+    d->mix_nested2_ramp_math_b2_kind = 0;
+    d->mix_nested2_ramp_math_b2_const = 0.0f;
+    d->mix_nested2_ramp_math_b2_lightpath = 0;
+    d->mix_nested2_ramp_hsv_hue = 0.5f;
+    d->mix_nested2_ramp_hsv_sat = 1.0f;
+    d->mix_nested2_ramp_hsv_val = 1.0f;
+    d->mix_nested2_ramp_hsv_fac = 1.0f;
+    d->mix_nested2_ramp_hsv_color[0] = d->mix_nested2_ramp_hsv_color[1] =
+        d->mix_nested2_ramp_hsv_color[2] = 0.0f;
+    d->mix_nested2_ramp_hsv_color_kind = 0;
+    d->mix_nested2_ramp_hsv_color_lightpath = 0;
     /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
     d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
     d->spec_tint_mix_type = 0;
@@ -941,6 +976,37 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->mix_nested2_ramp_n = s->mix_nested2_ramp_n;
     mesh->mix_nested2_ramp_interpolate = s->mix_nested2_ramp_interpolate;
     mesh->mix_nested2_ramp_fac = s->mix_nested2_ramp_fac;
+    mesh->mix_nested2_ramp_math_enable = s->mix_nested2_ramp_math_enable;
+    mesh->mix_nested2_ramp_math_op = s->mix_nested2_ramp_math_op;
+    mesh->mix_nested2_ramp_math_a_kind = s->mix_nested2_ramp_math_a_kind;
+    mesh->mix_nested2_ramp_math_a_const = s->mix_nested2_ramp_math_a_const;
+    mesh->mix_nested2_ramp_math_a_lightpath = s->mix_nested2_ramp_math_a_lightpath;
+    mesh->mix_nested2_ramp_math_a_op = s->mix_nested2_ramp_math_a_op;
+    mesh->mix_nested2_ramp_math_a1_kind = s->mix_nested2_ramp_math_a1_kind;
+    mesh->mix_nested2_ramp_math_a1_const = s->mix_nested2_ramp_math_a1_const;
+    mesh->mix_nested2_ramp_math_a1_lightpath = s->mix_nested2_ramp_math_a1_lightpath;
+    mesh->mix_nested2_ramp_math_a2_kind = s->mix_nested2_ramp_math_a2_kind;
+    mesh->mix_nested2_ramp_math_a2_const = s->mix_nested2_ramp_math_a2_const;
+    mesh->mix_nested2_ramp_math_a2_lightpath = s->mix_nested2_ramp_math_a2_lightpath;
+    mesh->mix_nested2_ramp_math_b_kind = s->mix_nested2_ramp_math_b_kind;
+    mesh->mix_nested2_ramp_math_b_const = s->mix_nested2_ramp_math_b_const;
+    mesh->mix_nested2_ramp_math_b_lightpath = s->mix_nested2_ramp_math_b_lightpath;
+    mesh->mix_nested2_ramp_math_b_op = s->mix_nested2_ramp_math_b_op;
+    mesh->mix_nested2_ramp_math_b1_kind = s->mix_nested2_ramp_math_b1_kind;
+    mesh->mix_nested2_ramp_math_b1_const = s->mix_nested2_ramp_math_b1_const;
+    mesh->mix_nested2_ramp_math_b1_lightpath = s->mix_nested2_ramp_math_b1_lightpath;
+    mesh->mix_nested2_ramp_math_b2_kind = s->mix_nested2_ramp_math_b2_kind;
+    mesh->mix_nested2_ramp_math_b2_const = s->mix_nested2_ramp_math_b2_const;
+    mesh->mix_nested2_ramp_math_b2_lightpath = s->mix_nested2_ramp_math_b2_lightpath;
+    mesh->mix_nested2_ramp_hsv_hue = s->mix_nested2_ramp_hsv_hue;
+    mesh->mix_nested2_ramp_hsv_sat = s->mix_nested2_ramp_hsv_sat;
+    mesh->mix_nested2_ramp_hsv_val = s->mix_nested2_ramp_hsv_val;
+    mesh->mix_nested2_ramp_hsv_fac = s->mix_nested2_ramp_hsv_fac;
+    mesh->mix_nested2_ramp_hsv_color[0] = s->mix_nested2_ramp_hsv_color[0];
+    mesh->mix_nested2_ramp_hsv_color[1] = s->mix_nested2_ramp_hsv_color[1];
+    mesh->mix_nested2_ramp_hsv_color[2] = s->mix_nested2_ramp_hsv_color[2];
+    mesh->mix_nested2_ramp_hsv_color_kind = s->mix_nested2_ramp_hsv_color_kind;
+    mesh->mix_nested2_ramp_hsv_color_lightpath = s->mix_nested2_ramp_hsv_color_lightpath;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1470,6 +1536,159 @@ static bool qt_math_uses_lightpath(const QT_Mesh *m)
     return false;
 }
 
+
+static bool qt_ramp_math_tree_has(const QT_Mesh *m, int want)
+{
+    if (m->mix_nested2_ramp_math_a_kind == want ||
+        m->mix_nested2_ramp_math_b_kind == want) {
+        return true;
+    }
+    if (m->mix_nested2_ramp_math_a_kind == QT_MATH_IN_NEST &&
+        (m->mix_nested2_ramp_math_a1_kind == want ||
+         m->mix_nested2_ramp_math_a2_kind == want)) {
+        return true;
+    }
+    if (m->mix_nested2_ramp_math_b_kind == QT_MATH_IN_NEST &&
+        (m->mix_nested2_ramp_math_b1_kind == want ||
+         m->mix_nested2_ramp_math_b2_kind == want)) {
+        return true;
+    }
+    return false;
+}
+
+struct QT_RampMathNodes {
+    LightPathNode *lp;
+    GeometryNode *geom;
+    HSVNode *hsv;
+};
+
+static void qt_ramp_math_leaf(ShaderGraph *graph,
+                              MathNode *math,
+                              QT_RampMathNodes *nodes,
+                              bool is_value1,
+                              int kind,
+                              float cst,
+                              int lp_code)
+{
+    const char *in_name = is_value1 ? "Value1" : "Value2";
+    if (kind == QT_MATH_IN_LIGHTPATH && nodes->lp != nullptr) {
+        graph->connect(nodes->lp->output(qt_lightpath_out_name(lp_code)),
+                       math->input(in_name));
+        return;
+    }
+    if (kind == QT_MATH_IN_GEOM && nodes->geom != nullptr) {
+        graph->connect(nodes->geom->output("Backfacing"), math->input(in_name));
+        return;
+    }
+    if (kind == QT_MATH_IN_HUESAT && nodes->hsv != nullptr) {
+        graph->connect(nodes->hsv->output("Color"), math->input(in_name));
+        return;
+    }
+    if (is_value1) {
+        math->set_value1(cst);
+    }
+    else {
+        math->set_value2(cst);
+    }
+}
+
+static ShaderOutput *qt_ramp_math_nested(ShaderGraph *graph,
+                                         QT_RampMathNodes *nodes,
+                                         int op,
+                                         int k1,
+                                         float c1,
+                                         int lp1,
+                                         int k2,
+                                         float c2,
+                                         int lp2)
+{
+    MathNode *inner = graph->create_node<MathNode>();
+    inner->set_math_type(static_cast<NodeMathType>(op));
+    qt_ramp_math_leaf(graph, inner, nodes, true, k1, c1, lp1);
+    qt_ramp_math_leaf(graph, inner, nodes, false, k2, c2, lp2);
+    return inner->output("Value");
+}
+
+static ShaderOutput *qt_ramp_math_fac(ShaderGraph *graph, const QT_Mesh *m)
+{
+    QT_RampMathNodes nodes;
+    nodes.lp = nullptr;
+    nodes.geom = nullptr;
+    nodes.hsv = nullptr;
+    const bool need_lp =
+        qt_ramp_math_tree_has(m, QT_MATH_IN_LIGHTPATH) ||
+        (qt_ramp_math_tree_has(m, QT_MATH_IN_HUESAT) &&
+         m->mix_nested2_ramp_hsv_color_kind == 1);
+    if (need_lp) {
+        nodes.lp = graph->create_node<LightPathNode>();
+    }
+    if (qt_ramp_math_tree_has(m, QT_MATH_IN_GEOM)) {
+        nodes.geom = graph->create_node<GeometryNode>();
+    }
+    if (qt_ramp_math_tree_has(m, QT_MATH_IN_HUESAT)) {
+        nodes.hsv = graph->create_node<HSVNode>();
+        nodes.hsv->set_hue(m->mix_nested2_ramp_hsv_hue);
+        nodes.hsv->set_saturation(m->mix_nested2_ramp_hsv_sat);
+        nodes.hsv->set_value(m->mix_nested2_ramp_hsv_val);
+        nodes.hsv->set_fac(m->mix_nested2_ramp_hsv_fac);
+        if (m->mix_nested2_ramp_hsv_color_kind == 1 && nodes.lp != nullptr) {
+            graph->connect(nodes.lp->output(qt_lightpath_out_name(
+                               m->mix_nested2_ramp_hsv_color_lightpath)),
+                           nodes.hsv->input("Color"));
+        }
+        else {
+            nodes.hsv->set_color(make_float3(m->mix_nested2_ramp_hsv_color[0],
+                                             m->mix_nested2_ramp_hsv_color[1],
+                                             m->mix_nested2_ramp_hsv_color[2]));
+        }
+    }
+    MathNode *root = graph->create_node<MathNode>();
+    root->set_math_type(static_cast<NodeMathType>(m->mix_nested2_ramp_math_op));
+    if (m->mix_nested2_ramp_math_a_kind == QT_MATH_IN_NEST) {
+        ShaderOutput *inner = qt_ramp_math_nested(graph,
+                                                  &nodes,
+                                                  m->mix_nested2_ramp_math_a_op,
+                                                  m->mix_nested2_ramp_math_a1_kind,
+                                                  m->mix_nested2_ramp_math_a1_const,
+                                                  m->mix_nested2_ramp_math_a1_lightpath,
+                                                  m->mix_nested2_ramp_math_a2_kind,
+                                                  m->mix_nested2_ramp_math_a2_const,
+                                                  m->mix_nested2_ramp_math_a2_lightpath);
+        graph->connect(inner, root->input("Value1"));
+    }
+    else {
+        qt_ramp_math_leaf(graph,
+                          root,
+                          &nodes,
+                          true,
+                          m->mix_nested2_ramp_math_a_kind,
+                          m->mix_nested2_ramp_math_a_const,
+                          m->mix_nested2_ramp_math_a_lightpath);
+    }
+    if (m->mix_nested2_ramp_math_b_kind == QT_MATH_IN_NEST) {
+        ShaderOutput *inner = qt_ramp_math_nested(graph,
+                                                  &nodes,
+                                                  m->mix_nested2_ramp_math_b_op,
+                                                  m->mix_nested2_ramp_math_b1_kind,
+                                                  m->mix_nested2_ramp_math_b1_const,
+                                                  m->mix_nested2_ramp_math_b1_lightpath,
+                                                  m->mix_nested2_ramp_math_b2_kind,
+                                                  m->mix_nested2_ramp_math_b2_const,
+                                                  m->mix_nested2_ramp_math_b2_lightpath);
+        graph->connect(inner, root->input("Value2"));
+    }
+    else {
+        qt_ramp_math_leaf(graph,
+                          root,
+                          &nodes,
+                          false,
+                          m->mix_nested2_ramp_math_b_kind,
+                          m->mix_nested2_ramp_math_b_const,
+                          m->mix_nested2_ramp_math_b_lightpath);
+    }
+    return root->output("Value");
+}
+
 static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
 {
     Shader *surf = scene->create_node<Shader>();
@@ -1591,8 +1810,16 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
                 ramp->set_ramp(ramp_c);
                 ramp->set_ramp_alpha(ramp_a);
                 ramp->set_interpolate(m->mix_nested2_ramp_interpolate != 0);
-                ramp->set_fac(m->mix_nested2_ramp_fac);
-                /* loft ColorRamp.002 Color out → Fac (CF convert). */
+                /* Slice 2bs: ColorRamp.Fac <- MATH when enable. enable=0 keeps
+                 * 2br set_fac bit-identical. */
+                if (m->mix_nested2_ramp_math_enable != 0) {
+                    graph->connect(qt_ramp_math_fac(graph.get(), m),
+                                   ramp->input("Fac"));
+                }
+                else {
+                    ramp->set_fac(m->mix_nested2_ramp_fac);
+                }
+                /* loft ColorRamp.002 Color out -> Fac (CF convert). */
                 graph->connect(ramp->output("Color"), n2->input("Fac"));
             }
             else if (m->mix_nested2_lightpath_enable != 0) {

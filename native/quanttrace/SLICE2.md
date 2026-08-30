@@ -1,8 +1,30 @@
 # QuantTrace Slice 2 — Scene sync research
 
-Status: **Slice 2br landed** (2026-08-30 10am PlugWalk ET). Nested2 Mix Fac←ColorRamp (`mix_nested2_ramp_*` after `mix_nested2_*`). enable=0 / n=0 skips RGBRampNode — 2bq set_fac/LightPath bit-identical. Reuse official colorramp_to_array LUT 257. ColorRamp.Fac unlinked float only (Noise/TEX/Fresnel/GROUP/MATH refuse). Census loft ColorRamp.002: LINEAR RGB, Color out, 2 stops 0.387 black / 0.877 white, Fac←MATH Backfacing×HueSat leftover. CLAIM Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp Glass+Transparent. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now ColorRamp.Fac←MATH Slice 2br (ColorRamp Mix Fac itself accepted). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.71-slice2br`. Addon `0.3.3`.
+Status: **Slice 2bs landed** (2026-08-30 11am PlugWalk ET). ColorRamp.Fac←MATH on nested2 ramp (`mix_nested2_ramp_math_*` after `mix_nested2_ramp_fac`). enable=0 / math off keeps 2br `set_fac` bit-identical. Reuse 2bo kind codes plus GEOM=3 Backfacing and HUESAT=4 (HueSat Color←Light Path Ray Length). Census loft ColorRamp.002: LINEAR RGB, 2 stops 0.387 black / 0.877 white, Fac←MATH MULTIPLY clamp=False A=NEW_GEOMETRY Backfacing × B=HUE_SAT Hue=0.5 Sat=1.0 Value=2.0 Fac=1.0 Color←LIGHT_PATH Ray Length. CLAIM Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp with ColorRamp.Fac←MATH Glass+Transparent. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now nested2 Mix ← Add Shader Slice 2bs (ColorRamp.Fac MATH itself accepted). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.72-slice2bs`. Addon `0.3.3`.
 
 
+
+## Slice 2bs — ColorRamp.Fac ← MATH (2026-08-30 11am ET)
+
+Cite Cycles `shader_nodes.h` RGBRampNode Fac, MathNode (MULTIPLY), GeometryNode Backfacing, HSVNode Color/Hue/Sat/Value/Fac, LightPathNode Ray Length. Do **not** evaluate Light Path / Backfacing at pack time. Reuse `_pack_color_ramp_lut` (official colorramp_to_array size+1=257) and 2bo math-tree kinds plus GEOM=3 / HUESAT=4. ColorRamp.Fac←Noise/TEX/Fresnel/GROUP/LayerWeight / Alpha out / Add / third Mix / linked Glass.Color refuse named Slice 2bs.
+
+| plate | res/spp | Δmax | MAE | px≥1e-3 | gate |
+|---|---|---|---|---|---|
+| CLAIM Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp Fac←MATH Backfacing×HueSat(Ray Length) Glass+Transparent | 32²/4 | **1.91e-6** | 3.68e-8 | **0** | **PASS** |
+| CLAIM same | 256²/128 | **9.51e-6** | 1.91e-8 | **0** | **PASS** |
+| identity ramp (2br unlinked Fac) | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| identity nested2 (2bq Fac 0.35, ramp off) | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| identity nested_mix (2bp) | 32²/4 | **1.91e-6** | 3.70e-8 | **0** | **PASS** |
+| identity glass_only (2bm) | 32²/4 | **1.19e-5** | 4.81e-8 | **0** | **PASS** |
+| mix 2ay / invert 2be / bump_sep 2bl / hdr 2aa | 32²/4 | 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4 | — | **0** | **PASS** |
+| live stock CLAIM vs Session MATH-bypass (ramp_math_enable=0, 2br unlinked Fac) | 32²/4 | **0.137** | 2.76e-3 | 107 | live (graph) |
+| refuse_noise / refuse_add / refuse_third / refuse_linked | — | — | — | — | **REFUSE** Slice 2bs |
+
+Loft pack: ColorRamp.002 Fac←MATH packed; Mix.004 Fac←ColorRamp stays accepted. First PACK_FAIL `G-__555573` / `Realistic_Glass_01` — `nested2 Mix <- Add Shader refused (Slice 2bs: Glass+Transparent leaves only; Add+Refraction/Glossy/SSS under Mix.004 is a follow-up)`. Mix.004.Shader is Add Shader (Mix.002 Glossy + Mix.003 SSS/Translucent); Shader_001 Glass Color+Roughness still linked. Next: Add+Glossy/SSS under Mix.004 / linked Glass.Color / linked Transparent.Color / Alpha out. Not loft Session Δmax.
+
+ABI: `mix_nested2_ramp_math_enable` + 2bo-style math tree (`op`, `a_*`, `b_*` nest) + HSV block (`hsv_hue/sat/val/fac`, `hsv_color[3]`, `hsv_color_kind`, `hsv_color_lightpath`) after `mix_nested2_ramp_fac` on `QT_Mesh` + `QT_SimpleScene`. Kinds: CONST=0 LIGHTPATH=1 NEST=2 GEOM=3 HUESAT=4. Geometry Backfacing only. HueSat: Hue/Sat/Value/Fac unlinked; Color unlinked RGB or Light Path. Defaults keep 2br bit-identical. Native `0.0.72-slice2bs`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-colorramp-fac-math-32-pair.png`. Tools `_quanttrace_slice2bs_scene/smoke.py` + `_quanttrace_slice2bs_census.py`.
 
 ## Slice 2br — nested2 Mix Fac ← ColorRamp (2026-08-30 10am ET)
 

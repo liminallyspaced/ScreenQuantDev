@@ -779,6 +779,41 @@ typedef struct QT_SimpleScene {
   int mix_nested2_ramp_n; /* 0 = skip */
   int mix_nested2_ramp_interpolate; /* 1 LINEAR/EASE/etc; 0 CONSTANT */
   float mix_nested2_ramp_fac; /* ColorRamp.Fac unlinked float */
+  /* Slice 2bs: ColorRamp.Fac <- MATH (after mix_nested2_ramp_fac).
+   * enable=0 skips MathNode on ramp Fac — 2br set_fac bit-identical.
+   * Kinds: 0=const 1=LightPath 2=nested Math 3=NEW_GEOMETRY Backfacing
+   * 4=HueSat Color->float. Loft ColorRamp.002:
+   * MULTIPLY(Backfacing, HueSat(H=0.5,S=1,V=2,Fac=1, Color<-Ray Length)).
+   * Cite MathNode, GeometryNode Backfacing, HSVNode, LightPathNode. */
+  int mix_nested2_ramp_math_enable;
+  int mix_nested2_ramp_math_op;
+  int mix_nested2_ramp_math_a_kind;
+  float mix_nested2_ramp_math_a_const;
+  int mix_nested2_ramp_math_a_lightpath;
+  int mix_nested2_ramp_math_a_op;
+  int mix_nested2_ramp_math_a1_kind;
+  float mix_nested2_ramp_math_a1_const;
+  int mix_nested2_ramp_math_a1_lightpath;
+  int mix_nested2_ramp_math_a2_kind;
+  float mix_nested2_ramp_math_a2_const;
+  int mix_nested2_ramp_math_a2_lightpath;
+  int mix_nested2_ramp_math_b_kind;
+  float mix_nested2_ramp_math_b_const;
+  int mix_nested2_ramp_math_b_lightpath;
+  int mix_nested2_ramp_math_b_op;
+  int mix_nested2_ramp_math_b1_kind;
+  float mix_nested2_ramp_math_b1_const;
+  int mix_nested2_ramp_math_b1_lightpath;
+  int mix_nested2_ramp_math_b2_kind;
+  float mix_nested2_ramp_math_b2_const;
+  int mix_nested2_ramp_math_b2_lightpath;
+  float mix_nested2_ramp_hsv_hue;
+  float mix_nested2_ramp_hsv_sat;
+  float mix_nested2_ramp_hsv_val;
+  float mix_nested2_ramp_hsv_fac;
+  float mix_nested2_ramp_hsv_color[3];
+  int mix_nested2_ramp_hsv_color_kind;
+  int mix_nested2_ramp_hsv_color_lightpath;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1275,6 +1310,41 @@ typedef struct QT_Mesh {
   int mix_nested2_ramp_n;
   int mix_nested2_ramp_interpolate;
   float mix_nested2_ramp_fac;
+  /* Slice 2bs: ColorRamp.Fac <- MATH (after mix_nested2_ramp_fac).
+   * enable=0 skips MathNode on ramp Fac — 2br set_fac bit-identical.
+   * Kinds: 0=const 1=LightPath 2=nested Math 3=NEW_GEOMETRY Backfacing
+   * 4=HueSat Color->float. Loft ColorRamp.002:
+   * MULTIPLY(Backfacing, HueSat(H=0.5,S=1,V=2,Fac=1, Color<-Ray Length)).
+   * Cite MathNode, GeometryNode Backfacing, HSVNode, LightPathNode. */
+  int mix_nested2_ramp_math_enable;
+  int mix_nested2_ramp_math_op;
+  int mix_nested2_ramp_math_a_kind;
+  float mix_nested2_ramp_math_a_const;
+  int mix_nested2_ramp_math_a_lightpath;
+  int mix_nested2_ramp_math_a_op;
+  int mix_nested2_ramp_math_a1_kind;
+  float mix_nested2_ramp_math_a1_const;
+  int mix_nested2_ramp_math_a1_lightpath;
+  int mix_nested2_ramp_math_a2_kind;
+  float mix_nested2_ramp_math_a2_const;
+  int mix_nested2_ramp_math_a2_lightpath;
+  int mix_nested2_ramp_math_b_kind;
+  float mix_nested2_ramp_math_b_const;
+  int mix_nested2_ramp_math_b_lightpath;
+  int mix_nested2_ramp_math_b_op;
+  int mix_nested2_ramp_math_b1_kind;
+  float mix_nested2_ramp_math_b1_const;
+  int mix_nested2_ramp_math_b1_lightpath;
+  int mix_nested2_ramp_math_b2_kind;
+  float mix_nested2_ramp_math_b2_const;
+  int mix_nested2_ramp_math_b2_lightpath;
+  float mix_nested2_ramp_hsv_hue;
+  float mix_nested2_ramp_hsv_sat;
+  float mix_nested2_ramp_hsv_val;
+  float mix_nested2_ramp_hsv_fac;
+  float mix_nested2_ramp_hsv_color[3];
+  int mix_nested2_ramp_hsv_color_kind;
+  int mix_nested2_ramp_hsv_color_lightpath;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
@@ -1301,6 +1371,8 @@ typedef struct QT_Mesh {
 #define QT_MATH_IN_CONST      0
 #define QT_MATH_IN_LIGHTPATH  1
 #define QT_MATH_IN_NEST       2
+#define QT_MATH_IN_GEOM       3 /* Slice 2bs: GeometryNode Backfacing */
+#define QT_MATH_IN_HUESAT     4 /* Slice 2bs: HSVNode Color to float */
 
 /* Slice 2bb: NodeNoiseType (kernel/svm/types.h order). */
 #define QT_NOISE_MULTIFRACTAL           0
