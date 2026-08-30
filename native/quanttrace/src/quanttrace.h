@@ -715,8 +715,8 @@ typedef struct QT_SimpleScene {
   float mix_shader_fac;
   int mix_shader_lightpath_enable;
   int mix_shader_lightpath_output; /* QT_LIGHTPATH_* */
-  int mix_closure1_kind; /* 0=Glass 1=Transparent */
-  int mix_closure2_kind; /* 0=Glass 1=Transparent */
+  int mix_closure1_kind; /* 0=Glass 1=Transparent 2=NestedMix (Slice 2bp) */
+  int mix_closure2_kind; /* 0=Glass 1=Transparent 2=NestedMix (Slice 2bp) */
   float mix_transparent_color[3];
   /* Slice 2bo: Mix Fac ← MATH Light Path nest (after mix_transparent_color).
    * enable=0 keeps 2bn bit-identical (unlinked Fac or single LightPath).
@@ -745,6 +745,17 @@ typedef struct QT_SimpleScene {
   int mix_shader_math_b2_kind;
   float mix_shader_math_b2_const;
   int mix_shader_math_b2_lightpath;
+  /* Slice 2bp: one nested MixClosure hop (after mix_shader_math_*).
+   * mix_closure*_kind 2 = NestedMix on that outer side.
+   * When kinds stay 0/1, bit-identical to Slice 2bo.
+   * Nested Fac: unlinked float or LightPath (not MATH this turn).
+   * Nested leaves: Glass+Transparent only (kinds 0/1).
+   * Cite MixClosureNode nesting; GlassBsdfNode; TransparentBsdfNode. */
+  float mix_nested_fac;
+  int mix_nested_lightpath_enable;
+  int mix_nested_lightpath_output; /* QT_LIGHTPATH_* */
+  int mix_nested_closure1_kind; /* 0=Glass 1=Transparent */
+  int mix_nested_closure2_kind; /* 0=Glass 1=Transparent */
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1195,8 +1206,8 @@ typedef struct QT_Mesh {
   float mix_shader_fac;
   int mix_shader_lightpath_enable;
   int mix_shader_lightpath_output; /* QT_LIGHTPATH_* */
-  int mix_closure1_kind; /* 0=Glass 1=Transparent */
-  int mix_closure2_kind; /* 0=Glass 1=Transparent */
+  int mix_closure1_kind; /* 0=Glass 1=Transparent 2=NestedMix (Slice 2bp) */
+  int mix_closure2_kind; /* 0=Glass 1=Transparent 2=NestedMix (Slice 2bp) */
   float mix_transparent_color[3];
   /* Slice 2bo: Mix Fac ← MATH Light Path nest (after mix_transparent_color).
    * enable=0 keeps 2bn bit-identical. Same layout as QT_SimpleScene. */
@@ -1222,6 +1233,12 @@ typedef struct QT_Mesh {
   int mix_shader_math_b2_kind;
   float mix_shader_math_b2_const;
   int mix_shader_math_b2_lightpath;
+  /* Slice 2bp: one nested MixClosure hop (same layout as QT_SimpleScene). */
+  float mix_nested_fac;
+  int mix_nested_lightpath_enable;
+  int mix_nested_lightpath_output;
+  int mix_nested_closure1_kind;
+  int mix_nested_closure2_kind;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

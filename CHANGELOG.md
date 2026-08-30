@@ -1,5 +1,14 @@
 ## [0.3.3] — unreleased
 
+### QuantTrace Slice 2bp (2026-08-30 8am PlugWalk ET)
+- Native `0.0.69-slice2bp`: one nested MixClosure hop. `mix_closure*_kind` **2=NestedMix**; ABI `mix_nested_fac` / `mix_nested_lightpath_enable` / `mix_nested_lightpath_output` / `mix_nested_closure{1,2}_kind` after `mix_shader_math_*` on `QT_Mesh` + `QT_SimpleScene`. kinds 0/1 keep 2bo bit-identical. Nested Fac: unlinked float or Light Path (not MATH). Nested leaves: Glass+Transparent only (shared `mix_transparent_color`). Cite Cycles `shader_nodes.h` MixClosureNode nesting + GlassBsdfNode + TransparentBsdfNode. `is_tracer=1`. Addon still `0.3.3`.
+- Census loft `Realistic_Glass_01`: Outer Mix.006 Fac=MAXIMUM(MAXIMUM(Is Shadow, Is Reflection), GT(Ray Depth, 6)) + Shader=Mix.005 (Fac←Is Shadow → Mix.004 ColorRamp/Add/Refraction/Glossy/SSS/Glass.Color linked + Transparent Color linked) + Shader_001 Transparent white. Packable CLAIM = Outer MATH + Inner Is Shadow over Glass+Transparent (loft deeper Mix.004 leftover).
+- CLAIM nested Mix (backplate): 32²/4 Δmax **1.91e-6** MAE 3.70e-8 0 px≥1e-3 **PASS**; 256²/128 Δmax **9.13e-4** MAE 3.19e-8 0 px≥1e-3 **PASS**.
+- Identity flat_math 2bo 32²/4 Δmax **1.91e-6** PASS; glass_only 2bm 32²/4 Δmax **1.19e-5** PASS; lightpath_shadow 2bn 32²/4 Δmax **1.19e-5** PASS; unlinked_fac 32²/4 Δmax **1.91e-6** PASS. mix/invert/bump_sep/hdr 32²/4 PASS (Δmax 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4).
+- Named REFUSE: deeper nest, nested←Add, nested Fac←TEX, Glass.Color linked (Slice 2bp tags).
+- Loft: outer nested Mix hop cleared; first PACK_FAIL still `G-__555573`/`Realistic_Glass_01` — now deeper Mix.004 beyond packed depth Slice 2bp. No loft Session Δmax. No zip / no gibby / no 2080. Store Classroom 41% / loft 52%.
+
+
 ### QuantTrace Slice 2bo (2026-08-30 7am PlugWalk ET)
 - Native `0.0.68-slice2bo`: Mix Shader Fac←MATH Light Path nest (Is * Ray and/or Ray Depth / Transparent Depth / Ray Length + unlinked float/VALUE) + Glass + Transparent. ABI `mix_shader_math_*` after `mix_transparent_color[3]` on `QT_Mesh` + `QT_SimpleScene`. `mix_shader_math_enable=0` keeps 2bn bit-identical. Cite Cycles `shader_nodes.h` MathNode Value1/Value2/Value + LightPathNode Ray Depth (float out, not Is * Ray). `is_tracer=1`. Addon still `0.3.3`.
 - Census loft `Realistic_Glass_01`: Fac = MAXIMUM(MAXIMUM(Is Shadow Ray, Is Reflection Ray), GREATER_THAN(Ray Depth, 6.0)); Shader nested Mix; Shader_001 Transparent unlinked. 1 Mix-root Fac←MATH material.

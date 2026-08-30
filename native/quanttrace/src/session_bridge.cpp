@@ -118,6 +118,10 @@
  *   mix_transparent_color). enable=0 keeps 2bn bit-identical. Wire
  *   MathNode + LightPathNode (do not evaluate Light Path at pack time).
  *   Cite MathNode Value1/Value2/Value, LightPathNode Ray Depth float.
+ * Slice 2bp: one nested MixClosure hop (mix_nested_* after math;
+ *   mix_closure*_kind 2 = NestedMix). kinds 0/1 keep 2bo bit-identical.
+ *   Nested Fac: unlinked float or LightPath. Nested leaves Glass+Transparent.
+ *   Cite MixClosureNode nesting.
  *   enable=0 keeps 2bc/2x bit-identical. Cite SeparateColorNode
  *   set_color_type NODE_COMBSEP_COLOR_RGB; float Red/Green/Blue → Height
  *   (no NODE_CONVERT_CF). Loft Sideboard: Blue ← TEX_IMAGE Color.
@@ -460,6 +464,11 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->mix_shader_math_b2_kind = 0;
     d->mix_shader_math_b2_const = 0.0f;
     d->mix_shader_math_b2_lightpath = 0;
+    d->mix_nested_fac = 0.5f;
+    d->mix_nested_lightpath_enable = 0;
+    d->mix_nested_lightpath_output = QT_LIGHTPATH_SHADOW_RAY;
+    d->mix_nested_closure1_kind = 0;
+    d->mix_nested_closure2_kind = 1;
     /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
     d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
     d->spec_tint_mix_type = 0;
@@ -897,6 +906,11 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->mix_shader_math_b2_kind = s->mix_shader_math_b2_kind;
     mesh->mix_shader_math_b2_const = s->mix_shader_math_b2_const;
     mesh->mix_shader_math_b2_lightpath = s->mix_shader_math_b2_lightpath;
+    mesh->mix_nested_fac = s->mix_nested_fac;
+    mesh->mix_nested_lightpath_enable = s->mix_nested_lightpath_enable;
+    mesh->mix_nested_lightpath_output = s->mix_nested_lightpath_output;
+    mesh->mix_nested_closure1_kind = s->mix_nested_closure1_kind;
+    mesh->mix_nested_closure2_kind = s->mix_nested_closure2_kind;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1519,12 +1533,36 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
                                       m->mix_transparent_color[2]));
             return tr->output("BSDF");
         };
-        ShaderOutput *c1 = (m->mix_closure1_kind == 1) ? make_transparent() :
-                                                         make_glass();
-        ShaderOutput *c2 = (m->mix_closure2_kind == 1) ? make_transparent() :
-                                                         make_glass();
-        graph->connect(c1, mix->input("Closure1"));
-        graph->connect(c2, mix->input("Closure2"));
+        /* Slice 2bp: kind 2 = nested MixClosure (Fac unlinked|LightPath,
+         * leaves Glass+Transparent). kinds 0/1 keep 2bo path. */
+        auto make_leaf = [&](int kind) -> ShaderOutput * {
+            return (kind == 1) ? make_transparent() : make_glass();
+        };
+        auto make_nested = [&]() -> ShaderOutput * {
+            MixClosureNode *inner = graph->create_node<MixClosureNode>();
+            if (m->mix_nested_lightpath_enable != 0) {
+                LightPathNode *nlp = graph->create_node<LightPathNode>();
+                graph->connect(nlp->output(qt_lightpath_out_name(
+                                   m->mix_nested_lightpath_output)),
+                               inner->input("Fac"));
+            }
+            else {
+                inner->set_fac(m->mix_nested_fac);
+            }
+            graph->connect(make_leaf(m->mix_nested_closure1_kind),
+                           inner->input("Closure1"));
+            graph->connect(make_leaf(m->mix_nested_closure2_kind),
+                           inner->input("Closure2"));
+            return inner->output("Closure");
+        };
+        auto make_side = [&](int kind) -> ShaderOutput * {
+            if (kind == 2) {
+                return make_nested();
+            }
+            return make_leaf(kind);
+        };
+        graph->connect(make_side(m->mix_closure1_kind), mix->input("Closure1"));
+        graph->connect(make_side(m->mix_closure2_kind), mix->input("Closure2"));
         graph->connect(mix->output("Closure"), graph->output()->input("Surface"));
         surf->set_graph(std::move(graph));
         surf->tag_update(scene);
