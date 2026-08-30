@@ -96,6 +96,11 @@
 # Slice 2bg: nested constant Mix / Curves(constant) on Mix A/B fold to
 #   dual-constant MixColorNode (optional Fac←Fresnel 2bf). No new C++ ABI.
 #   Curves Color-in←TEX_IMAGE on Mix side is Slice 2bh (not 2bg refuse).
+# Slice 2bi: Normal Map Color ← Combine RGB + Invert G of Separate←TEX_IMAGE
+#   (normal_invert_g_enable / fac; coat_normal_invert_g_*). enable=0 keeps
+#   2j TEX_IMAGE Color bit-identical. Cite SeparateColorNode / InvertNode /
+#   CombineColorNode RGB. Linked Fac / HSV-HSL mode / Invert on R|B /
+#   mismatched TEX / GROUP / Mix Color named refuse Slice 2bi.
 # Slice 2bh: RGB Curves ← TEX_IMAGE on Mix A/B of Principled Base Color
 #   (base_mix_curves_* after last base_curves_*). One-side LUT only.
 #   Native: ImageTexture → RGBCurves → Mix A or B; other side 2ay
@@ -768,6 +773,9 @@ def _empty_normal_info(prefix: str = "normal_") -> dict:
     out = _prefix_tex(_empty_tex_info(), prefix)
     out[f"{prefix}strength"] = 1.0
     out[f"{prefix}space"] = 0  # QT_NORMAL_MAP_TANGENT
+    # Slice 2bi identity — enable=0 skips Separate/InvertG/Combine (2j bit-identical).
+    out[f"{prefix}invert_g_enable"] = 0
+    out[f"{prefix}invert_g_fac"] = 1.0
     return out
 
 
@@ -1479,6 +1487,218 @@ def _principled_normal_dispatch(sock) -> dict:
     )
 
 
+
+def _is_combine_color_node(node) -> bool:
+    if node is None:
+        return False
+    if getattr(node, "type", None) in ("COMBINE_COLOR", "COMBRGB"):
+        return True
+    return getattr(node, "bl_idname", "") in (
+        "ShaderNodeCombineColor",
+        "ShaderNodeCombineRGB",
+    )
+
+
+def _is_separate_color_node(node) -> bool:
+    if node is None:
+        return False
+    if getattr(node, "type", None) in ("SEPARATE_COLOR", "SEPRGB"):
+        return True
+    return getattr(node, "bl_idname", "") in (
+        "ShaderNodeSeparateColor",
+        "ShaderNodeSeparateRGB",
+    )
+
+
+def _invert_fac_unlinked_any(node, ctx: str) -> float:
+    """Unlinked Invert Fac/Factor. Linked refuse with Slice 2bi tag."""
+    inputs = getattr(node, "inputs", None)
+    sock = _sock_ident_or_name(inputs, "Fac", "Factor") if inputs is not None else None
+    if sock is None:
+        return 1.0
+    if getattr(sock, "is_linked", False):
+        flinks = list(getattr(sock, "links", None) or [])
+        ftype = None
+        if flinks:
+            fn = getattr(flinks[0], "from_node", None)
+            fs = getattr(flinks[0], "from_socket", None)
+            fn, fs = _peel_reroute(fn, fs)
+            ftype = getattr(fn, "type", None) if fn is not None else None
+        raise QuantTraceSyncError(
+            f"{ctx} Invert.Fac from {ftype!r} refused "
+            f"(Slice 2bi: unlinked Fac only; linked Invert Fac still refuse)"
+        )
+    v = getattr(sock, "default_value", None)
+    try:
+        return float(v) if v is not None else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _separate_channel_tex(sock, want_out: str, ctx: str):
+    """If sock <- SEPARATE_COLOR.{want_out} <- TEX_IMAGE Color, return (tex_node, tex_sock).
+
+    want_out is Red/Green/Blue (also accepts R/G/B). RGB mode only.
+    """
+    if sock is None or not getattr(sock, "is_linked", False):
+        return None
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        return None
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    if not _is_separate_color_node(fn):
+        return None
+    mode = str(getattr(fn, "mode", "RGB") or "RGB").upper()
+    if mode != "RGB":
+        raise QuantTraceSyncError(
+            f"{ctx} Separate Color mode={mode!r} refused "
+            f"(Slice 2bi: RGB only; HSV/HSL still refuse)"
+        )
+    out_name = getattr(fs, "name", "") if fs is not None else ""
+    aliases = {
+        "Red": ("Red", "R"),
+        "Green": ("Green", "G"),
+        "Blue": ("Blue", "B"),
+    }
+    if out_name not in aliases.get(want_out, (want_out,)):
+        return None
+    inputs = getattr(fn, "inputs", None)
+    cin = None
+    if inputs is not None:
+        cin = inputs.get("Color") if hasattr(inputs, "get") else None
+        if cin is None:
+            for s in inputs:
+                if getattr(s, "name", None) == "Color":
+                    cin = s
+                    break
+    if cin is None or not getattr(cin, "is_linked", False):
+        return None
+    clinks = list(getattr(cin, "links", None) or [])
+    if len(clinks) != 1:
+        return None
+    tn = getattr(clinks[0], "from_node", None)
+    ts = getattr(clinks[0], "from_socket", None)
+    tn, ts = _peel_reroute(tn, ts)
+    if getattr(tn, "type", None) != "TEX_IMAGE":
+        return None
+    if getattr(ts, "name", None) not in ("Color", "color"):
+        return None
+    return tn, ts
+
+
+def _tex_image_same(a_node, b_node) -> bool:
+    if a_node is None or b_node is None:
+        return False
+    if a_node is b_node:
+        return True
+    ia = getattr(a_node, "image", None)
+    ib = getattr(b_node, "image", None)
+    if ia is not None and ib is not None and ia is ib:
+        return True
+    return False
+
+
+def _try_normal_invert_g_combine(color_sock, *, label: str):
+    """Detect Combine RGB with Invert on Green of same-TEX Separate.
+
+    Returns (tex_dict, invert_fac) or None if not this pattern.
+    Raises QuantTraceSyncError for near-miss COMBINE graphs (named refuse).
+    """
+    ctx = f"{label} Map Color"
+    if color_sock is None or not getattr(color_sock, "is_linked", False):
+        return None
+    links = list(getattr(color_sock, "links", None) or [])
+    if len(links) != 1:
+        return None
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    if not _is_combine_color_node(fn):
+        return None
+    out_name = getattr(fs, "name", "") if fs is not None else ""
+    if out_name not in ("Color", "color", "Image", "image"):
+        raise QuantTraceSyncError(
+            f"{ctx} Combine output {out_name!r} refused (Slice 2bi: Color only)"
+        )
+    mode = str(getattr(fn, "mode", "RGB") or "RGB").upper()
+    if mode != "RGB":
+        raise QuantTraceSyncError(
+            f"{ctx} Combine Color mode={mode!r} refused "
+            f"(Slice 2bi: RGB only; HSV/HSL still refuse)"
+        )
+    inputs = getattr(fn, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(f"{ctx} Combine missing inputs (Slice 2bi)")
+    r_sock = inputs.get("Red") if hasattr(inputs, "get") else None
+    g_sock = inputs.get("Green") if hasattr(inputs, "get") else None
+    b_sock = inputs.get("Blue") if hasattr(inputs, "get") else None
+    if r_sock is None or g_sock is None or b_sock is None:
+        for s in inputs:
+            nm = getattr(s, "name", None)
+            if nm in ("Red", "R") and r_sock is None:
+                r_sock = s
+            elif nm in ("Green", "G") and g_sock is None:
+                g_sock = s
+            elif nm in ("Blue", "B") and b_sock is None:
+                b_sock = s
+    r_info = _separate_channel_tex(r_sock, "Red", ctx)
+    b_info = _separate_channel_tex(b_sock, "Blue", ctx)
+    if r_info is None or b_info is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Combine R/B must be Separate.RGB of TEX_IMAGE "
+            f"(Slice 2bi: Invert-G Y-flip only; other Combine graphs refuse)"
+        )
+    if not getattr(g_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} Combine Green unlinked refused (Slice 2bi)"
+        )
+    glinks = list(getattr(g_sock, "links", None) or [])
+    if len(glinks) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Combine Green has multiple links (Slice 2bi)"
+        )
+    gn = getattr(glinks[0], "from_node", None)
+    gs = getattr(glinks[0], "from_socket", None)
+    gn, gs = _peel_reroute(gn, gs)
+    if not _is_invert_node(gn):
+        gtype = getattr(gn, "type", None) if gn is not None else None
+        raise QuantTraceSyncError(
+            f"{ctx} Combine Green from {gtype!r} refused "
+            f"(Slice 2bi: Invert on Green only; Invert on R/B / Mix / GROUP refuse)"
+        )
+    if getattr(gs, "name", None) not in ("Color", "color"):
+        raise QuantTraceSyncError(
+            f"{ctx} Invert output {getattr(gs, 'name', None)!r} refused "
+            f"(Slice 2bi: Color only)"
+        )
+    fac = _invert_fac_unlinked_any(gn, ctx)
+    inv_color = None
+    ginputs = getattr(gn, "inputs", None)
+    if ginputs is not None:
+        inv_color = ginputs.get("Color") if hasattr(ginputs, "get") else None
+        if inv_color is None:
+            for s in ginputs:
+                if getattr(s, "name", None) == "Color":
+                    inv_color = s
+                    break
+    g_info = _separate_channel_tex(inv_color, "Green", ctx)
+    if g_info is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Invert.Color must be Separate.Green of TEX_IMAGE "
+            f"(Slice 2bi)"
+        )
+    if not (
+        _tex_image_same(r_info[0], g_info[0]) and _tex_image_same(r_info[0], b_info[0])
+    ):
+        raise QuantTraceSyncError(
+            f"{ctx} Combine R/G/B from mismatched TEX_IMAGE refused (Slice 2bi)"
+        )
+    tex = _tex_image_from_tex_node(r_info[0], r_info[1], f"{label} Map Color")
+    return tex, fac
+
+
 def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal") -> dict:
     """Principled.{label} ← Normal Map.Normal; Color ← TEX_IMAGE; Strength unlinked.
 
@@ -1545,10 +1765,31 @@ def _normal_map_from_sock(sock, *, prefix: str = "normal_", label: str = "Normal
         raise QuantTraceSyncError(
             "Normal Map Color must be TEX_IMAGE (Slice 2t)"
         )
-    tex = _tex_image_from_sock(color_sock, f"{label} Map Color")
+    invert_g_enable = 0
+    invert_g_fac = 1.0
+    # Slice 2bi: peel REROUTE; try Combine+InvertG before TEX_IMAGE.
+    clinks = list(getattr(color_sock, "links", None) or [])
+    cfn = cfs = None
+    if len(clinks) == 1:
+        cfn = getattr(clinks[0], "from_node", None)
+        cfs = getattr(clinks[0], "from_socket", None)
+        cfn, cfs = _peel_reroute(cfn, cfs)
+    ctype = getattr(cfn, "type", None) if cfn is not None else None
+    if _is_combine_color_node(cfn):
+        tex, invert_g_fac = _try_normal_invert_g_combine(color_sock, label=label)
+        invert_g_enable = 1
+    elif ctype == "TEX_IMAGE":
+        tex = _tex_image_from_sock(color_sock, f"{label} Map Color")
+    else:
+        raise QuantTraceSyncError(
+            f"Normal Map Color link is not TEX_IMAGE "
+            f"(Slice 2f/2h/2i; from {ctype!r}; Slice 2bi covers Combine+InvertG only)"
+        )
     out = _prefix_tex(tex, prefix)
     out[f"{prefix}strength"] = strength
     out[f"{prefix}space"] = space_i
+    out[f"{prefix}invert_g_enable"] = int(invert_g_enable)
+    out[f"{prefix}invert_g_fac"] = float(invert_g_fac)
     return out
 
 
@@ -4792,6 +5033,15 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "normal_map_type": int(pr.get("normal_map_type", 2) if pr.get("normal_map_type") is not None else 2),
         "normal_strength": float(pr.get("normal_strength", 1.0) if pr.get("normal_strength") is not None else 1.0),
         "normal_space": int(pr.get("normal_space", 0) or 0),
+        # Slice 2bi: None-check — enable 0 / fac 0.0 valid — never `or`.
+        "normal_invert_g_enable": int(
+            pr["normal_invert_g_enable"]
+            if pr.get("normal_invert_g_enable") is not None
+            else 0
+        ),
+        "normal_invert_g_fac": float(
+            pr["normal_invert_g_fac"] if pr.get("normal_invert_g_fac") is not None else 1.0
+        ),
         "ior_image_path": pr.get("ior_image_path") or "",
         "ior_image_colorspace": pr.get("ior_image_colorspace") or "",
         "ior_tex_vector_mode": int(pr.get("ior_tex_vector_mode", 0) or 0),
@@ -4892,6 +5142,16 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "coat_normal_map_type": int(pr.get("coat_normal_map_type", 2) if pr.get("coat_normal_map_type") is not None else 2),
         "coat_normal_strength": float(pr.get("coat_normal_strength", 1.0) if pr.get("coat_normal_strength") is not None else 1.0),
         "coat_normal_space": int(pr.get("coat_normal_space", 0) or 0),
+        "coat_normal_invert_g_enable": int(
+            pr["coat_normal_invert_g_enable"]
+            if pr.get("coat_normal_invert_g_enable") is not None
+            else 0
+        ),
+        "coat_normal_invert_g_fac": float(
+            pr["coat_normal_invert_g_fac"]
+            if pr.get("coat_normal_invert_g_fac") is not None
+            else 1.0
+        ),
         "spec_tint_image_path": pr.get("spec_tint_image_path") or "",
         "spec_tint_image_colorspace": pr.get("spec_tint_image_colorspace") or "",
         "spec_tint_tex_vector_mode": int(pr.get("spec_tint_tex_vector_mode", 0) or 0),
@@ -6022,6 +6282,11 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     _exm = packed.get("base_mix_curves_extrapolate", 1)
     desc.base_mix_curves_extrapolate = 1 if _exm is None else int(_exm)
     desc.base_mix_curves_on_a = _bi("base_mix_curves_on_a", 1)
+    # Slice 2bi: enable 0 / fac 0.0 valid — never `or`.
+    desc.normal_invert_g_enable = _bi("normal_invert_g_enable", 0)
+    desc.normal_invert_g_fac = _bf("normal_invert_g_fac", 1.0)
+    desc.coat_normal_invert_g_enable = _bi("coat_normal_invert_g_enable", 0)
+    desc.coat_normal_invert_g_fac = _bf("coat_normal_invert_g_fac", 1.0)
     mcurves_list = packed.get("base_mix_curves") or []
     mcurves_n = packed.get("base_mix_curves_n", 0)
     mcurves_n = 0 if mcurves_n is None else int(mcurves_n)
@@ -6448,6 +6713,10 @@ def make_qt_simple_scene_type():
             ("base_mix_curves_fac", ctypes.c_float),
             ("base_mix_curves_extrapolate", ctypes.c_int),
             ("base_mix_curves_on_a", ctypes.c_int),
+            ("normal_invert_g_enable", ctypes.c_int),
+            ("normal_invert_g_fac", ctypes.c_float),
+            ("coat_normal_invert_g_enable", ctypes.c_int),
+            ("coat_normal_invert_g_fac", ctypes.c_float),
             ("bevel_enable", ctypes.c_int),
             ("bevel_samples", ctypes.c_int),
             ("bevel_radius", ctypes.c_float),
@@ -6916,6 +7185,10 @@ def make_qt_scene_types():
             ("base_mix_curves_fac", ctypes.c_float),
             ("base_mix_curves_extrapolate", ctypes.c_int),
             ("base_mix_curves_on_a", ctypes.c_int),
+            ("normal_invert_g_enable", ctypes.c_int),
+            ("normal_invert_g_fac", ctypes.c_float),
+            ("coat_normal_invert_g_enable", ctypes.c_int),
+            ("coat_normal_invert_g_fac", ctypes.c_float),
             ("bevel_enable", ctypes.c_int),
             ("bevel_samples", ctypes.c_int),
             ("bevel_radius", ctypes.c_float),

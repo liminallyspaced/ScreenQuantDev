@@ -100,6 +100,9 @@
  *   Fac bit-identical. Cite shader_nodes.h FresnelNode set_IOR; Normal
  *   unlinked LINK_NORMAL. MixColorNode Factor socket (not Fac). Linked
  *   Fresnel Normal/IOR, TEX_IMAGE/Noise/LayerWeight/GROUP/Geometry Fac refuse.
+ * Slice 2bi: Normal Map Color ← Combine+InvertG Separate←TEX_IMAGE
+ *   (normal_invert_g_* / coat_normal_invert_g_* after base_mix_curves_*).
+ *   enable=0 keeps 2j bit-identical.
  * Slice 2bh: RGB Curves ← TEX_IMAGE on Mix A/B (base_mix_curves_* after
  *   last base_curves_*). n==0 / NULL / fac==0 skips mix-side RGBCurvesNode
  *   — 2bg/2ay/2bf/2bd bit-identical. Native: ImageTexture → RGBCurves →
@@ -600,6 +603,15 @@ typedef struct QT_SimpleScene {
   float base_mix_curves_fac;    /* default 1 */
   int base_mix_curves_extrapolate; /* default 1 */
   int base_mix_curves_on_a; /* 1 = Mix A, 0 = Mix B; unused when n==0 */
+  /* Slice 2bi: Normal Map Color <- Combine RGB with Invert on Green of
+   * SeparateColor <- TEX_IMAGE (DirectX Y-flip). enable=0 skips
+   * Separate/Invert/Combine — 2j TEX_IMAGE Color bit-identical.
+   * Cite SeparateColorNode / InvertNode / CombineColorNode (RGB mode).
+   * Fac unlinked float (Cycles InvertNode default 1.0). */
+  int normal_invert_g_enable;
+  float normal_invert_g_fac;
+  int coat_normal_invert_g_enable;
+  float coat_normal_invert_g_fac;
   /* Slice 2az: Bevel → Principled.Normal (0 = off, bit-identical 2ay/2x/2j).
    * samples default 4; radius unlinked float (Blender 5.2 RNA 0.05).
    * Nested Normal via bump_* / normal_* (NormalMap → Bump.Normal OK). */
@@ -993,6 +1005,15 @@ typedef struct QT_Mesh {
   float base_mix_curves_fac;    /* default 1 */
   int base_mix_curves_extrapolate; /* default 1 */
   int base_mix_curves_on_a; /* 1 = Mix A, 0 = Mix B; unused when n==0 */
+  /* Slice 2bi: Normal Map Color <- Combine RGB with Invert on Green of
+   * SeparateColor <- TEX_IMAGE (DirectX Y-flip). enable=0 skips
+   * Separate/Invert/Combine — 2j TEX_IMAGE Color bit-identical.
+   * Cite SeparateColorNode / InvertNode / CombineColorNode (RGB mode).
+   * Fac unlinked float (Cycles InvertNode default 1.0). */
+  int normal_invert_g_enable;
+  float normal_invert_g_fac;
+  int coat_normal_invert_g_enable;
+  float coat_normal_invert_g_fac;
   /* Slice 2az: Bevel → Principled.Normal (0 = off, bit-identical 2ay/2x/2j).
    * samples default 4; radius unlinked float (Blender 5.2 RNA 0.05).
    * Nested Normal via bump_* / normal_* (NormalMap → Bump.Normal OK). */

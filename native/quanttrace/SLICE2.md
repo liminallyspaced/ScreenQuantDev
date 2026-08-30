@@ -1,6 +1,34 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bh landed** (2026-08-30 12am PlugWalk ET). RGB Curves ← TEX_IMAGE on Mix A/B of Principled.Base Color as a **new mix-side LUT** (`base_mix_curves_*` after last `base_curves_*`). Census: loft Carpet Mix MIX clamp_factor Fac←Fresnel IOR=1.45; A=packed sRGB TEX_IMAGE unlinked Vector; B=RGB Curves Fac=1 Color-in=same TEX; I mid (0.272727, 0.725); 10 loft Mix→Base Color Curves←TEX_IMAGE all on B only (0 both-sides LUTs). n==0 / NULL / fac==0 skips mix-side RGBCurvesNode — 2bg/2ay/2bf/2bd bit-identical. Do not reuse `base_curves_*` (Curves AFTER Mix is 2bd). Native ImageTexture → RGBCurves → Mix A or B; other side 2ay; then 2bd if `base_curves_n>0`. Cite RGBCurvesNode set_curves/set_min_x/set_max_x/set_fac/set_extrapolate; MixColorNode Factor socket is Factor not Fac. Loft Object003.015 Carpet cleared. First PACK_FAIL Plane.002 Rope Normal Map Color not TEX_IMAGE. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.61-slice2bh`. Addon `0.3.3`.
+Status: **Slice 2bi landed** (2026-08-30 1am PlugWalk ET). Normal Map Color ← Combine RGB + Invert G of Separate←TEX_IMAGE (`normal_invert_g_*` / `coat_normal_invert_g_*` after last `base_mix_curves_*`). Census: loft Plane.002 Rope Normal Map TANGENT Strength=1; Color←Combine RGB; R/B←Separate of packed Non-Color Rope_Normal.png; G←Invert Fac=1←Separate.Green (DirectX Y-flip). 1 loft COMBINE_COLOR Normal Map Color source. enable=0 skips Separate/Invert/Combine — 2j bit-identical. Cite SeparateColorNode/InvertNode/CombineColorNode RGB. Loft Plane.002 Rope cleared. First PACK_FAIL Chocofur_Free_Sideboard_01 Roughness←SEPARATE_COLOR. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.62-slice2bi`. Addon `0.3.3`.
+
+
+
+
+## Slice 2bi — Normal Map Color ← Combine+InvertG Separate←TEX_IMAGE (2026-08-30 1am ET)
+
+Loft leftover after 2bh (Normal Map Color not TEX_IMAGE): object `Plane.002` / material `Rope`. Principled.Normal ← Normal Map TANGENT Strength unlinked 1.0 uv_map empty. Color ← Combine RGB: Red/Blue ← Separate Color RGB of packed Non-Color `Rope_Normal.png` TEX_IMAGE (Linear FLAT REPEAT, Vector unlinked); Green ← Invert Fac=1.0 ← Separate.Green of same TEX. Census: 1 loft Normal Map Color COMBINE_COLOR; 20 TEX_IMAGE; 2 GROUP; 45 const. Claim cube: 16×16 Non-Color tangent bump matching that Y-flip graph.
+
+Cite Cycles `shader_nodes.h` SeparateColorNode / InvertNode / CombineColorNode (set_color_type NODE_COMBSEP_COLOR_RGB; InvertNode set_fac). Float↔Color auto ConvertNode. enable=0 / empty path keeps 2j TEX_IMAGE Color bit-identical.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| invert-G CLAIM | 32²/4 | 7.15e-7 | 3.01e-9 | 0 | **PASS** |
+| invert-G CLAIM | 256²/128 | 5.36e-7 | 1.59e-9 | 0 | **PASS** |
+| normal 2j (enable=0) | 32²/4 | 3.58e-7 | — | 0 | **PASS** |
+| mix 2ay | 32²/4 | 5.36e-7 | — | 0 | **PASS** |
+| curves 2bh | 32²/4 | 1.34e-6 | — | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | — | 0 | **PASS** |
+| live stock CLAIM vs TEX bypass | 32²/4 | 0.157 | 1.37e-3 | 22 | graph live |
+| Invert.Fac←VALUE | — | — | — | — | **REFUSE** Slice 2bi |
+| Invert on Red | — | — | — | — | **REFUSE** Slice 2bi |
+| Combine HSV | — | — | — | — | **REFUSE** Slice 2bi |
+
+Loft pack: Plane.002 Rope Invert-G Y-flip accepted. First PACK_FAIL `object='Chocofur_Free_Sideboard_01' material='Chocofur_Free_Sideboard_01.001' Principled.Roughness from 'SEPARATE_COLOR' refused (Slice 2be)`. Next: Roughness←SEPARATE_COLOR, leftover Curves←MIX, Fac←NEW_GEOMETRY/INVERT, GROUP/Botaniq, Bump Height VALTORGB/SEPARATE/MATH. Not loft Session Δmax.
+
+ABI: `normal_invert_g_enable` / `normal_invert_g_fac` / `coat_normal_invert_g_enable` / `coat_normal_invert_g_fac` after last `base_mix_curves_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults 0 / 1 / 0 / 1. Native `0.0.62-slice2bi`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-invert-g-32-pair.png`. Tools `_quanttrace_slice2bi_scene/smoke.py` + `_quanttrace_slice2bi_census.py`.
 
 
 ## Slice 2bh — RGB Curves ← TEX_IMAGE on Mix A/B → Base Color (2026-08-30 12am ET)

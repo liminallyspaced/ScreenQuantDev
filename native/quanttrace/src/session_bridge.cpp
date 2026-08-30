@@ -81,6 +81,12 @@
  *   base_mix_fresnel_ior). enable=0 keeps 2ay unlinked Fac bit-identical.
  *   Cite shader_nodes.h FresnelNode set_IOR; output Fac. MixColorNode
  *   Factor socket. Normal unlinked LINK_NORMAL.
+ * Slice 2bi: Normal Map Color <- CombineColor(RGB) with Invert on Green of
+ *   SeparateColor <- TEX_IMAGE (normal_invert_g_enable / fac;
+ *   coat_normal_invert_g_*). enable=0 keeps 2j TEX_IMAGE Color bit-identical.
+ *   Cite SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB;
+ *   InvertNode set_fac; CombineColorNode set_color_type. Float<->Color
+ *   via ShaderGraph::connect ConvertNode.
  * Slice 2bh: RGBCurvesNode on Mix A or B (base_mix_curves_*). n==0 / NULL /
  *   fac==0 skips — 2bg/2ay/2bf/2bd bit-identical. Native order ImageTexture
  *   → RGBCurves → Mix A/B; then 2bd Curves-after-Mix if base_curves_n>0.
@@ -359,6 +365,11 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->base_mix_curves_fac = 1.0f;
     d->base_mix_curves_extrapolate = 1;
     d->base_mix_curves_on_a = 1;
+    /* Slice 2bi identity — enable=0 skips Separate/InvertG/Combine. */
+    d->normal_invert_g_enable = 0;
+    d->normal_invert_g_fac = 1.0f;
+    d->coat_normal_invert_g_enable = 0;
+    d->coat_normal_invert_g_fac = 1.0f;
     /* Slice 2az identity — bevel off. */
     d->bevel_enable = 0;
     d->bevel_samples = 4;
@@ -718,6 +729,11 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->base_mix_curves_fac = s->base_mix_curves_fac;
     mesh->base_mix_curves_extrapolate = s->base_mix_curves_extrapolate;
     mesh->base_mix_curves_on_a = s->base_mix_curves_on_a;
+    /* Slice 2bi: Normal Map Invert-G Y-flip. */
+    mesh->normal_invert_g_enable = s->normal_invert_g_enable;
+    mesh->normal_invert_g_fac = s->normal_invert_g_fac;
+    mesh->coat_normal_invert_g_enable = s->coat_normal_invert_g_enable;
+    mesh->coat_normal_invert_g_fac = s->coat_normal_invert_g_fac;
     /* Slice 2az: Bevel → Principled.Normal. */
     mesh->bevel_enable = s->bevel_enable;
     mesh->bevel_samples = s->bevel_samples;
@@ -1469,6 +1485,23 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
                 graph.get(), m, m->normal_image_path, m->normal_image_colorspace,
                 m->normal_tex_vector_mode, m->normal_map_location, m->normal_map_rotation,
                 m->normal_map_scale, m->normal_map_type);
+            ShaderOutput *nmap_color = img->output("Color");
+            /* Slice 2bi: TEX → Separate RGB → Invert G → Combine → NormalMap.
+             * enable=0 keeps 2j direct Color link bit-identical. */
+            if (m->normal_invert_g_enable != 0) {
+                SeparateColorNode *sep = graph->create_node<SeparateColorNode>();
+                sep->set_color_type(NODE_COMBSEP_COLOR_RGB);
+                graph->connect(nmap_color, sep->input("Color"));
+                InvertNode *invg = graph->create_node<InvertNode>();
+                invg->set_fac(m->normal_invert_g_fac);
+                graph->connect(sep->output("Green"), invg->input("Color"));
+                CombineColorNode *comb = graph->create_node<CombineColorNode>();
+                comb->set_color_type(NODE_COMBSEP_COLOR_RGB);
+                graph->connect(sep->output("Red"), comb->input("Red"));
+                graph->connect(invg->output("Color"), comb->input("Green"));
+                graph->connect(sep->output("Blue"), comb->input("Blue"));
+                nmap_color = comb->output("Color");
+            }
             nmap = graph->create_node<NormalMapNode>();
             int sp = m->normal_space;
             ccl::NodeNormalMapSpace space = NODE_NORMAL_MAP_TANGENT;
@@ -1478,7 +1511,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             else if (sp == QT_NORMAL_MAP_BLENDER_WORLD) space = NODE_NORMAL_MAP_BLENDER_WORLD;
             nmap->set_space(space);
             nmap->set_strength(m->normal_strength);
-            graph->connect(img->output("Color"), nmap->input("Color"));
+            graph->connect(nmap_color, nmap->input("Color"));
         }
         BumpNode *bump = nullptr;
         const bool bump_noise = (m->bump_noise_enable != 0);
@@ -1690,6 +1723,21 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             graph.get(), m, m->coat_normal_image_path, m->coat_normal_image_colorspace,
             m->coat_normal_tex_vector_mode, m->coat_normal_map_location,
             m->coat_normal_map_rotation, m->coat_normal_map_scale, m->coat_normal_map_type);
+        ShaderOutput *nmap_color = img->output("Color");
+        if (m->coat_normal_invert_g_enable != 0) {
+            SeparateColorNode *sep = graph->create_node<SeparateColorNode>();
+            sep->set_color_type(NODE_COMBSEP_COLOR_RGB);
+            graph->connect(nmap_color, sep->input("Color"));
+            InvertNode *invg = graph->create_node<InvertNode>();
+            invg->set_fac(m->coat_normal_invert_g_fac);
+            graph->connect(sep->output("Green"), invg->input("Color"));
+            CombineColorNode *comb = graph->create_node<CombineColorNode>();
+            comb->set_color_type(NODE_COMBSEP_COLOR_RGB);
+            graph->connect(sep->output("Red"), comb->input("Red"));
+            graph->connect(invg->output("Color"), comb->input("Green"));
+            graph->connect(sep->output("Blue"), comb->input("Blue"));
+            nmap_color = comb->output("Color");
+        }
         NormalMapNode *nmap = graph->create_node<NormalMapNode>();
         int csp = m->coat_normal_space;
         ccl::NodeNormalMapSpace cspace = NODE_NORMAL_MAP_TANGENT;
@@ -1699,7 +1747,7 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
         else if (csp == QT_NORMAL_MAP_BLENDER_WORLD) cspace = NODE_NORMAL_MAP_BLENDER_WORLD;
         nmap->set_space(cspace);
         nmap->set_strength(m->coat_normal_strength);
-        graph->connect(img->output("Color"), nmap->input("Color"));
+        graph->connect(nmap_color, nmap->input("Color"));
         graph->connect(nmap->output("Normal"), bsdf->input("Coat Normal"));
     }
 
