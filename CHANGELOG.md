@@ -1,3 +1,24 @@
+## [Unreleased] — 0.3.6-dev
+
+### Aggressive CAMERA_CULL + distance cull (independent object sets)
+- Aggressive `CAMERA_CULL` enables scene `use_camera_cull` and
+  `use_distance_cull` when the distance RNA exists, but uses **two disjoint
+  object sets** (kind name stays `CAMERA_CULL`). Cycles `object_cull.cpp`
+  ANDs when both object flags are on the same name; dual flags on the
+  CAMERA_CULL scatter list would keep nearby off-frustum chairs and regress
+  the Classroom cull slice of the 41% plate.
+- `payload["objects"]`: camera-cull only (`use_camera_cull=True`).
+  `payload["distance_objects"]`: distance-cull only (`use_distance_cull=True`)
+  for tiny/scatter with `min_camera_distance` ≥ the margin that will be
+  written. Never both flags on the same object.
+- Sets `distance_cull_margin` only when missing/None/0 to
+  `max(50.0, camera clip_end)` (else 50.0); never lowers a positive user
+  margin. Missing distance RNA still applies camera cull alone and ignores
+  `distance_objects`. Scene distance cull is enabled whenever RNA exists.
+- Protects lights/volumes/cameras/heroes/emitters/shadow-catchers; linked
+  scatter remains eligible. No measured %; store plates stay Classroom 41% /
+  loft 52%.
+
 ## [0.3.5] — 2026-08-30
 
 ### Automatic visual rollback and Preserve Look benchmark lane

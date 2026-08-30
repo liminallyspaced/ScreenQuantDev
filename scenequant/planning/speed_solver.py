@@ -1148,49 +1148,119 @@ def _emission_strength_socket(node):
     return None
 
 
+def _distance_cull_margin_to_write(scene, cycles):
+    """Margin Aggressive CAMERA_CULL will journal for scene distance cull.
+
+    Positive user margins are kept. Missing/None/0 → max(50.0, camera
+    clip_end) when clip_end is a finite number, else 50.0.
+    """
+    current = getattr(cycles, "distance_cull_margin", None) if cycles is not None else None
+    if isinstance(current, (int, float)) and current > 0:
+        return float(current)
+    default_margin = 50.0
+    cam = getattr(scene, "camera", None)
+    data = getattr(cam, "data", None) if cam is not None else None
+    clip_end = getattr(data, "clip_end", None) if data is not None else None
+    if isinstance(clip_end, (int, float)):
+        try:
+            finite = clip_end == clip_end and abs(clip_end) != float("inf")
+        except Exception:
+            finite = False
+        if finite:
+            default_margin = max(50.0, float(clip_end))
+    return default_margin
+
+
+def _cull_scatter_eligible(obj):
+    """Shared protections for CAMERA_CULL camera-only and distance-only sets."""
+    if obj is None or getattr(obj, "hide_render", False) or _protected(obj):
+        return False
+    if getattr(obj, "type", "") in ("LIGHT", "VOLUME", "CAMERA"):
+        return False
+    if _is_emissive(obj) or _instance_carries_light(obj):
+        return False
+    if getattr(obj, "is_shadow_catcher", False):
+        return False
+    oc = getattr(obj, "cycles", None)
+    if oc is not None and getattr(oc, "is_shadow_catcher", False):
+        return False
+    return True
+
+
 def _camera_cull_actions(scene, coverage, caveats):
     """Scatter/tiny only. Scene flag alone does nothing — objects listed too.
 
-    Never lights, heroes, volumes, shadow catchers. Linked scatter/tiny ARE
-    listed (Cycles per-object flag, not hide_render). Shared across local
-    helper scenes is fine: the flag is evaluated against the rendering camera.
-    Distance cull is AND with camera cull; we do not enable both.
+    Never lights, heroes, volumes, cameras, shadow catchers, or emitters.
+    Linked scatter/tiny ARE listed (Cycles per-object flag, not hide_render).
+    Shared across local helper scenes is fine: the flag is evaluated against
+    the rendering camera.
+
+    Cycles ``object_cull.cpp``: both object flags ON → AND (keep nearby
+    off-frustum for reflections). Camera-only and distance-only flags on
+    separate objects give independent cull. Aggressive CAMERA_CULL therefore
+    uses two disjoint sets (kind name stays CAMERA_CULL):
+
+    - ``objects``: camera-cull only (today's tiny/scatter remainder)
+    - ``distance_objects``: distance-cull only (tiny/scatter with
+      ``min_camera_distance`` ≥ the margin that will be written)
+
+    Never put the same name in both lists. Scene may enable both cull flags;
+    object flags choose which test runs. Missing distance RNA → camera path
+    alone (``distance_objects`` ignored).
     """
     if not coverage:
         return []
     cycles = _cycles(scene)
     if cycles is None or not _has_attr(cycles, "use_camera_cull"):
         return []
-    names = []
+    has_distance = _has_attr(cycles, "use_distance_cull")
+    margin = _distance_cull_margin_to_write(scene, cycles) if has_distance else None
+    camera_names = []
+    distance_names = []
     for name, info in _sorted_coverage(coverage):
         if _cov_attr(info, "max_coverage", 1.0) >= TINY_COVERAGE:
             continue
         obj = _get_object(scene, name)
-        if obj is None or getattr(obj, "hide_render", False) or _protected(obj):
-            continue
-        if getattr(obj, "type", "") in ("LIGHT", "VOLUME", "CAMERA"):
-            continue
-        if _is_emissive(obj) or _instance_carries_light(obj):
-            continue
-        if getattr(obj, "is_shadow_catcher", False):
+        if not _cull_scatter_eligible(obj):
             continue
         oc = getattr(obj, "cycles", None)
-        if oc is not None and getattr(oc, "is_shadow_catcher", False):
+        # Partition: far tiny → distance-only; remainder → camera-only.
+        # Disjoint so Cycles never ANDs both flags on the same scatter name
+        # (would keep nearby off-frustum chairs and regress Classroom cull).
+        far_enough = False
+        if has_distance and margin is not None:
+            min_dist = _cov_attr(info, "min_camera_distance", 0.0)
+            try:
+                far_enough = (
+                    isinstance(min_dist, (int, float))
+                    and min_dist == min_dist
+                    and abs(min_dist) != float("inf")
+                    and float(min_dist) >= float(margin)
+                )
+            except Exception:
+                far_enough = False
+        if far_enough:
+            if getattr(oc, "use_distance_cull", False):
+                continue
+            distance_names.append(name)
             continue
         # use_camera_cull is evaluated against the rendering camera, so a
         # chair also linked into a helper scene (Classroom dustParticules)
         # is still safe to tag. hide_render / trim keep used-outside.
         if getattr(oc, "use_camera_cull", False):
             continue
-        names.append(name)
-    if not names and getattr(cycles, "use_camera_cull", False):
+        camera_names.append(name)
+    if not camera_names and not distance_names:
         return []
-    if not names:
-        return []
+    payload = {"objects": camera_names}
+    if has_distance:
+        payload["distance_objects"] = distance_names
     return [SpeedAction(
         "CAMERA_CULL",
-        "%d scatter/tiny object(s) → camera cull, including linked" % len(names),
-        "dead", 1, 0.88, 1, {"objects": names})]
+        ("%d camera-cull + %d distance-cull scatter/tiny "
+         "(independent sets; Cycles AND-when-both)")
+        % (len(camera_names), len(distance_names)),
+        "dead", 1, 0.88, 1, payload)]
 
 
 def _hair_ribbon_actions(scene, coverage):

@@ -51,6 +51,8 @@ def _scene(**cycles_kw):
         use_guiding=False,
         use_animated_seed=True,
         use_camera_cull=False,
+        use_distance_cull=False,
+        distance_cull_margin=0.0,
         denoising_use_gpu=True,
     )
     cycles_kw_full.update(cycles_kw)
@@ -490,6 +492,8 @@ def test_linked_cull_is_loud():
           "linked scatter object is camera-culled")
     check(all("not camera-culled (linked" not in c for c in plan.caveats),
           "linked cull is not caveated as skipped")
+    check("distance" in (culls[0].label or "").lower(),
+          "CAMERA_CULL description mentions distance cull")
 
 
 def test_hero_tiny_not_camera_culled():
@@ -1356,7 +1360,9 @@ def test_linked_cull_ignores_library_scenes():
     check("Catch" not in culled, "shadow catchers stay out of CAMERA_CULL")
     check("ceilingLamp" not in culled, "light instances stay out of CAMERA_CULL")
     check(all(a.kind != "DISTANCE_CULL" for a in plan.actions),
-          "distance cull stays off")
+          "no separate DISTANCE_CULL kind (folded into CAMERA_CULL)")
+    check(culls and "distance" in (culls[0].label or "").lower(),
+          "Aggressive CAMERA_CULL description includes distance cull")
     check(all("not camera-culled (used outside" not in c for c in plan.caveats),
           "library scenes do not caveat used-outside")
 
@@ -1605,6 +1611,251 @@ def test_auto_scramble_gpu_only():
           "both stay at tier 1")
 
 
+
+def _load_speed_apply_fake_bpy():
+    """Load apply/speed_apply.py against a stubbed package (no Blender)."""
+    import importlib.util
+    import types
+    bpy_mod = types.ModuleType("bpy")
+    bpy_mod.types = types.SimpleNamespace()
+    saved_bpy = sys.modules.get("bpy")
+    sys.modules["bpy"] = bpy_mod
+
+    created = []
+
+    def _ensure_pkg(name, rel):
+        if name in sys.modules and getattr(sys.modules[name], "__path__", None):
+            return sys.modules[name]
+        mod = types.ModuleType(name)
+        mod.__path__ = [os.path.join(PROJECT_ROOT, *rel.split("/"))]
+        mod.__package__ = name
+        sys.modules[name] = mod
+        created.append(name)
+        return mod
+
+    try:
+        _ensure_pkg("scenequant", "scenequant")
+        _ensure_pkg("scenequant.analysis", "scenequant/analysis")
+        _ensure_pkg("scenequant.planning", "scenequant/planning")
+        _ensure_pkg("scenequant.apply", "scenequant/apply")
+
+        cov = types.ModuleType("scenequant.analysis.coverage")
+        sys.modules["scenequant.analysis.coverage"] = cov
+        created.append("scenequant.analysis.coverage")
+
+        presets = types.ModuleType("scenequant.planning.presets")
+        presets.TIER_PERCEPTUAL = ()
+        presets.TIER_LOSSLESS = ()
+        presets.MODE_SET = "set"
+        presets.MODE_MIN = "min"
+        presets.MODE_MAX = "max"
+        sys.modules["scenequant.planning.presets"] = presets
+        created.append("scenequant.planning.presets")
+
+        # Reuse the already-loaded duck-friendly speed_solver under package name.
+        sys.modules["scenequant.planning.speed_solver"] = speed_solver
+        created.append("scenequant.planning.speed_solver")
+
+        for name in ("guards", "objects_apply", "settings_apply"):
+            full = "scenequant.apply.%s" % name
+            sys.modules[full] = types.ModuleType(full)
+            created.append(full)
+
+        path = os.path.join(PROJECT_ROOT, "scenequant", "apply", "speed_apply.py")
+        spec = importlib.util.spec_from_file_location(
+            "scenequant.apply.speed_apply", path)
+        mod = importlib.util.module_from_spec(spec)
+        mod.__package__ = "scenequant.apply"
+        sys.modules["scenequant.apply.speed_apply"] = mod
+        created.append("scenequant.apply.speed_apply")
+        spec.loader.exec_module(mod)
+    finally:
+        if saved_bpy is None:
+            sys.modules.pop("bpy", None)
+        else:
+            sys.modules["bpy"] = saved_bpy
+    return mod
+
+
+class _DuckJournal:
+    """Dotted RNA set_prop for speed_apply duck tests (no real journal/bpy)."""
+
+    def __init__(self):
+        self.entries = []
+
+    def set_prop(self, datablock, rna_path, value, tag=None, **kwargs):
+        owner = datablock
+        parts = rna_path.split(".")
+        for part in parts[:-1]:
+            owner = getattr(owner, part, None)
+            if owner is None:
+                return False
+        attr = parts[-1]
+        if not hasattr(owner, attr):
+            return False
+        old = getattr(owner, attr)
+        if old == value:
+            return False
+        setattr(owner, attr, value)
+        self.entries.append({
+            "path": rna_path, "old": old, "new": value, "tag": tag,
+            "owner": datablock,
+        })
+        return True
+
+
+class _ObjMap(dict):
+    def get(self, name, default=None):
+        return dict.get(self, name, default)
+
+
+def test_apply_camera_distance_cull_when_present():
+    section("apply CAMERA_CULL uses disjoint camera/distance object sets")
+    speed_apply = _load_speed_apply_fake_bpy()
+    tags = []
+    chair = Obj(
+        name="Chair.001", type="MESH",
+        scenequant=Obj(override="AUTO"), is_shadow_catcher=False,
+        cycles=Obj(use_camera_cull=False, use_distance_cull=False),
+        update_tag=lambda: tags.append("Chair.001"))
+    far = Obj(
+        name="FarProp", type="MESH",
+        scenequant=Obj(override="AUTO"), is_shadow_catcher=False,
+        cycles=Obj(use_camera_cull=False, use_distance_cull=False),
+        update_tag=lambda: tags.append("FarProp"))
+    scene = Obj(
+        cycles=Obj(
+            use_camera_cull=False, use_distance_cull=False,
+            camera_cull_margin=0.0, distance_cull_margin=0.0),
+        render=Obj(
+            use_simplify=False, simplify_subdivision_render=6,
+            simplify_child_particles_render=1.0),
+        camera=Obj(data=Obj(clip_end=100.0)),
+        objects=_ObjMap({"Chair.001": chair, "FarProp": far}),
+    )
+    jrnl = _DuckJournal()
+    msg = speed_apply._apply_camera_cull(
+        scene, Obj(), jrnl,
+        {"objects": ["Chair.001"], "distance_objects": ["FarProp"]},
+        {}, [], None)
+    check(scene.cycles.use_camera_cull is True, "scene camera cull on")
+    check(scene.cycles.use_distance_cull is True, "scene distance cull on")
+    check(scene.cycles.distance_cull_margin == 100.0,
+          "distance margin = max(50, clip_end=100)")
+    check(chair.cycles.use_camera_cull is True, "camera object gets use_camera_cull")
+    check(chair.cycles.use_distance_cull is False,
+          "camera object must NOT get use_distance_cull")
+    check(far.cycles.use_distance_cull is True,
+          "distance object gets use_distance_cull")
+    check(far.cycles.use_camera_cull is False,
+          "distance object must NOT get use_camera_cull")
+    check(tags == ["Chair.001", "FarProp"], "update_tag after each object write")
+    paths = [e["path"] for e in jrnl.entries]
+    check("cycles.use_distance_cull" in paths, "journaled scene distance cull")
+    check(paths.count("cycles.use_distance_cull") == 2,
+          "journaled scene + one distance-only object (not camera list)")
+    check("distance" in (msg or "").lower(), "return message mentions distance")
+    check(msg == "camera cull on 1 + distance cull on 1 objects",
+          "return message reports both set counts")
+
+    # Never lower a positive user distance margin.
+    scene2 = Obj(
+        cycles=Obj(
+            use_camera_cull=False, use_distance_cull=False,
+            camera_cull_margin=0.1, distance_cull_margin=75.0),
+        render=Obj(
+            use_simplify=True, simplify_subdivision_render=6,
+            simplify_child_particles_render=1.0),
+        camera=Obj(data=Obj(clip_end=200.0)),
+        objects=_ObjMap({"Chair.001": Obj(
+            name="Chair.001", type="MESH",
+            scenequant=Obj(override="AUTO"), is_shadow_catcher=False,
+            cycles=Obj(use_camera_cull=False, use_distance_cull=False),
+            update_tag=lambda: None)}),
+    )
+    jrnl2 = _DuckJournal()
+    speed_apply._apply_camera_cull(
+        scene2, Obj(), jrnl2, {"objects": ["Chair.001"]}, {}, [], None)
+    check(scene2.cycles.distance_cull_margin == 75.0,
+          "positive user distance margin not lowered")
+    check(all(e["path"] != "cycles.distance_cull_margin" for e in jrnl2.entries),
+          "no distance_cull_margin write when user margin > 0")
+    check(scene2.cycles.use_distance_cull is True,
+          "scene distance cull still enabled with empty distance_objects")
+
+
+def test_apply_camera_cull_ok_without_distance_rna():
+    section("apply CAMERA_CULL succeeds when distance RNA missing")
+    speed_apply = _load_speed_apply_fake_bpy()
+    chair = Obj(
+        name="Chair.001", type="MESH",
+        scenequant=Obj(override="AUTO"), is_shadow_catcher=False,
+        cycles=Obj(use_camera_cull=False),
+        update_tag=lambda: None)
+    far = Obj(
+        name="FarProp", type="MESH",
+        scenequant=Obj(override="AUTO"), is_shadow_catcher=False,
+        cycles=Obj(use_camera_cull=False),
+        update_tag=lambda: None)
+    scene = Obj(
+        cycles=Obj(use_camera_cull=False, camera_cull_margin=0.0),
+        render=Obj(
+            use_simplify=False, simplify_subdivision_render=6,
+            simplify_child_particles_render=1.0),
+        camera=Obj(data=Obj(clip_end=50.0)),
+        objects=_ObjMap({"Chair.001": chair, "FarProp": far}),
+    )
+    jrnl = _DuckJournal()
+    msg = speed_apply._apply_camera_cull(
+        scene, Obj(), jrnl,
+        {"objects": ["Chair.001"], "distance_objects": ["FarProp"]},
+        {}, [], None)
+    check(scene.cycles.use_camera_cull is True, "camera cull alone still on")
+    check(not hasattr(scene.cycles, "use_distance_cull"),
+          "distance attr remains absent on scene")
+    check(chair.cycles.use_camera_cull is True, "object camera cull on")
+    check(not hasattr(chair.cycles, "use_distance_cull"),
+          "distance attr remains absent on camera object")
+    check(far.cycles.use_camera_cull is False,
+          "distance_objects ignored without distance RNA")
+    check(all(e["path"] != "cycles.use_distance_cull" for e in jrnl.entries),
+          "no distance journal writes without RNA")
+    check("distance" not in (msg or "").lower(),
+          "return message is camera-only without distance RNA")
+    check("camera cull on 1 objects" == msg, "camera-only message shape")
+
+
+def test_camera_cull_partitions_far_tiny_to_distance_only():
+    section("planner splits far tiny into distance_objects (no overlap)")
+    scene = _scene()
+    scene.camera = Obj(data=Obj(clip_end=50.0))
+    near = _mesh("NearChair")
+    far = _mesh("FarScatter")
+    scene.objects = [near, far]
+    cov = {
+        "NearChair": {
+            "max_coverage": 0.002, "in_frustum_ever": False,
+            "near_frustum_ever": False, "min_camera_distance": 10.0,
+        },
+        "FarScatter": {
+            "max_coverage": 0.002, "in_frustum_ever": True,
+            "near_frustum_ever": True, "min_camera_distance": 80.0,
+        },
+    }
+    plan = speed_solver.build_speed_plan(scene, cov, _mem(), _settings())
+    culls = [a for a in plan.actions if a.kind == "CAMERA_CULL"]
+    check(len(culls) == 1, "one CAMERA_CULL action")
+    cam_objs = culls[0].payload.get("objects") or []
+    dist_objs = culls[0].payload.get("distance_objects") or []
+    check(cam_objs == ["NearChair"], "near tiny is camera-only")
+    check(dist_objs == ["FarScatter"], "far tiny is distance-only")
+    check(not (set(cam_objs) & set(dist_objs)), "object sets are disjoint")
+    check("independent" in (culls[0].label or "").lower()
+          or "and-when-both" in (culls[0].label or "").lower(),
+          "description names independent sets / AND-when-both")
+
+
+
 def main():
     test_independence()
     test_default_plan_filters()
@@ -1632,6 +1883,9 @@ def main():
     test_used_outside_ignores_library_scenes()
     test_linked_cull_ignores_library_scenes()
     test_two_local_scenes_still_skip_camera_cull()
+    test_apply_camera_distance_cull_when_present()
+    test_apply_camera_cull_ok_without_distance_rna()
+    test_camera_cull_partitions_far_tiny_to_distance_only()
     test_filter_glossy_proven_only()
     test_auto_scramble_gpu_only()
     finish()

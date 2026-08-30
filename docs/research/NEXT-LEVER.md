@@ -1,3 +1,50 @@
+# Next lever (2026-08-30 2pm ET PlugWalk)
+
+## 2pm — Aggressive CAMERA_CULL + distance cull (independent object sets)
+
+Build-order #1 locally: enable Cycles **distance cull** alongside camera cull
+under the existing Aggressive `CAMERA_CULL` kind (no new kind name).
+
+**Cycles semantics (`intern/cycles/blender/object_cull.cpp`):** scene flags are
+independent, but **both object flags on the same name → AND** (keep nearby
+off-frustum objects for reflections). Camera-only and distance-only object
+flags give independent cull. OR-on-same-object is wrong and would regress the
+Classroom cull slice of the 41% plate.
+
+```
+return (camera_culled && distance_culled)           // both object flags → AND
+    || (camera_culled && !use_distance_cull_)       // camera-only object
+    || (distance_culled && !use_camera_cull_);      // distance-only object
+```
+
+**Writes (journaled, speed tag):**
+- Scene: `render.use_simplify`, `cycles.use_camera_cull`, and
+  `cycles.use_distance_cull` whenever distance RNA exists;
+  `cycles.distance_cull_margin` only when missing/None/0 →
+  `max(50.0, camera.data.clip_end)` when camera+clip_end finite, else `50.0`.
+  Never lower a positive user margin. Existing camera margin + simplify high
+  caps unchanged.
+- `payload["objects"]` (camera-only set): `object.cycles.use_camera_cull=True`
+  only. Never `use_distance_cull` on these names.
+- `payload["distance_objects"]` (distance-only set): tiny/scatter with
+  `min_camera_distance` ≥ the margin that will be written; same protections;
+  **disjoint** from the camera set; `object.cycles.use_distance_cull=True`
+  only.
+- If distance RNA is missing, camera cull alone still succeeds and
+  `distance_objects` is ignored.
+
+**Protections unchanged:** lights / volumes / cameras / heroes / emitters /
+shadow-catchers stay out; linked scatter is allowed. Preserve Look and
+Balanced still withhold `CAMERA_CULL`.
+
+Authoritative report: `docs/research/PLUGWALK-2026-08-30-14.md` §1.
+
+No store claim change (Classroom **41%** / loft **52%**). No zip. No
+`blender_manifest.toml` bump (stays **0.3.5**). Branch
+`plugwalk/distance-cull-aggressive`.
+
+---
+
 # Next lever (2026-08-26 7pm ET PlugWalk)
 
 ## 7pm — clean demo bill (docs only; no 5th leftover lever)
