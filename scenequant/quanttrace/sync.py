@@ -114,6 +114,11 @@
 #   Color <- TEX_IMAGE or ColorRamp (or constant Color fold via Rec.709
 #   NODE_CONVERT_CF). Linked Fac / nested Invert / GROUP / Mix / Noise
 #   Color named refuse Slice 2be.
+# Slice 2bj: SEPARATE_COLOR → Principled.Roughness (rough_separate_enable /
+#   rough_separate_channel after rough_invert_*). enable=0 skips
+#   SeparateColorNode — 2be/2ba/2bb/2i bit-identical. RGB mode only;
+#   channel 0=Red/1=Green/2=Blue from TEX_IMAGE Color (or constant fold).
+#   HSV/HSL / Invert←Separate / GROUP / Mix named refuse Slice 2bj.
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -851,6 +856,15 @@ def _empty_rough_invert_info() -> dict:
     return {
         "rough_invert_enable": 0,
         "rough_invert_fac": 1.0,
+        **_empty_rough_separate_info(),
+    }
+
+
+def _empty_rough_separate_info() -> dict:
+    """Slice 2bj identity — enable=0 skips SeparateColorNode."""
+    return {
+        "rough_separate_enable": 0,
+        "rough_separate_channel": 1,  # Green (loft Sideboard)
     }
 
 
@@ -1106,6 +1120,13 @@ def _stamp_rough_invert(tex, ramp, enable: int, fac: float):
     return tex, ramp
 
 
+def _stamp_rough_separate(tex, ramp, enable: int, channel: int):
+    ramp = dict(ramp)
+    ramp["rough_separate_enable"] = 1 if enable else 0
+    ramp["rough_separate_channel"] = int(channel)
+    return tex, ramp
+
+
 def _pack_rough_colorramp(from_node, from_sock, ctx: str):
     """Slice 2ba/2bb ColorRamp LUT + Fac unlinked / TEX_IMAGE / TEX_NOISE."""
     empty_tex = _empty_tex_info()
@@ -1170,6 +1191,84 @@ def _fold_invert_constant(color, fac: float, empty_tex, empty_ramp):
     ramp = dict(empty_ramp)
     ramp["roughness_folded"] = float(y)
     return empty_tex, ramp
+
+
+
+def _fold_separate_constant(color, channel: int, empty_tex, empty_ramp):
+    """Python-only constant Separate RGB channel → roughness float."""
+    try:
+        rgb = (float(color[0]), float(color[1]), float(color[2]))
+    except (TypeError, IndexError, ValueError):
+        rgb = (0.0, 0.0, 0.0)
+    ch = 0 if channel <= 0 else (2 if channel >= 2 else 1)
+    ramp = dict(empty_ramp)
+    ramp["roughness_folded"] = float(rgb[ch])
+    return empty_tex, ramp
+
+
+
+def _pack_rough_separate(from_node, from_sock, ctx, empty_tex, empty_ramp):
+    """Slice 2bj: SEPARATE_COLOR.{R|G|B} <- TEX_IMAGE Color (or constant fold)."""
+    mode = str(getattr(from_node, "mode", "RGB") or "RGB").upper()
+    if mode != "RGB":
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness Separate Color mode={mode!r} refused "
+            f"(Slice 2bj: RGB only; HSV/HSL still refuse)"
+        )
+    out_name = getattr(from_sock, "name", "") if from_sock is not None else ""
+    channel_map = {
+        "Red": 0, "R": 0,
+        "Green": 1, "G": 1,
+        "Blue": 2, "B": 2,
+    }
+    if out_name not in channel_map:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness Separate output {out_name!r} refused "
+            f"(Slice 2bj: Red/Green/Blue only)"
+        )
+    channel = channel_map[out_name]
+    inputs = getattr(from_node, "inputs", None)
+    color_sock = _sock_ident_or_name(inputs, "Color") if inputs is not None else None
+    if color_sock is None or not getattr(color_sock, "is_linked", False):
+        dv = getattr(color_sock, "default_value", None) if color_sock is not None else None
+        try:
+            col = (float(dv[0]), float(dv[1]), float(dv[2]))
+        except (TypeError, IndexError, ValueError):
+            col = (0.0, 0.0, 0.0)
+        return _fold_separate_constant(col, channel, empty_tex, empty_ramp)
+    clinks = list(getattr(color_sock, "links", None) or [])
+    if len(clinks) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness Separate.Color has multiple links "
+            f"(Slice 2bj)"
+        )
+    cn = getattr(clinks[0], "from_node", None)
+    cs = getattr(clinks[0], "from_socket", None)
+    cn, cs = _peel_reroute(cn, cs)
+    ntype_c = getattr(cn, "type", None) if cn is not None else None
+    if ntype_c == "RGB" or (
+        cn is not None and getattr(cn, "bl_idname", "") == "ShaderNodeRGB"
+    ):
+        dv = getattr(cs, "default_value", None) if cs is not None else None
+        try:
+            col = (float(dv[0]), float(dv[1]), float(dv[2]))
+        except (TypeError, IndexError, ValueError):
+            col = (0.0, 0.0, 0.0)
+        return _fold_separate_constant(col, channel, empty_tex, empty_ramp)
+    if ntype_c != "TEX_IMAGE":
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness Separate.Color from {ntype_c!r} refused "
+            f"(Slice 2bj: TEX_IMAGE Color or constant RGB only; GROUP / Mix / "
+            f"Noise / Invert still refuse)"
+        )
+    out_c = getattr(cs, "name", "") if cs is not None else ""
+    if out_c not in ("Color", "color"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Roughness Separate.Color from TEX_IMAGE "
+            f"output {out_c!r} refused (Slice 2bj: Color only)"
+        )
+    tex = _tex_image_from_tex_node(cn, cs, "Roughness", ctx=ctx)
+    return _stamp_rough_separate(tex, empty_ramp, 1, channel)
 
 
 def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
@@ -1240,6 +1339,15 @@ def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
             invert_enable = 1
         from_node, from_sock = cn, cs
     ntype = getattr(from_node, "type", None) if from_node is not None else None
+    # Slice 2bj: SEPARATE_COLOR / SEPRGB → Roughness (RGB channel).
+    if _is_separate_color_node(from_node):
+        if invert_enable:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Roughness Invert.Color from SEPARATE_COLOR "
+                f"refused (Slice 2bj: Separate→Roughness only; Invert←Separate "
+                f"still refuse)"
+            )
+        return _pack_rough_separate(from_node, from_sock, ctx, empty_tex, empty_ramp)
     if _is_colorramp_node(from_node):
         tex, ramp = _pack_rough_colorramp(from_node, from_sock, ctx)
         return _stamp_rough_invert(tex, ramp, invert_enable, invert_fac)
@@ -1255,7 +1363,8 @@ def _roughness_tex_and_ramp(sock, *, object_name: str = "", mat=None):
         )
     raise QuantTraceSyncError(
         f"{ctx} Principled.Roughness from {ntype!r} refused "
-        f"(Slice 2be: Invert, ColorRamp, or TEX_IMAGE Color only)"
+        f"(Slice 2bj: Invert, ColorRamp, TEX_IMAGE Color, or SEPARATE_COLOR "
+        f"RGB channel only)"
     )
 
 
@@ -5411,6 +5520,16 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "rough_invert_fac": float(
             pr["rough_invert_fac"] if pr.get("rough_invert_fac") is not None else 1.0
         ),
+        "rough_separate_enable": int(
+            pr["rough_separate_enable"]
+            if pr.get("rough_separate_enable") is not None
+            else 0
+        ),
+        "rough_separate_channel": int(
+            pr["rough_separate_channel"]
+            if pr.get("rough_separate_channel") is not None
+            else 1
+        ),
         "thin_wall": int(pr.get("thin_wall", 0) or 0),
         "transmission_weight": float(
             pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
@@ -6331,6 +6450,9 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     # Slice 2be: enable 0 / fac 0.0 valid — never `or` on enable/fac.
     desc.rough_invert_enable = _bi("rough_invert_enable", 0)
     desc.rough_invert_fac = _bf("rough_invert_fac", 1.0)
+    # Slice 2bj: enable 0 / channel 0 valid — never `or` on enable/channel.
+    desc.rough_separate_enable = _bi("rough_separate_enable", 0)
+    desc.rough_separate_channel = _bi("rough_separate_channel", 1)
     if ramp_list and ramp_n > 0:
         flat = [float(v) for v in ramp_list]
         if len(flat) < ramp_n * 3:
@@ -6740,6 +6862,8 @@ def make_qt_simple_scene_type():
             ("rough_ramp_noise_use_color", ctypes.c_int),
             ("rough_invert_enable", ctypes.c_int),
             ("rough_invert_fac", ctypes.c_float),
+            ("rough_separate_enable", ctypes.c_int),
+            ("rough_separate_channel", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -7212,6 +7336,8 @@ def make_qt_scene_types():
             ("rough_ramp_noise_use_color", ctypes.c_int),
             ("rough_invert_enable", ctypes.c_int),
             ("rough_invert_fac", ctypes.c_float),
+            ("rough_separate_enable", ctypes.c_int),
+            ("rough_separate_channel", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):

@@ -1,8 +1,23 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bi landed** (2026-08-30 1am PlugWalk ET). Normal Map Color ← Combine RGB + Invert G of Separate←TEX_IMAGE (`normal_invert_g_*` / `coat_normal_invert_g_*` after last `base_mix_curves_*`). Census: loft Plane.002 Rope Normal Map TANGENT Strength=1; Color←Combine RGB; R/B←Separate of packed Non-Color Rope_Normal.png; G←Invert Fac=1←Separate.Green (DirectX Y-flip). 1 loft COMBINE_COLOR Normal Map Color source. enable=0 skips Separate/Invert/Combine — 2j bit-identical. Cite SeparateColorNode/InvertNode/CombineColorNode RGB. Loft Plane.002 Rope cleared. First PACK_FAIL Chocofur_Free_Sideboard_01 Roughness←SEPARATE_COLOR. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.62-slice2bi`. Addon `0.3.3`.
+Status: **Slice 2bj landed** (2026-08-30 2am PlugWalk ET). SEPARATE_COLOR → Principled.Roughness (`rough_separate_enable` / `rough_separate_channel` after `rough_invert_*`). Census: loft Chocofur_Free_Sideboard_01 Roughness ← Separate RGB.Green ← TEX_IMAGE Color (sRGB packed diffuse, Vector unlinked, mode=RGB). 2 loft SEPARATE→Roughness both Green. enable=0 skips SeparateColorNode — 2be/2ba/2bb/2i bit-identical. Cite SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB; channel float → Roughness (no NODE_CONVERT_CF). Constant Separate folds Python-only. HSV/HSL / Invert←Separate / GROUP / Mix named refuse Slice 2bj. Loft Sideboard Roughness SEPARATE cleared. First PACK_FAIL `Principled.Specular Tint link is not TEX_IMAGE (Slice 2f/2h/2i)` (Sideboard Mix→Specular Tint; 5 loft Mix Specular Tint). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.63-slice2bj`. Addon `0.3.3`.
 
 
+
+
+
+
+## Slice 2bj — SEPARATE_COLOR → Principled.Roughness (2026-08-30 2am ET)
+
+Loft leftover after 2bi (Roughness from SEPARATE_COLOR): object `Chocofur_Free_Sideboard_01` / material `Chocofur_Free_Sideboard_01.001`. Principled.Roughness ← Separate RGB Green (`SEPARATE_COLOR`, node `Separate RGB`). Mode **RGB**. Color ← TEX_IMAGE Color (`Chocofur_Free_Sideboard_01_diff_01.jpg` packed sRGB, Linear, REPEAT, FLAT; Vector unlinked). Twin material `Chocofur_Free_Sideboard_01` same shape on `diff_02.jpg`. Claim cube: Non-Color RGB (R=10,G=checker,B=200) TEX_IMAGE → Separate.Green → Roughness (proves channel ≠ CF-gray).
+
+Cite Cycles `shader_nodes.h` SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB; Red/Green/Blue float outs. Float → Roughness direct (no NODE_CONVERT_CF). enable=0 / empty path keeps 2be/2ba/2i Color→CF bit-identical. Constant Color/RGB → Separate folds that channel into `roughness` float (Python-only).
+
+Locked cube CLAIM: 32²/4 Δmax=**3.58e-7** PASS (0 px ≥1e-3, MAE 5.73e-9) / 256²/128 Δmax=**4.77e-7** PASS (0 px ≥1e-3). tex 2i 32²/4 Δmax=3.58e-7 PASS (enable=0). invert 2be 32²/4 Δmax=4.77e-7 PASS. ramp 2ba 32²/4 Δmax=4.77e-7 PASS. separate_const fold 32²/4 Δmax=3.58e-7 PASS (roughness=0.55). noise 2bb 32²/4 Δmax=3.28e-5 PASS. mix 2ay 32²/4 Δmax=5.36e-7 PASS. curves 2bh 32²/4 Δmax=1.34e-6 PASS. hdr 2aa 32²/4 Δmax=6.13e-4 PASS. HSV Separate / Invert←Separate REFUSE Slice 2bj.
+
+Loft pack: Sideboard Roughness SEPARATE cleared. First PACK_FAIL `Principled.Specular Tint link is not TEX_IMAGE (Slice 2f/2h/2i)` — Sideboard Mix→Specular Tint (5 loft). Next: Specular Tint ← Mix / leftover GROUP/Botaniq / Bump Height VALTORGB/SEPARATE/MATH. Not loft Session Δmax.
+
+ABI: `rough_separate_enable` / `rough_separate_channel` (0=Red 1=Green 2=Blue) after `rough_invert_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults 0 / 1. Native `0.0.63-slice2bj`. Box CPU only; 2080 not used.
 
 
 ## Slice 2bi — Normal Map Color ← Combine+InvertG Separate←TEX_IMAGE (2026-08-30 1am ET)

@@ -77,6 +77,11 @@
  * Slice 2be: InvertNode → Principled.Roughness (rough_invert_enable /
  *   rough_invert_fac). enable=0 keeps 2ba/2bb/2i bit-identical. Cite
  *   InvertNode set_fac; Color → Roughness NODE_CONVERT_CF (linear_rgb_to_gray).
+ * Slice 2bj: SeparateColorNode channel → Principled.Roughness
+ *   (rough_separate_enable / rough_separate_channel after rough_invert_*).
+ *   enable=0 keeps 2be/2ba/2bb/2i bit-identical. Cite SeparateColorNode
+ *   set_color_type NODE_COMBSEP_COLOR_RGB; channel Red/Green/Blue float →
+ *   Roughness (no NODE_CONVERT_CF). Loft Sideboard: Green ← TEX_IMAGE Color.
  * Slice 2bf: MixColorNode Factor ← FresnelNode (base_mix_fresnel_enable /
  *   base_mix_fresnel_ior). enable=0 keeps 2ay unlinked Fac bit-identical.
  *   Cite shader_nodes.h FresnelNode set_IOR; output Fac. MixColorNode
@@ -397,6 +402,9 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     /* Slice 2be identity — enable=0 skips InvertNode (2ba/2bb/2i bit-identical). */
     d->rough_invert_enable = 0;
     d->rough_invert_fac = 1.0f;
+    /* Slice 2bj identity — enable=0 skips SeparateColorNode. */
+    d->rough_separate_enable = 0;
+    d->rough_separate_channel = 1; /* Green — loft Sideboard default */
     /* Slice 2bc identity — enable=0 skips Noise on Bump Height (2x bit-identical). */
     d->bump_noise_enable = 0;
     d->bump_noise_dimensions = 3;
@@ -761,6 +769,9 @@ static void simple_to_qt(const QT_SimpleScene *s,
     /* Slice 2be: InvertNode → Principled.Roughness. */
     mesh->rough_invert_enable = s->rough_invert_enable;
     mesh->rough_invert_fac = s->rough_invert_fac;
+    /* Slice 2bj: SeparateColorNode channel → Principled.Roughness. */
+    mesh->rough_separate_enable = s->rough_separate_enable;
+    mesh->rough_separate_channel = s->rough_separate_channel;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1387,6 +1398,9 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * else set_fac. enable=0 keeps 2ba bit-identical.
      * Color → Roughness via NODE_CONVERT_CF (linear_rgb_to_gray).
      * n==0 + image: keep 2i (image → Roughness directly).
+     * Slice 2bj: SeparateColorNode when rough_separate_enable≠0 (cite
+     *   SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB; channel
+     *   float → Roughness). enable=0 keeps Color→CF.
      * Slice 2be: InvertNode when rough_invert_enable≠0 (cite InvertNode
      * set_fac). enable=0 keeps 2ba/2bb/2i bit-identical. */
     ShaderOutput *rough_color = nullptr;
@@ -1456,6 +1470,21 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             graph->connect(rough_color, inv->input("Color"));
         }
         graph->connect(inv->output("Color"), bsdf->input("Roughness"));
+    }
+    else if (m->rough_separate_enable != 0 && rough_color) {
+        /* Slice 2bj: TEX/Ramp Color → SeparateColor RGB → channel float → Roughness.
+         * enable=0 keeps 2be/2ba/2i Color→CF path bit-identical. */
+        SeparateColorNode *sep = graph->create_node<SeparateColorNode>();
+        sep->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        graph->connect(rough_color, sep->input("Color"));
+        const char *chan = "Green";
+        if (m->rough_separate_channel == 0) {
+            chan = "Red";
+        }
+        else if (m->rough_separate_channel == 2) {
+            chan = "Blue";
+        }
+        graph->connect(sep->output(chan), bsdf->input("Roughness"));
     }
     else if (rough_color) {
         /* Color → float: ShaderGraph::connect inserts NODE_CONVERT_CF

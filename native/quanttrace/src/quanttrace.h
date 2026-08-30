@@ -95,6 +95,12 @@
  *   (set_fac; Color in-out). Fac unlinked; Color <- TEX_IMAGE or ColorRamp.
  *   Color → Roughness via NODE_CONVERT_CF (linear_rgb_to_gray). Linked Fac /
  *   nested Invert / GROUP / Mix / Noise Color refuse Slice 2be.
+ * Slice 2bj: SeparateColorNode channel → Principled.Roughness
+ *   (rough_separate_enable / rough_separate_channel after rough_invert_*).
+ *   enable=0 skips SeparateColorNode — 2be/2ba/2bb/2i bit-identical.
+ *   channel 0=Red 1=Green 2=Blue (RGB only). Color <- TEX_IMAGE Color.
+ *   Cite SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB;
+ *   float channel → Roughness (no NODE_CONVERT_CF).
  * Slice 2bf: MixColorNode Factor ← FresnelNode (base_mix_fresnel_enable /
  *   base_mix_fresnel_ior after last base_mix_*). enable=0 keeps 2ay unlinked
  *   Fac bit-identical. Cite shader_nodes.h FresnelNode set_IOR; Normal
@@ -651,6 +657,13 @@ typedef struct QT_SimpleScene {
    * Color source is existing 2i TEX_IMAGE or 2ba ColorRamp. */
   int rough_invert_enable;
   float rough_invert_fac;
+  /* Slice 2bj: SeparateColorNode channel -> Principled.Roughness.
+   * enable=0 skips SeparateColorNode — 2be/2ba/2bb/2i bit-identical.
+   * channel 0=Red 1=Green 2=Blue (RGB mode only). Color <- TEX_IMAGE Color
+   * (or Python-folded constant). Cite SeparateColorNode set_color_type
+   * NODE_COMBSEP_COLOR_RGB; float channel -> Roughness (no CF convert). */
+  int rough_separate_enable;
+  int rough_separate_channel;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1050,6 +1063,13 @@ typedef struct QT_Mesh {
    * Color source is existing 2i TEX_IMAGE or 2ba ColorRamp. */
   int rough_invert_enable;
   float rough_invert_fac;
+  /* Slice 2bj: SeparateColorNode channel -> Principled.Roughness.
+   * enable=0 skips SeparateColorNode — 2be/2ba/2bb/2i bit-identical.
+   * channel 0=Red 1=Green 2=Blue (RGB mode only). Color <- TEX_IMAGE Color
+   * (or Python-folded constant). Cite SeparateColorNode set_color_type
+   * NODE_COMBSEP_COLOR_RGB; float channel -> Roughness (no CF convert). */
+  int rough_separate_enable;
+  int rough_separate_channel;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
