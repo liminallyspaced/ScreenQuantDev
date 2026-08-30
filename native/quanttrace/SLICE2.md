@@ -1,10 +1,34 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bj landed** (2026-08-30 2am PlugWalk ET). SEPARATE_COLOR → Principled.Roughness (`rough_separate_enable` / `rough_separate_channel` after `rough_invert_*`). Census: loft Chocofur_Free_Sideboard_01 Roughness ← Separate RGB.Green ← TEX_IMAGE Color (sRGB packed diffuse, Vector unlinked, mode=RGB). 2 loft SEPARATE→Roughness both Green. enable=0 skips SeparateColorNode — 2be/2ba/2bb/2i bit-identical. Cite SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB; channel float → Roughness (no NODE_CONVERT_CF). Constant Separate folds Python-only. HSV/HSL / Invert←Separate / GROUP / Mix named refuse Slice 2bj. Loft Sideboard Roughness SEPARATE cleared. First PACK_FAIL `Principled.Specular Tint link is not TEX_IMAGE (Slice 2f/2h/2i)` (Sideboard Mix→Specular Tint; 5 loft Mix Specular Tint). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.63-slice2bj`. Addon `0.3.3`.
+Status: **Slice 2bk landed** (2026-08-30 3am PlugWalk ET). Mix → Principled.Specular Tint (`specular_tint[3]` + `spec_tint_mix_*` + `spec_tint_gamma` / `spec_tint_hsv_*` after last `spec_tint_*`). Census: loft Sideboard Specular Tint ← Mix RGBA MIX Fac=0.25 clamp_factor, A=const white, B ← HueSat ← Gamma ← TEX_IMAGE (packed diffuse sRGB, Vector unlinked); 5 loft Mix→Specular Tint (2 Sideboard Gamma/HSV chain; 1 Plant const fold; 2 Pot Fac←GROUP refuse). Constant Mix folds Python-only into `specular_tint`. mix_type=0 + identity gamma/hsv + empty path keeps 2u bit-identical. Fac←Fresnel/GROUP/Noise named refuse Slice 2bk; Curves-on-Mix-side refuse. Loft Sideboard Specular Tint Mix cleared. First PACK_FAIL `Principled.Normal Bump Height from 'SEPARATE_COLOR' refused (Slice 2bc)` (Sideboard Bump.Height ← Separate.Blue). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.64-slice2bk`. Addon `0.3.3`.
 
 
 
+## Slice 2bk — Mix → Principled.Specular Tint (2026-08-30 3am ET)
 
+Loft leftover after 2bj (Specular Tint not TEX_IMAGE): object `Chocofur_Free_Sideboard_01` / material `Chocofur_Free_Sideboard_01.001`. Principled.Specular Tint ← Mix RGBA MIX clamp_factor, Fac unlinked **0.25**. A = const white (1,1,1). B ← HueSat (H=0.51, S=0.9, V=0.8, Fac=1) ← Gamma (1.2) ← TEX_IMAGE Color (`Chocofur_Free_Sideboard_01_diff_01.jpg` packed sRGB, Vector unlinked). Twin material `Chocofur_Free_Sideboard_01` same on `diff_02.jpg`. Census: 5 loft Mix→Specular Tint — 2 Sideboard Gamma/HSV+TEX chain; 1 Plant_RedChilli both-unlinked const fold; 2 Pot_WickerShell Fac←GROUP (named refuse). Claim cube matches Sideboard Mix+Gamma+HSV+TEX.
+
+Cite Cycles `shader_nodes.h` MixColorNode / GammaNode / HSVNode. mix_type=0 + gamma=1 + HSV identity + empty image → set_specular_tint only (2u bit-identical). Constant both-unlinked Mix folds into `specular_tint` (Python-only). Fac linked / Curves-on-Mix-side named refuse Slice 2bk.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| Sideboard CLAIM | 32²/4 | 7.45e-9 | 9.63e-11 | 0 | **PASS** |
+| Sideboard CLAIM | 256²/128 | 7.45e-9 | 5.45e-11 | 0 | **PASS** |
+| fold const | 32²/4 | 7.45e-9 | — | 0 | **PASS** |
+| mix one-side TEX | 32²/4 | 9.31e-9 | — | 0 | **PASS** |
+| mix_dual | 32²/4 | 9.31e-9 | — | 0 | **PASS** |
+| tex 2u | 32²/4 | 4.77e-7 | — | 0 | **PASS** |
+| mix 2ay | 32²/4 | 5.36e-7 | — | 0 | **PASS** |
+| separate 2bj | 32²/4 | 3.58e-7 | — | 0 | **PASS** |
+| invert 2be | 32²/4 | 4.77e-7 | — | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | — | 0 | **PASS** |
+| Fac←Fresnel / VALUE | — | — | — | — | **REFUSE** Slice 2bk |
+
+Loft pack: Sideboard Specular Tint Mix+Gamma+HSV accepted (const fold + GROUP Fac leftovers). First PACK_FAIL `Principled.Normal Bump Height from 'SEPARATE_COLOR' refused (Slice 2bc)` — object `Chocofur_Free_Sideboard_01` / material `Chocofur_Free_Sideboard_01.001` (Bump.Height ← Separate.Blue). Next: Bump Height ← SEPARATE_COLOR / leftover Fac←GROUP Specular Tint / GROUP/Botaniq. Not loft Session Δmax.
+
+ABI: `specular_tint[3]` + `spec_tint_mix_{type,fac,other,chain_is_a,clamp_factor,clamp_result,b_image_path,b_image_colorspace}` + `spec_tint_gamma` / `spec_tint_hsv_{hue,sat,val,fac}` after last `spec_tint_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults (1,1,1) / type0 / gamma1 / HSV identity. Native `0.0.64-slice2bk`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-spec-tint-mix-32-pair.png`. Tools `_quanttrace_slice2bk_scene/smoke.py` + `_quanttrace_slice2bk_census.py`.
 
 
 ## Slice 2bj — SEPARATE_COLOR → Principled.Roughness (2026-08-30 2am ET)

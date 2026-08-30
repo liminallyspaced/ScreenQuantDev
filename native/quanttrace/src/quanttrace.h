@@ -430,6 +430,26 @@ typedef struct QT_SimpleScene {
   float spec_tint_map_rotation[3];
   float spec_tint_map_scale[3];
   int spec_tint_map_type;
+  /* Slice 2bk: Specular Tint RGB (Cycles default 1,1,1). Constant Mix folds
+   * here (Python-only). Mix chain fallback when mix_type!=0 and no TEX_IMAGE. */
+  float specular_tint[3];
+  /* Slice 2bk: MixColorNode → Specular Tint (subset of base_mix_*; no fresnel/curves).
+   * type 0 = skip Mix — 2u TEX_IMAGE / constant bit-identical. */
+  int spec_tint_mix_type;
+  float spec_tint_mix_fac;
+  float spec_tint_mix_other[3];
+  int spec_tint_mix_chain_is_a;
+  int spec_tint_mix_clamp_factor;
+  int spec_tint_mix_clamp_result;
+  const char *spec_tint_mix_b_image_path;
+  const char *spec_tint_mix_b_image_colorspace;
+  /* Slice 2bk: Gamma + HueSat on Specular Tint chain (before Mix). Identity
+   * (gamma=1, hue=0.5, sat=1, val=1, fac=1) skips — 2u bit-identical. */
+  float spec_tint_gamma;
+  float spec_tint_hsv_hue;
+  float spec_tint_hsv_sat;
+  float spec_tint_hsv_val;
+  float spec_tint_hsv_fac;
   /* Slice 2u: Thin Film Thickness TEX_IMAGE (NULL/empty = constant 0) */
   const char *film_thick_image_path;
   const char *film_thick_image_colorspace;
@@ -845,6 +865,26 @@ typedef struct QT_Mesh {
   float spec_tint_map_rotation[3];
   float spec_tint_map_scale[3];
   int spec_tint_map_type;
+  /* Slice 2bk: Specular Tint RGB (Cycles default 1,1,1). Constant Mix folds
+   * here (Python-only). Mix chain fallback when mix_type!=0 and no TEX_IMAGE. */
+  float specular_tint[3];
+  /* Slice 2bk: MixColorNode → Specular Tint (subset of base_mix_*; no fresnel/curves).
+   * type 0 = skip Mix — 2u TEX_IMAGE / constant bit-identical. */
+  int spec_tint_mix_type;
+  float spec_tint_mix_fac;
+  float spec_tint_mix_other[3];
+  int spec_tint_mix_chain_is_a;
+  int spec_tint_mix_clamp_factor;
+  int spec_tint_mix_clamp_result;
+  const char *spec_tint_mix_b_image_path;
+  const char *spec_tint_mix_b_image_colorspace;
+  /* Slice 2bk: Gamma + HueSat on Specular Tint chain (before Mix). Identity
+   * (gamma=1, hue=0.5, sat=1, val=1, fac=1) skips — 2u bit-identical. */
+  float spec_tint_gamma;
+  float spec_tint_hsv_hue;
+  float spec_tint_hsv_sat;
+  float spec_tint_hsv_val;
+  float spec_tint_hsv_fac;
   /* Slice 2u: Thin Film Thickness TEX_IMAGE (NULL/empty = constant 0) */
   const char *film_thick_image_path;
   const char *film_thick_image_colorspace;

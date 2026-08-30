@@ -23,6 +23,10 @@
  * Slice 2r: TEX_IMAGE → Principled Emission Color (legacy Emission).
  * Slice 2s: Coat/Sheen extras TEX_IMAGE.
  * Slice 2t: Normal Map (Tangent) + TEX_IMAGE → Principled Coat Normal.
+ * Slice 2bk: MixColorNode → Principled Specular Tint (spec_tint_mix_*).
+ *   type 0 skips Mix — 2u TEX_IMAGE / specular_tint constant bit-identical.
+ *   Constant Mix folds Python-only into specular_tint[3]. Fac←Fresnel/GROUP/
+ *   Curves-on-Mix-side named refuse Slice 2bk (not in loft Specular Tint census).
  * Slice 2u: TEX_IMAGE → Principled Specular Tint / Thin Film Thickness+IOR /
  *   Subsurface Weight / Radius / Scale.
  * Slice 2w: TEX_IMAGE → Principled Anisotropic / Rotation / Tangent.
@@ -405,6 +409,21 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     /* Slice 2bj identity — enable=0 skips SeparateColorNode. */
     d->rough_separate_enable = 0;
     d->rough_separate_channel = 1; /* Green — loft Sideboard default */
+    /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
+    d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
+    d->spec_tint_mix_type = 0;
+    d->spec_tint_mix_fac = 0.5f;
+    d->spec_tint_mix_other[0] = d->spec_tint_mix_other[1] = d->spec_tint_mix_other[2] = 0.0f;
+    d->spec_tint_mix_chain_is_a = 1;
+    d->spec_tint_mix_clamp_factor = 0;
+    d->spec_tint_mix_clamp_result = 0;
+    d->spec_tint_mix_b_image_path = nullptr;
+    d->spec_tint_mix_b_image_colorspace = nullptr;
+    d->spec_tint_gamma = 1.0f;
+    d->spec_tint_hsv_hue = 0.5f;
+    d->spec_tint_hsv_sat = 1.0f;
+    d->spec_tint_hsv_val = 1.0f;
+    d->spec_tint_hsv_fac = 1.0f;
     /* Slice 2bc identity — enable=0 skips Noise on Bump Height (2x bit-identical). */
     d->bump_noise_enable = 0;
     d->bump_noise_dimensions = 3;
@@ -594,6 +613,20 @@ static void simple_to_qt(const QT_SimpleScene *s,
     std::memcpy(mesh->spec_tint_map_rotation, s->spec_tint_map_rotation, sizeof(mesh->spec_tint_map_rotation));
     std::memcpy(mesh->spec_tint_map_scale, s->spec_tint_map_scale, sizeof(mesh->spec_tint_map_scale));
     mesh->spec_tint_map_type = s->spec_tint_map_type;
+    std::memcpy(mesh->specular_tint, s->specular_tint, sizeof(mesh->specular_tint));
+    mesh->spec_tint_mix_type = s->spec_tint_mix_type;
+    mesh->spec_tint_mix_fac = s->spec_tint_mix_fac;
+    std::memcpy(mesh->spec_tint_mix_other, s->spec_tint_mix_other, sizeof(mesh->spec_tint_mix_other));
+    mesh->spec_tint_mix_chain_is_a = s->spec_tint_mix_chain_is_a;
+    mesh->spec_tint_mix_clamp_factor = s->spec_tint_mix_clamp_factor;
+    mesh->spec_tint_mix_clamp_result = s->spec_tint_mix_clamp_result;
+    mesh->spec_tint_mix_b_image_path = s->spec_tint_mix_b_image_path;
+    mesh->spec_tint_mix_b_image_colorspace = s->spec_tint_mix_b_image_colorspace;
+    mesh->spec_tint_gamma = s->spec_tint_gamma;
+    mesh->spec_tint_hsv_hue = s->spec_tint_hsv_hue;
+    mesh->spec_tint_hsv_sat = s->spec_tint_hsv_sat;
+    mesh->spec_tint_hsv_val = s->spec_tint_hsv_val;
+    mesh->spec_tint_hsv_fac = s->spec_tint_hsv_fac;
     mesh->film_thick_image_path = s->film_thick_image_path;
     mesh->film_thick_image_colorspace = s->film_thick_image_colorspace;
     mesh->film_thick_tex_vector_mode = s->film_thick_tex_vector_mode;
@@ -1785,12 +1818,95 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * Pin subsurface_weight=1 when Radius/Scale map and Weight is unmapped.
      * Pin thin_film_thickness=400 nm when Film IOR maps and Thickness is unmapped
      * (Cycles default thickness is 0 = no film). */
-    if (m->spec_tint_image_path && m->spec_tint_image_path[0]) {
-        ImageTextureNode *img = wire_tex_image(
-            graph.get(), m, m->spec_tint_image_path, m->spec_tint_image_colorspace,
-            m->spec_tint_tex_vector_mode, m->spec_tint_map_location,
-            m->spec_tint_map_rotation, m->spec_tint_map_scale, m->spec_tint_map_type);
-        graph->connect(img->output("Color"), bsdf->input("Specular Tint"));
+    /* Slice 2bk: specular_tint constant + optional MixColorNode + optional TEX_IMAGE.
+     * mix_type==0 && no image → set_specular_tint only (2u unlinked / constant fold).
+     * mix_type==0 && image → TEX_IMAGE Color → Specular Tint (2u).
+     * mix_type!=0 → Color chain (± dual B image) → Mix → Specular Tint. */
+    {
+        const float3 stint = make_float3(m->specular_tint[0], m->specular_tint[1],
+                                         m->specular_tint[2]);
+        bsdf->set_specular_tint(stint);
+        const bool use_st_mix = (m->spec_tint_mix_type != 0);
+        ShaderOutput *cur = nullptr;
+        if (m->spec_tint_image_path && m->spec_tint_image_path[0]) {
+            ImageTextureNode *img = wire_tex_image(
+                graph.get(), m, m->spec_tint_image_path, m->spec_tint_image_colorspace,
+                m->spec_tint_tex_vector_mode, m->spec_tint_map_location,
+                m->spec_tint_map_rotation, m->spec_tint_map_scale, m->spec_tint_map_type);
+            cur = img->output("Color");
+        }
+        /* Slice 2bk: Gamma + HSV on Specular Tint chain (loft Sideboard:
+         * TEX → Gamma → HueSat → Mix B). Identity skips — 2u bit-identical. */
+        const bool use_st_gamma = (m->spec_tint_gamma != 1.0f);
+        const bool use_st_hsv = !(m->spec_tint_hsv_hue == 0.5f &&
+                                  m->spec_tint_hsv_sat == 1.0f &&
+                                  m->spec_tint_hsv_val == 1.0f &&
+                                  m->spec_tint_hsv_fac == 1.0f);
+        if (use_st_gamma) {
+            GammaNode *g = graph->create_node<GammaNode>();
+            g->set_gamma(m->spec_tint_gamma);
+            if (cur) {
+                graph->connect(cur, g->input("Color"));
+            }
+            else {
+                g->set_color(stint);
+            }
+            cur = g->output("Color");
+        }
+        if (use_st_hsv) {
+            HSVNode *h = graph->create_node<HSVNode>();
+            h->set_hue(m->spec_tint_hsv_hue);
+            h->set_saturation(m->spec_tint_hsv_sat);
+            h->set_value(m->spec_tint_hsv_val);
+            h->set_fac(m->spec_tint_hsv_fac);
+            if (cur) {
+                graph->connect(cur, h->input("Color"));
+            }
+            else {
+                h->set_color(stint);
+            }
+            cur = h->output("Color");
+        }
+        if (use_st_mix) {
+            MixColorNode *mx = graph->create_node<MixColorNode>();
+            mx->set_blend_type(world_mix_blend_type(m->spec_tint_mix_type));
+            mx->set_fac(m->spec_tint_mix_fac);
+            mx->set_use_clamp(m->spec_tint_mix_clamp_factor != 0);
+            mx->set_use_clamp_result(m->spec_tint_mix_clamp_result != 0);
+            ShaderOutput *b_cur = nullptr;
+            if (m->spec_tint_mix_b_image_path && m->spec_tint_mix_b_image_path[0]) {
+                ImageTextureNode *img_b = wire_tex_image(
+                    graph.get(), m, m->spec_tint_mix_b_image_path,
+                    m->spec_tint_mix_b_image_colorspace,
+                    m->spec_tint_tex_vector_mode, m->spec_tint_map_location,
+                    m->spec_tint_map_rotation, m->spec_tint_map_scale,
+                    m->spec_tint_map_type);
+                b_cur = img_b->output("Color");
+            }
+            const float3 other = make_float3(m->spec_tint_mix_other[0],
+                                             m->spec_tint_mix_other[1],
+                                             m->spec_tint_mix_other[2]);
+            ShaderOutput *a_src = m->spec_tint_mix_chain_is_a ? cur : b_cur;
+            ShaderOutput *b_src = m->spec_tint_mix_chain_is_a ? b_cur : cur;
+            const float3 a_fb = m->spec_tint_mix_chain_is_a ? stint : other;
+            const float3 b_fb = m->spec_tint_mix_chain_is_a ? other : stint;
+            if (a_src) {
+                graph->connect(a_src, mx->input("A"));
+            }
+            else {
+                mx->set_a(a_fb);
+            }
+            if (b_src) {
+                graph->connect(b_src, mx->input("B"));
+            }
+            else {
+                mx->set_b(b_fb);
+            }
+            graph->connect(mx->output("Result"), bsdf->input("Specular Tint"));
+        }
+        else if (cur) {
+            graph->connect(cur, bsdf->input("Specular Tint"));
+        }
     }
     if (m->film_thick_image_path && m->film_thick_image_path[0]) {
         ImageTextureNode *img = wire_tex_image(

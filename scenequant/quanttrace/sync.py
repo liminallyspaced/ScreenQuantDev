@@ -2341,22 +2341,22 @@ def _try_pack_mix_side_curves_tex(sock, ctx: str):
     return tex, ident
 
 
-def _fold_constant_mix_base_rgb(mix_node, ctx: str):
-    """Fold both-unlinked constant Mix into Base Color RGB (prefer over Mix ABI)."""
+def _fold_constant_mix_rgb(mix_node, ctx: str, sock_label: str = "Base Color", slice_tag: str = "Slice 2ay"):
+    """Fold both-unlinked constant Mix into RGB (prefer over Mix ABI)."""
     fac_sock, a_sock, b_sock = _mix_input_socks(mix_node)
     if fac_sock is None or a_sock is None or b_sock is None:
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color constant Mix missing Fac/A/B (Slice 2ay)"
+            f"{ctx} Principled.{sock_label} constant Mix missing Fac/A/B ({slice_tag})"
         )
     if getattr(fac_sock, "is_linked", False):
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color Mix Factor is linked refused (Slice 2ay)"
+            f"{ctx} Principled.{sock_label} Mix Factor is linked refused ({slice_tag})"
         )
     op = str(getattr(mix_node, "blend_type", "MIX") or "MIX")
     if op not in _WORLD_STRENGTH_MIX_OPS:
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color Mix blend_type {op!r} refused "
-            f"(Slice 2ay: MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only)"
+            f"{ctx} Principled.{sock_label} Mix blend_type {op!r} refused "
+            f"({slice_tag}: MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only)"
         )
     fac = float(getattr(fac_sock, "default_value", 0.5) or 0.0)
     if bool(getattr(mix_node, "clamp_factor", False)):
@@ -2388,7 +2388,7 @@ def _fold_constant_mix_base_rgb(mix_node, ctx: str):
         out = tuple(out)
     else:
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color Mix fold unsupported (Slice 2ay)"
+            f"{ctx} Principled.{sock_label} Mix fold unsupported ({slice_tag})"
         )
     if bool(
         getattr(mix_node, "clamp_result", False)
@@ -2396,6 +2396,362 @@ def _fold_constant_mix_base_rgb(mix_node, ctx: str):
     ):
         out = tuple(min(1.0, max(0.0, c)) for c in out)
     return out
+
+
+def _fold_constant_mix_base_rgb(mix_node, ctx: str):
+    """Compat wrapper — Base Color constant Mix fold (Slice 2ay)."""
+    return _fold_constant_mix_rgb(mix_node, ctx, "Base Color", "Slice 2ay")
+
+
+def _spec_tint_mix_identity():
+    """Slice 2bk identity — skip MixColorNode on Principled Specular Tint (2u bit-identical)."""
+    return {
+        "spec_tint_mix_type": 0,
+        "spec_tint_mix_fac": 0.5,
+        "spec_tint_mix_other": (0.0, 0.0, 0.0),
+        "spec_tint_mix_chain_is_a": 1,
+        "spec_tint_mix_clamp_factor": 0,
+        "spec_tint_mix_clamp_result": 0,
+        "spec_tint_mix_b_image_path": "",
+        "spec_tint_mix_b_image_colorspace": "",
+        "spec_tint_gamma": 1.0,
+        "spec_tint_hsv_hue": 0.5,
+        "spec_tint_hsv_sat": 1.0,
+        "spec_tint_hsv_val": 1.0,
+        "spec_tint_hsv_fac": 1.0,
+    }
+
+
+def _peel_spec_tint_mix(from_node, from_sock, ctx: str):
+    """Peel Mix immediately on Principled Specular Tint (Slice 2bk).
+
+    Slim reuse of Base Color Mix shapes (2ay): constant fold / one-side TEX +
+    const / dual TEX_IMAGE. Fac linked (Fresnel/GROUP/Noise/…) and Curves-on-
+    Mix-side named refuse Slice 2bk — loft Specular Tint census is constant-only
+    Mix (Sideboard) plus Fac←GROUP (Botaniq pots).
+
+    Returns (from_node, from_sock, mix_dict, dual_b_tex_or_None, folded_rgb_or_None).
+    folded_rgb set when both-unlinked constant Mix (mix_type stays 0).
+    """
+    mix = dict(_spec_tint_mix_identity())
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype not in ("MIX", "MIX_RGB"):
+        return from_node, from_sock, mix, None, None
+    if ntype == "MIX":
+        data_type = str(getattr(from_node, "data_type", "FLOAT") or "FLOAT")
+        if data_type in ("VECTOR", "ROTATION"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Specular Tint Mix data_type {data_type!r} refused "
+                "(Slice 2bk: ShaderNodeMix RGBA / MixRGB only)"
+            )
+        if data_type == "FLOAT":
+            return from_node, from_sock, mix, None, None
+        if data_type not in ("RGBA", "COLOR"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Specular Tint Mix data_type {data_type!r} refused "
+                "(Slice 2bk: RGBA / MixRGB only)"
+            )
+    op = str(getattr(from_node, "blend_type", "MIX") or "MIX")
+    if op not in _WORLD_STRENGTH_MIX_OPS:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint Mix blend_type {op!r} refused "
+            "(Slice 2bk: MIX/ADD/SUBTRACT/MULTIPLY/DIVIDE only)"
+        )
+    fac_sock, a_sock, b_sock = _mix_input_socks(from_node)
+    if fac_sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint Mix missing Factor (Slice 2bk)"
+        )
+    if getattr(fac_sock, "is_linked", False):
+        flinks = list(getattr(fac_sock, "links", None) or [])
+        ftype = None
+        if len(flinks) == 1:
+            fnode = getattr(flinks[0], "from_node", None)
+            fsock = getattr(flinks[0], "from_socket", None)
+            fnode, fsock = _peel_reroute(fnode, fsock)
+            ftype = getattr(fnode, "type", None) if fnode is not None else None
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint Mix Factor from {ftype!r} refused "
+            "(Slice 2bk: unlinked Fac only; Fresnel/GROUP/TEX_IMAGE/Noise/"
+            "LayerWeight/Geometry/Invert still refuse)"
+        )
+    a_linked = bool(getattr(a_sock, "is_linked", False)) if a_sock is not None else False
+    b_linked = bool(getattr(b_sock, "is_linked", False)) if b_sock is not None else False
+    clamp_factor = bool(getattr(from_node, "clamp_factor", False))
+    clamp_result = bool(
+        getattr(from_node, "clamp_result", False)
+        or getattr(from_node, "use_clamp", False)
+    )
+    fac = 0.5
+    if getattr(fac_sock, "default_value", None) is not None:
+        fac = float(fac_sock.default_value)
+    if clamp_factor:
+        fac = min(1.0, max(0.0, fac))
+
+    if not a_linked and not b_linked:
+        folded = _fold_constant_mix_rgb(from_node, ctx, "Specular Tint", "Slice 2bk")
+        return None, None, mix, None, folded
+
+    if a_linked and b_linked:
+        tex_a = _mix_side_tex_node(a_sock)
+        tex_b = _mix_side_tex_node(b_sock)
+        if tex_a is not None and tex_b is not None:
+            key_a = _tex_vector_source_key(tex_a)
+            key_b = _tex_vector_source_key(tex_b)
+            if key_a != key_b:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Specular Tint Mix dual TEX_IMAGE Vector graphs differ "
+                    "(Slice 2bk: shared unlinked UV / same Mapping / same TEX_COORD only)"
+                )
+            mix["spec_tint_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+            mix["spec_tint_mix_fac"] = float(fac)
+            mix["spec_tint_mix_other"] = (0.0, 0.0, 0.0)
+            mix["spec_tint_mix_chain_is_a"] = 1
+            mix["spec_tint_mix_clamp_factor"] = 1 if clamp_factor else 0
+            mix["spec_tint_mix_clamp_result"] = 1 if clamp_result else 0
+            return tex_a, _tex_color_out_sock(tex_a), mix, tex_b, None
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint Mix both sides linked refused "
+            "(Slice 2bk: dual TEX_IMAGE Color or constant fold; "
+            "Curves/Fresnel/nested Mix still refuse)"
+        )
+
+    chain_is_a = 1 if a_linked else 0
+    other_sock = b_sock if a_linked else a_sock
+    chain_sock = a_sock if a_linked else b_sock
+    if other_sock is None or chain_sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint Mix missing A/B (Slice 2bk)"
+        )
+    links0 = list(getattr(chain_sock, "links", None) or [])
+    if len(links0) == 1:
+        cn = getattr(links0[0], "from_node", None)
+        cs = getattr(links0[0], "from_socket", None)
+        cn, cs = _peel_reroute(cn, cs)
+        if getattr(cn, "type", None) == "CURVE_RGB":
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Specular Tint Mix Curves-on-Mix-side refused "
+                "(Slice 2bk: TEX_IMAGE / constant only; Curves still refuse)"
+            )
+    stype = getattr(other_sock, "type", None)
+    dv = getattr(other_sock, "default_value", None)
+    if stype == "RGBA" or (hasattr(dv, "__len__") and not isinstance(dv, (str, bytes))):
+        try:
+            other = (float(dv[0]), float(dv[1]), float(dv[2]))
+        except (TypeError, IndexError, ValueError) as e:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Specular Tint Mix other side not constant RGB "
+                "(Slice 2bk)"
+            ) from e
+    else:
+        try:
+            v = float(dv) if dv is not None else 0.0
+        except (TypeError, ValueError) as e:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Specular Tint Mix other side not constant "
+                "(Slice 2bk)"
+            ) from e
+        other = (v, v, v)
+    mix["spec_tint_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+    mix["spec_tint_mix_fac"] = float(fac)
+    mix["spec_tint_mix_other"] = other
+    mix["spec_tint_mix_chain_is_a"] = int(chain_is_a)
+    mix["spec_tint_mix_clamp_factor"] = 1 if clamp_factor else 0
+    mix["spec_tint_mix_clamp_result"] = 1 if clamp_result else 0
+    links = list(getattr(chain_sock, "links", None) or [])
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint Mix chain multi-link refused (Slice 2bk)"
+        )
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    return fn, fs, mix, None, None
+
+
+
+def _peel_spec_tint_gamma_hsv(from_node, from_sock, ctx: str):
+    """Peel one unlinked Gamma + HueSat on Specular Tint chain (Slice 2bk).
+
+    Returns (from_node, from_sock, unlinked_rgb_or_None, gh_dict).
+    RGB Curves refuse. Always peel REROUTE first.
+    """
+    gh = {
+        "spec_tint_gamma": 1.0,
+        "spec_tint_hsv_hue": 0.5,
+        "spec_tint_hsv_sat": 1.0,
+        "spec_tint_hsv_val": 1.0,
+        "spec_tint_hsv_fac": 1.0,
+    }
+    seen_gamma = False
+    seen_hsv = False
+    unlinked_rgb = None
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    for _hop in range(3):
+        ntype = getattr(from_node, "type", None) if from_node is not None else None
+        if ntype == "GAMMA":
+            if seen_gamma:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Specular Tint second Gamma refused (Slice 2bk)"
+                )
+            gh["spec_tint_gamma"] = _require_unlinked_float_mesh(
+                from_node, ("Gamma",), "Gamma.Gamma", ctx
+            )
+            # Fix label in error by catching — _require says Base Color. Inline instead:
+            seen_gamma = True
+            from_node, from_sock, unlinked_rgb = _gamma_hsv_color_source_mesh(from_node, ctx)
+            if unlinked_rgb is not None:
+                break
+            continue
+        if ntype == "HUE_SAT":
+            if seen_hsv:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Specular Tint second HueSat refused (Slice 2bk)"
+                )
+            gh["spec_tint_hsv_hue"] = _require_unlinked_float_mesh(
+                from_node, ("Hue",), "HueSat.Hue", ctx
+            )
+            gh["spec_tint_hsv_sat"] = _require_unlinked_float_mesh(
+                from_node, ("Saturation",), "HueSat.Saturation", ctx
+            )
+            gh["spec_tint_hsv_val"] = _require_unlinked_float_mesh(
+                from_node, ("Value",), "HueSat.Value", ctx
+            )
+            gh["spec_tint_hsv_fac"] = _require_unlinked_float_mesh(
+                from_node, ("Fac", "Factor"), "HueSat.Fac", ctx
+            )
+            seen_hsv = True
+            from_node, from_sock, unlinked_rgb = _gamma_hsv_color_source_mesh(from_node, ctx)
+            if unlinked_rgb is not None:
+                break
+            continue
+        if ntype == "CURVE_RGB":
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Specular Tint RGB Curves refused "
+                "(Slice 2bk: Gamma/HueSat only; Curves still refuse)"
+            )
+        break
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    return from_node, from_sock, unlinked_rgb, gh
+
+def _spec_tint_tex_and_mix(sock, *, object_name: str = "", mat=None):
+    """Principled Specular Tint: peel REROUTE + Mix then TEX_IMAGE / constant fold.
+
+    Returns (tex_info_with_mix, specular_tint_rgb).
+    specular_tint_rgb is always a float3 (default 1,1,1 or fold / socket default).
+    """
+    ctx = _mat_refuse_ctx(object_name, mat)
+    empty = _empty_tex_info()
+    mix = dict(_spec_tint_mix_identity())
+    default_tint = (1.0, 1.0, 1.0)
+    if sock is not None and not getattr(sock, "is_linked", False):
+        dv = getattr(sock, "default_value", None)
+        if hasattr(dv, "__len__") and not isinstance(dv, (str, bytes)):
+            try:
+                default_tint = (float(dv[0]), float(dv[1]), float(dv[2]))
+            except (TypeError, IndexError, ValueError):
+                pass
+        return {**empty, **mix}, default_tint
+    if sock is None or not getattr(sock, "is_linked", False):
+        return {**empty, **mix}, default_tint
+    links = list(getattr(sock, "links", None) or [])
+    if not links:
+        return {**empty, **mix}, default_tint
+    if len(links) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint has multiple links (Slice 2bk)"
+        )
+    from_node = getattr(links[0], "from_node", None)
+    from_sock = getattr(links[0], "from_socket", None)
+    from_node, from_sock = _peel_reroute(from_node, from_sock)
+    from_node, from_sock, mix, dual_b, folded = _peel_spec_tint_mix(
+        from_node, from_sock, ctx
+    )
+    if folded is not None:
+        return {**empty, **mix}, folded
+    # Slice 2bk: peel Gamma + HueSat on Mix chain (loft Sideboard:
+    # TEX → Gamma → HueSat → Mix B). Reuse Base Color peel helpers with
+    # Specular Tint labels; drop Curves (named refuse if present).
+    ntype0 = getattr(from_node, "type", None) if from_node is not None else None
+    if ntype0 in ("GAMMA", "HUE_SAT", "CURVE_RGB"):
+        from_node, from_sock, unlinked_rgb, gh = _peel_spec_tint_gamma_hsv(
+            from_node, from_sock, ctx
+        )
+        mix.update(gh)
+        if unlinked_rgb is not None:
+            # Constant under Gamma/HSV on Mix chain → fold into specular_tint via
+            # Mix other/chain: treat as chain const by setting specular_tint and
+            # keeping Mix (A/B const already peeled). For one-side Mix, chain const
+            # means both sides constant after fold — recompute.
+            if int(mix.get("spec_tint_mix_type", 0) or 0) != 0:
+                # Chain was linked; now constant — fold Mix with other + this const.
+                other = tuple(mix.get("spec_tint_mix_other") or (0.0, 0.0, 0.0))
+                chain_is_a = int(mix.get("spec_tint_mix_chain_is_a", 1) or 1)
+                fac = float(mix.get("spec_tint_mix_fac", 0.5))
+                a = unlinked_rgb if chain_is_a else other
+                b = other if chain_is_a else unlinked_rgb
+                # Only MIX blend for this fold path (Sideboard).
+                op_t = int(mix.get("spec_tint_mix_type", 1) or 1)
+                if op_t == 1:  # MIX
+                    folded2 = tuple((1.0 - fac) * a[i] + fac * b[i] for i in range(3))
+                else:
+                    raise QuantTraceSyncError(
+                        f"{ctx} Principled.Specular Tint Mix constant-chain fold "
+                        f"unsupported blend type {op_t} (Slice 2bk)"
+                    )
+                if int(mix.get("spec_tint_mix_clamp_result", 0) or 0):
+                    folded2 = tuple(min(1.0, max(0.0, c)) for c in folded2)
+                return {**empty, **_spec_tint_mix_identity()}, folded2
+            return {**empty, **mix}, unlinked_rgb
+    ntype = getattr(from_node, "type", None) if from_node is not None else None
+    if (
+        mix.get("spec_tint_mix_type", 0) == 0
+        and dual_b is None
+        and ntype in ("MIX", "MIX_RGB")
+    ):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint from {ntype!r} refused "
+            "(Slice 2bk: RGBA Mix chain / dual TEX_IMAGE / constant fold only)"
+        )
+    if ntype == "TEX_IMAGE":
+        sock_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
+        if sock_name not in ("Color", "color"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Specular Tint must come from Image Texture Color "
+                f"(Slice 2bk; got {sock_name!r})"
+            )
+        tex = _tex_image_from_tex_node(from_node, from_sock, "Specular Tint", ctx)
+        if dual_b is not None:
+            img = getattr(dual_b, "image", None)
+            if img is None:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Specular Tint Mix B TEX_IMAGE has no image "
+                    "(Slice 2bk)"
+                )
+            path = _abspath_image(img)
+            if not path:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Specular Tint Mix B TEX_IMAGE has no filepath "
+                    "(Slice 2bk)"
+                )
+            cs = ""
+            settings = getattr(img, "colorspace_settings", None)
+            if settings is not None:
+                cs = str(getattr(settings, "name", "") or "")
+            mix["spec_tint_mix_b_image_path"] = path
+            mix["spec_tint_mix_b_image_colorspace"] = cs
+        return {**tex, **mix}, default_tint
+    if ntype in ("MIX", "MIX_RGB"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Specular Tint from {ntype!r} refused "
+            "(Slice 2bk: second Mix / unsupported Mix shape)"
+        )
+    raise QuantTraceSyncError(
+        f"{ctx} Principled.Specular Tint link is not TEX_IMAGE "
+        f"(Slice 2bk; got {ntype!r})"
+    )
+
 
 
 def _peel_base_color_mix(from_node, from_sock, ctx: str):
@@ -3050,6 +3406,8 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         **_prefix_tex(_empty_tex_info(), "sheen_tint_"),
         **_empty_normal_info("coat_normal_"),
         **_prefix_tex(_empty_tex_info(), "spec_tint_"),
+        **_spec_tint_mix_identity(),
+        "specular_tint": (1.0, 1.0, 1.0),
         **_prefix_tex(_empty_tex_info(), "film_thick_"),
         **_prefix_tex(_empty_tex_info(), "film_ior_"),
         **_prefix_tex(_empty_tex_info(), "sss_weight_"),
@@ -3133,6 +3491,11 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         roughness_folded = rough_ramp.pop("roughness_folded", None)
     else:
         rough_ramp = _empty_rough_ramp_info()
+    # Slice 2bk: Specular Tint peels REROUTE + Mix then TEX_IMAGE / constant fold.
+    _st_name, spec_tint_sock = _input_by_names(bsdf, "Specular Tint")
+    spec_tint_tex, specular_tint_rgb = _spec_tint_tex_and_mix(
+        spec_tint_sock, object_name=object_name, mat=mat
+    )
     # 5.x names first; legacy Transmission / Specular / Coat / Sheen / Emission accepted.
     # Base Color handled above (2ax) — do not call TEX_IMAGE-only packer on it.
     # Roughness handled above (2ba) — do not call TEX_IMAGE-only packer on it.
@@ -3151,7 +3514,6 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         ("Coat Tint", ("Coat Tint",), "coat_tint"),
         ("Sheen Roughness", ("Sheen Roughness",), "sheen_rough"),
         ("Sheen Tint", ("Sheen Tint",), "sheen_tint"),
-        ("Specular Tint", ("Specular Tint",), "spec_tint"),
         ("Thin Film Thickness", ("Thin Film Thickness",), "film_thick"),
         ("Thin Film IOR", ("Thin Film IOR",), "film_ior"),
         ("Subsurface Weight", ("Subsurface Weight", "Subsurface"), "sss_weight"),
@@ -3197,8 +3559,6 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
             sheen_rough_tex = tex
         elif kind == "sheen_tint":
             sheen_tint_tex = tex
-        elif kind == "spec_tint":
-            spec_tint_tex = tex
         elif kind == "film_thick":
             film_thick_tex = tex
         elif kind == "film_ior":
@@ -3282,6 +3642,15 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         **_prefix_tex(sheen_tint_tex, "sheen_tint_"),
         **coat_normal_info,
         **_prefix_tex(spec_tint_tex, "spec_tint_"),
+        **{
+            k: v for k, v in spec_tint_tex.items()
+            if str(k).startswith("spec_tint_mix_")
+            or str(k) in (
+                "spec_tint_gamma", "spec_tint_hsv_hue", "spec_tint_hsv_sat",
+                "spec_tint_hsv_val", "spec_tint_hsv_fac",
+            )
+        },
+        "specular_tint": specular_tint_rgb,
         **_prefix_tex(film_thick_tex, "film_thick_"),
         **_prefix_tex(film_ior_tex, "film_ior_"),
         **_prefix_tex(sss_weight_tex, "sss_weight_"),
@@ -5268,6 +5637,44 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         "spec_tint_map_rotation": loc("spec_tint_map_rotation", (0.0, 0.0, 0.0)),
         "spec_tint_map_scale": loc("spec_tint_map_scale", (1.0, 1.0, 1.0)),
         "spec_tint_map_type": int(pr.get("spec_tint_map_type", 2) if pr.get("spec_tint_map_type") is not None else 2),
+        "specular_tint": tuple(
+            float(x) for x in (pr.get("specular_tint") or (1.0, 1.0, 1.0))[:3]
+        ),
+        "spec_tint_mix_type": int(
+            pr["spec_tint_mix_type"] if pr.get("spec_tint_mix_type") is not None else 0
+        ),
+        "spec_tint_mix_fac": float(
+            pr["spec_tint_mix_fac"] if pr.get("spec_tint_mix_fac") is not None else 0.5
+        ),
+        "spec_tint_mix_other": tuple(
+            float(x) for x in (pr.get("spec_tint_mix_other") or (0.0, 0.0, 0.0))[:3]
+        ),
+        "spec_tint_mix_chain_is_a": int(
+            pr["spec_tint_mix_chain_is_a"] if pr.get("spec_tint_mix_chain_is_a") is not None else 1
+        ),
+        "spec_tint_mix_clamp_factor": int(
+            pr["spec_tint_mix_clamp_factor"] if pr.get("spec_tint_mix_clamp_factor") is not None else 0
+        ),
+        "spec_tint_mix_clamp_result": int(
+            pr["spec_tint_mix_clamp_result"] if pr.get("spec_tint_mix_clamp_result") is not None else 0
+        ),
+        "spec_tint_mix_b_image_path": pr.get("spec_tint_mix_b_image_path") or "",
+        "spec_tint_mix_b_image_colorspace": pr.get("spec_tint_mix_b_image_colorspace") or "",
+        "spec_tint_gamma": float(
+            pr["spec_tint_gamma"] if pr.get("spec_tint_gamma") is not None else 1.0
+        ),
+        "spec_tint_hsv_hue": float(
+            pr["spec_tint_hsv_hue"] if pr.get("spec_tint_hsv_hue") is not None else 0.5
+        ),
+        "spec_tint_hsv_sat": float(
+            pr["spec_tint_hsv_sat"] if pr.get("spec_tint_hsv_sat") is not None else 1.0
+        ),
+        "spec_tint_hsv_val": float(
+            pr["spec_tint_hsv_val"] if pr.get("spec_tint_hsv_val") is not None else 1.0
+        ),
+        "spec_tint_hsv_fac": float(
+            pr["spec_tint_hsv_fac"] if pr.get("spec_tint_hsv_fac") is not None else 1.0
+        ),
         "film_thick_image_path": pr.get("film_thick_image_path") or "",
         "film_thick_image_colorspace": pr.get("film_thick_image_colorspace") or "",
         "film_thick_tex_vector_mode": int(pr.get("film_thick_tex_vector_mode", 0) or 0),
@@ -5644,6 +6051,7 @@ def _any_tex_path(pr: dict) -> bool:
         or (pr.get("sheen_tint_image_path") or "")
         or (pr.get("coat_normal_image_path") or "")
         or (pr.get("spec_tint_image_path") or "")
+        or (pr.get("spec_tint_mix_b_image_path") or "")
         or (pr.get("film_thick_image_path") or "")
         or (pr.get("film_ior_image_path") or "")
         or (pr.get("sss_weight_image_path") or "")
@@ -6170,6 +6578,39 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.spec_tint_map_type = int(
         packed.get("spec_tint_map_type", 2) if packed.get("spec_tint_map_type") is not None else 2
     )
+    # Slice 2bk: specular_tint default (1,1,1); mix type 0 / fac 0.0 valid — never `or`.
+    st = packed.get("specular_tint") or (1.0, 1.0, 1.0)
+    for i, v in enumerate(st[:3]):
+        desc.specular_tint[i] = float(v)
+    def _bi_st(key, default):
+        v = packed.get(key, default)
+        if v is None:
+            return int(default)
+        return int(v)
+    def _bf_st(key, default):
+        v = packed.get(key, default)
+        if v is None:
+            return float(default)
+        return float(v)
+    desc.spec_tint_mix_type = _bi_st("spec_tint_mix_type", 0)
+    desc.spec_tint_mix_fac = _bf_st("spec_tint_mix_fac", 0.5)
+    sto = packed.get("spec_tint_mix_other") or (0.0, 0.0, 0.0)
+    for i, v in enumerate(sto[:3]):
+        desc.spec_tint_mix_other[i] = float(v)
+    desc.spec_tint_mix_chain_is_a = _bi_st("spec_tint_mix_chain_is_a", 1)
+    desc.spec_tint_mix_clamp_factor = _bi_st("spec_tint_mix_clamp_factor", 0)
+    desc.spec_tint_mix_clamp_result = _bi_st("spec_tint_mix_clamp_result", 0)
+    stb = (packed.get("spec_tint_mix_b_image_path") or "").encode("utf-8")
+    stbcs = (packed.get("spec_tint_mix_b_image_colorspace") or "").encode("utf-8")
+    keep.append(stb)
+    keep.append(stbcs)
+    desc.spec_tint_mix_b_image_path = stb if stb else None
+    desc.spec_tint_mix_b_image_colorspace = stbcs if stbcs else None
+    desc.spec_tint_gamma = _bf_st("spec_tint_gamma", 1.0)
+    desc.spec_tint_hsv_hue = _bf_st("spec_tint_hsv_hue", 0.5)
+    desc.spec_tint_hsv_sat = _bf_st("spec_tint_hsv_sat", 1.0)
+    desc.spec_tint_hsv_val = _bf_st("spec_tint_hsv_val", 1.0)
+    desc.spec_tint_hsv_fac = _bf_st("spec_tint_hsv_fac", 1.0)
 
     desc.film_thick_image_path = enc("film_thick_image_path")
     desc.film_thick_image_colorspace = enc("film_thick_image_colorspace")
@@ -6696,6 +7137,20 @@ def make_qt_simple_scene_type():
             ("spec_tint_map_rotation", ctypes.c_float * 3),
             ("spec_tint_map_scale", ctypes.c_float * 3),
             ("spec_tint_map_type", ctypes.c_int),
+            ("specular_tint", ctypes.c_float * 3),
+            ("spec_tint_mix_type", ctypes.c_int),
+            ("spec_tint_mix_fac", ctypes.c_float),
+            ("spec_tint_mix_other", ctypes.c_float * 3),
+            ("spec_tint_mix_chain_is_a", ctypes.c_int),
+            ("spec_tint_mix_clamp_factor", ctypes.c_int),
+            ("spec_tint_mix_clamp_result", ctypes.c_int),
+            ("spec_tint_mix_b_image_path", ctypes.c_char_p),
+            ("spec_tint_mix_b_image_colorspace", ctypes.c_char_p),
+            ("spec_tint_gamma", ctypes.c_float),
+            ("spec_tint_hsv_hue", ctypes.c_float),
+            ("spec_tint_hsv_sat", ctypes.c_float),
+            ("spec_tint_hsv_val", ctypes.c_float),
+            ("spec_tint_hsv_fac", ctypes.c_float),
             ("film_thick_image_path", ctypes.c_char_p),
             ("film_thick_image_colorspace", ctypes.c_char_p),
             ("film_thick_tex_vector_mode", ctypes.c_int),
@@ -7170,6 +7625,20 @@ def make_qt_scene_types():
             ("spec_tint_map_rotation", ctypes.c_float * 3),
             ("spec_tint_map_scale", ctypes.c_float * 3),
             ("spec_tint_map_type", ctypes.c_int),
+            ("specular_tint", ctypes.c_float * 3),
+            ("spec_tint_mix_type", ctypes.c_int),
+            ("spec_tint_mix_fac", ctypes.c_float),
+            ("spec_tint_mix_other", ctypes.c_float * 3),
+            ("spec_tint_mix_chain_is_a", ctypes.c_int),
+            ("spec_tint_mix_clamp_factor", ctypes.c_int),
+            ("spec_tint_mix_clamp_result", ctypes.c_int),
+            ("spec_tint_mix_b_image_path", ctypes.c_char_p),
+            ("spec_tint_mix_b_image_colorspace", ctypes.c_char_p),
+            ("spec_tint_gamma", ctypes.c_float),
+            ("spec_tint_hsv_hue", ctypes.c_float),
+            ("spec_tint_hsv_sat", ctypes.c_float),
+            ("spec_tint_hsv_val", ctypes.c_float),
+            ("spec_tint_hsv_fac", ctypes.c_float),
             ("film_thick_image_path", ctypes.c_char_p),
             ("film_thick_image_colorspace", ctypes.c_char_p),
             ("film_thick_tex_vector_mode", ctypes.c_int),
