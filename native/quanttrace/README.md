@@ -1,12 +1,12 @@
 <!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
 # QuantTrace native (`libquanttrace`)
 
-**Current native:** `0.0.65-slice2bl` — Bump Height ← SEPARATE_COLOR (Sideboard Blue←TEX). Addon still `0.3.3`.
+**Current native:** `0.0.66-slice2bm` — Glass BSDF → GlassBsdfNode (pure Glass→Output). Addon still `0.3.3`.
 
 **Cube Combined matches stock Cycles** (256²/128 Δmax 4.77e-7) **and**
 `SQ_QUANTTRACE.render` F12 packs a still-life depsgraph (N meshes + N AREA)
 and lands Combined. `quanttrace_is_tracer()` is **1** when built with
-`-DQT_WITH_CYCLES=ON`. Native `0.0.65-slice2bl` (Bump Height ← SEPARATE_COLOR).
+`-DQT_WITH_CYCLES=ON`. Native `0.0.66-slice2bm` (Glass BSDF → GlassBsdfNode).
 
 Native sidecar for the `SQ_QUANTTRACE` Blender RenderEngine. Design:
 `docs/research/SIDECAR-INTEGRATOR.md`. Make it Fast stays on stock Cycles;
@@ -63,8 +63,9 @@ this tree never feeds Auto clocks.
 | **2as — RGB Curves → world Color** | **PASS** | rgb_curves 32²/4 Δmax **5.96e-7**; 256²/128 Δmax **5.96e-7**. Native `0.0.46-slice2as`. |
 | **2at — 3-deep Math → world Strength** | **PASS** | math_nest3 (0.5×1.4)/1+0=0.7 32²/4 Δmax **2.16e-4**; 256²/128 Δmax **1.21e-4**. math_mul 2ai 32²/4 Δmax **4.25e-4**. rgb_curves/rgb_mix/rgb/hdr/nishita/teximage 32²/4 PASS. Native `0.0.47-slice2at`. |
 | **2au — TEX_ENVIRONMENT×0 → world Strength** | **env_mul0 PASS; add20 HDR-MIS FAIL** | env_mul0 32²/4 Δmax **3.58e-7**. env_mul0_add20 loft ops=20 32²/4 Δmax **6.17e-3** (16 px) FAIL / 256²/128 Δmax **2.34e-2** (70 px) FAIL — same as unlinked Strength 20. math_nest3/math_mul/hdr/rgb/rgb_mix/rgb_curves/nishita/teximage 32²/4 PASS. Native `0.0.48-slice2au`. |
-| **2bl — Bump Height ← SEPARATE_COLOR** | **PASS** | CLAIM Blue 32²/4 Δmax **2.38e-7**; 256²/128 Δmax **4.77e-7**. bump 2x/noise 2bc/separate 2bj/mix 2ay/invert 2be/hdr 32²/4 PASS. Loft Sideboard Bump SEPARATE cleared; PACK_FAIL G-__555573 Realistic_Glass_01 no Principled. Native `0.0.65-slice2bl`. |
-| **2bi — Normal Map Color ← Combine+InvertG** | **PASS** | invert-G CLAIM 32²/4 Δmax **7.15e-7**; 256²/128 Δmax **5.36e-7**. normal 2j/mix 2ay/curves 2bh/hdr 32²/4 PASS. Loft Plane.002 Rope cleared; PACK_FAIL Chocofur_Free_Sideboard_01 Roughness←SEPARATE_COLOR. Native `0.0.65-slice2bl`. |
+| **2bm — Glass BSDF → GlassBsdfNode** | **PASS** | CLAIM 32²/4 Δmax **1.19e-5**; 256²/512 Δmax **9.82e-4** (256²/128 3-px caustic noise). glass_rough/ior/color/ggx + mix/invert/separate/bump_sep/hdr 32²/4 PASS. Loft Glass_02 packs; PACK_FAIL Realistic_Glass_01 Mix refused Slice 2bm. Native `0.0.66-slice2bm`. |
+| **2bl — Bump Height ← SEPARATE_COLOR** | **PASS** | CLAIM Blue 32²/4 Δmax **2.38e-7**; 256²/128 Δmax **4.77e-7**. bump 2x/noise 2bc/separate 2bj/mix 2ay/invert 2be/hdr 32²/4 PASS. Loft Sideboard Bump SEPARATE cleared; PACK_FAIL G-__555573 Realistic_Glass_01 no Principled. Native `0.0.66-slice2bm`. |
+| **2bi — Normal Map Color ← Combine+InvertG** | **PASS** | invert-G CLAIM 32²/4 Δmax **7.15e-7**; 256²/128 Δmax **5.36e-7**. normal 2j/mix 2ay/curves 2bh/hdr 32²/4 PASS. Loft Plane.002 Rope cleared; PACK_FAIL Chocofur_Free_Sideboard_01 Roughness←SEPARATE_COLOR. Native `0.0.66-slice2bm`. |
 | **2bh — RGB Curves ← TEX_IMAGE on Mix A/B** | **PASS** | mix-side CLAIM 32²/4 Δmax **1.34e-6**; 256²/128 Δmax **4.17e-7**. mix 2ay/curves 2bd/fresnel 2bf/nested 2bg/hdr 32²/4 PASS. Loft Object003.015 Carpet cleared; PACK_FAIL Plane.002 Rope Normal Map Color not TEX_IMAGE. Native `0.0.61-slice2bh`. |
 | **2bg — nested Mix/Curves fold on Mix A/B** | **PASS** | nested CLAIM 32²/4 Δmax **1.79e-7**; 256²/128 Δmax **1.49e-7**. mix 2ay/fresnel 2bf/curves 2bd/invert/point/hdr 32²/4 PASS. Loft Object003.002 cleared; PACK_FAIL Carpet Soft Rug Curves←TEX_IMAGE on Mix side. Native `0.0.60-slice2bg`. |
 | **2bf — Fresnel Fac → Mix → Base Color** | **PASS** | fresnel CLAIM 32²/4 Δmax **9.54e-7**; 256²/128 Δmax **9.54e-7**. mix 2ay/curves 2bd/invert 2be/point/hdr 32²/4 PASS. Loft Fresnel Fac accepted; PACK_FAIL Mix both-sides nested Mix+Curves on Object003.002 Material.003. Native `0.0.60-slice2bg`. |

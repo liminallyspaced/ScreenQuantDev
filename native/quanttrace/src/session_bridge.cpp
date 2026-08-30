@@ -107,6 +107,9 @@
  *   Fill ATTR_STD_GENERATED when enable≠0.
  * Slice 2bl: SeparateColorNode channel → Bump Height
  *   (bump_separate_enable / bump_separate_channel after bump_noise_*).
+ * Slice 2bm: GlassBsdfNode surface (glass_bsdf_enable /
+ *   glass_distribution after rough_separate_*). enable=0 keeps
+ *   Principled path bit-identical. Cite GlassBsdfNode.
  *   enable=0 keeps 2bc/2x bit-identical. Cite SeparateColorNode
  *   set_color_type NODE_COMBSEP_COLOR_RGB; float Red/Green/Blue → Height
  *   (no NODE_CONVERT_CF). Loft Sideboard: Blue ← TEX_IMAGE Color.
@@ -414,6 +417,9 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     /* Slice 2bj identity — enable=0 skips SeparateColorNode. */
     d->rough_separate_enable = 0;
     d->rough_separate_channel = 1; /* Green — loft Sideboard default */
+    /* Slice 2bm identity — enable=0 keeps Principled path bit-identical. */
+    d->glass_bsdf_enable = 0;
+    d->glass_distribution = 0; /* Beckmann — loft Glass_02 / Realistic census */
     /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
     d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
     d->spec_tint_mix_type = 0;
@@ -815,6 +821,9 @@ static void simple_to_qt(const QT_SimpleScene *s,
     /* Slice 2bj: SeparateColorNode channel → Principled.Roughness. */
     mesh->rough_separate_enable = s->rough_separate_enable;
     mesh->rough_separate_channel = s->rough_separate_channel;
+    /* Slice 2bm: GlassBsdfNode surface. */
+    mesh->glass_bsdf_enable = s->glass_bsdf_enable;
+    mesh->glass_distribution = s->glass_distribution;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1261,8 +1270,31 @@ static ImageTextureNode *wire_tex_image(ShaderGraph *graph,
 static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
 {
     Shader *surf = scene->create_node<Shader>();
-    surf->name = string_printf("qt_principled_%d", index);
     unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
+    /* Slice 2bm: pure Glass BSDF → Material Output. Principled transmission
+     * is NOT stock-parity with GlassBsdfNode (HDR cube Δmax ~0.15), so emit
+     * GlassBsdfNode. enable=0 keeps all prior Principled slices bit-identical. */
+    if (m->glass_bsdf_enable != 0) {
+        surf->name = string_printf("qt_glass_%d", index);
+        GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
+        glass->set_color(
+            make_float3(m->base_color[0], m->base_color[1], m->base_color[2]));
+        glass->set_roughness(m->roughness);
+        glass->set_IOR(m->ior);
+        ClosureType dist = CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID;
+        if (m->glass_distribution == 1) {
+            dist = CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID;
+        }
+        else if (m->glass_distribution == 2) {
+            dist = CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID;
+        }
+        glass->set_distribution(dist);
+        graph->connect(glass->output("BSDF"), graph->output()->input("Surface"));
+        surf->set_graph(std::move(graph));
+        surf->tag_update(scene);
+        return surf;
+    }
+    surf->name = string_printf("qt_principled_%d", index);
     PrincipledBsdfNode *bsdf = graph->create_node<PrincipledBsdfNode>();
     bsdf->set_base_color(make_float3(m->base_color[0], m->base_color[1], m->base_color[2]));
     bsdf->set_roughness(m->roughness);

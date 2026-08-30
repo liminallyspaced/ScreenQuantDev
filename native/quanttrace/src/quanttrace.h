@@ -97,6 +97,8 @@
  *   nested Invert / GROUP / Mix / Noise Color refuse Slice 2be.
  * Slice 2bl: SeparateColorNode channel → Bump Height
  *   (bump_separate_enable / bump_separate_channel after bump_noise_*).
+ * Slice 2bm: GlassBsdfNode (glass_bsdf_enable / glass_distribution
+ *   after rough_separate_*). enable=0 keeps Principled bit-identical.
  *   enable=0 skips SeparateColorNode — 2bc/2x bit-identical.
  *   Cite SeparateColorNode set_color_type NODE_COMBSEP_COLOR_RGB;
  *   float channel → Height. Loft Sideboard: Blue ← TEX_IMAGE Color.
@@ -696,6 +698,13 @@ typedef struct QT_SimpleScene {
    * NODE_COMBSEP_COLOR_RGB; float channel -> Roughness (no CF convert). */
   int rough_separate_enable;
   int rough_separate_channel;
+  /* Slice 2bm: GlassBsdfNode surface (pure Glass → Material Output).
+   * enable=0 keeps Principled path bit-identical (all prior slices).
+   * distribution: 0=Beckmann 1=GGX 2=Multi-GGX (ClosureType glass IDs).
+   * Color/Roughness/IOR reuse base_color / roughness / ior.
+   * Cite Cycles shader_nodes.h GlassBsdfNode. */
+  int glass_bsdf_enable;
+  int glass_distribution;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1129,6 +1138,13 @@ typedef struct QT_Mesh {
    * NODE_COMBSEP_COLOR_RGB; float channel -> Roughness (no CF convert). */
   int rough_separate_enable;
   int rough_separate_channel;
+  /* Slice 2bm: GlassBsdfNode surface (pure Glass → Material Output).
+   * enable=0 keeps Principled path bit-identical (all prior slices).
+   * distribution: 0=Beckmann 1=GGX 2=Multi-GGX (ClosureType glass IDs).
+   * Color/Roughness/IOR reuse base_color / roughness / ior.
+   * Cite Cycles shader_nodes.h GlassBsdfNode. */
+  int glass_bsdf_enable;
+  int glass_distribution;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

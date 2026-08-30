@@ -1,7 +1,40 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bl landed** (2026-08-30 4am PlugWalk ET). Bump Height ← SEPARATE_COLOR (`bump_separate_enable` / `bump_separate_channel` after `bump_noise_*`). Census: loft Sideboard Bump.Height ← Separate RGB.Blue ← TEX_IMAGE Color (×2 materials). enable=0 keeps 2bc/2x bit-identical. HSV/HSL / Invert←Separate into Height named refuse Slice 2bl. Constant Separate folds (empty height). Loft Sideboard Bump Height SEPARATE cleared. First PACK_FAIL `object='G-__555573' material='Realistic_Glass_01' material has no Principled BSDF (Slice 2b)`. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.65-slice2bl`. Addon `0.3.3`.
+Status: **Slice 2bm landed** (2026-08-30 5am PlugWalk ET). Pure `ShaderNodeBsdfGlass` → Material Output → native `GlassBsdfNode` (`glass_bsdf_enable` / `glass_distribution` after `rough_separate_*`). Principled transmission is **not** stock-parity with Glass (HDR cube Δmax ~0.15), so ABI reuses `base_color`/`roughness`/`ior` but emits GlassBsdfNode when enable=1. enable=0 keeps all prior Principled slices bit-identical. Census: loft `Realistic_Glass_01` is nested Mix/Light Path/Refraction/Glossy (not pure Glass); pure Glass→Output is `Glass_02` on `Decor_01`. Loft first PACK_FAIL updated to Mix refuse Slice 2bm (same object). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.66-slice2bm`. Addon `0.3.3`.
 
+
+
+## Slice 2bm — Glass BSDF → GlassBsdfNode (2026-08-30 5am ET)
+
+Loft leftover after 2bl (no Principled): object `G-__555573` / material `Realistic_Glass_01`. Census: Surface ← Mix Shader (Light Path Fac) with nested Mix/Add/Refraction/Glossy/Glass/Transparent/SSS — **not** pure Glass→Output. Pure Glass→Output in loft: `Decor_01` / `Glass_02` (BECKMANN, Color white unlinked, Rough=0, IOR=1.45). Also Mix+Transparent leftovers (`Material.001`, `lente`) named refuse.
+
+Cite Cycles `shader_nodes.h` GlassBsdfNode (Color/Roughness/IOR/distribution Beckmann|GGX|Multi-GGX). Tried Principled `transmission_weight=1` mapping first — stock Glass vs Principled HDR cube Δmax **~0.15** (119 px) — wrong for parity. Native emits `GlassBsdfNode` when `glass_bsdf_enable=1`.
+
+Claim cube: Glass BECKMANN rough=0.05 IOR=1.45 + orange Principled backplate (black world). rough=0.05 settles 256² caustic noise (128 spp leaves 1–3 px); loft `Glass_02` still packs rough=0.
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| Glass CLAIM | 32²/4 | 1.19e-5 | 4.81e-8 | 0 | **PASS** |
+| Glass CLAIM | 256²/128 | 3.48e-3 | 9.21e-8 | 3 | caustic noise |
+| Glass CLAIM | 256²/512 | 9.82e-4 | 9.23e-8 | 0 | **PASS** |
+| glass_rough 0.2 | 32²/4 | 1.45e-5 | — | 0 | **PASS** |
+| glass_ior 1.7 | 32²/4 | 1.91e-6 | — | 0 | **PASS** |
+| glass_color | 32²/4 | 1.91e-6 | — | 0 | **PASS** |
+| glass_ggx | 32²/4 | 1.91e-6 | — | 0 | **PASS** |
+| principled_trans 2y | 32²/4 | 0 | — | 0 | **PASS** |
+| mix 2ay | 32²/4 | 5.36e-7 | — | 0 | **PASS** |
+| invert 2be | 32²/4 | 4.77e-7 | — | 0 | **PASS** |
+| separate 2bj | 32²/4 | 3.58e-7 | — | 0 | **PASS** |
+| bump_sep 2bl | 32²/4 | 2.38e-7 | — | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | — | 0 | **PASS** |
+| Mix Glass+Transparent | — | — | — | — | **REFUSE** Slice 2bm |
+| Glass.Color linked | — | — | — | — | **REFUSE** Slice 2bm |
+
+Loft pack: `Glass_02` Principled-peel accepts (`glass_bsdf_enable=1`). First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now `Surface Mix Shader refused (Slice 2bm: pure Glass BSDF → Output only; nested Light Path / Mix glass is a follow-up)`. Next: Mix/Light Path glass / Transparent mix / Diffuse/Emission/Hair leftovers / GROUP/Botaniq. Not loft Session Δmax.
+
+ABI: `glass_bsdf_enable` / `glass_distribution` (0=Beckmann 1=GGX 2=Multi-GGX) after `rough_separate_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults 0/0. Native `0.0.66-slice2bm`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-glass-32-pair.png`. Tools `_quanttrace_slice2bm_scene/smoke.py` + `_quanttrace_slice2bm_census.py`.
 
 
 ## Slice 2bl — Bump Height ← SEPARATE_COLOR (2026-08-30 4am ET)

@@ -3507,6 +3507,163 @@ def _tex_image_from_tex_node(from_node, from_sock, sock_label: str, ctx: str = "
         raise
 
 
+
+def _peel_surface_reroute(node):
+    """Peel REROUTE chain from Material Output Surface (Slice 2bm)."""
+    for _ in range(64):
+        if node is None or getattr(node, "type", None) != "REROUTE":
+            return node
+        inputs = getattr(node, "inputs", None)
+        if not inputs or not inputs[0].is_linked:
+            return node
+        links = list(inputs[0].links or [])
+        if len(links) != 1:
+            return node
+        node = links[0].from_node
+    return node
+
+
+def _material_surface_root(mat):
+    """Material Output ← Surface peeled root node, or None."""
+    if mat is None or not getattr(mat, "use_nodes", False) or mat.node_tree is None:
+        return None
+    out = None
+    for n in mat.node_tree.nodes:
+        if getattr(n, "type", None) == "OUTPUT_MATERIAL":
+            out = n
+            break
+    if out is None:
+        return None
+    surf = out.inputs.get("Surface") if getattr(out, "inputs", None) else None
+    if surf is None or not getattr(surf, "is_linked", False):
+        return None
+    links = list(surf.links or [])
+    if len(links) != 1:
+        return None
+    return _peel_surface_reroute(links[0].from_node)
+
+
+def _glass_distribution_code(glass_node) -> int:
+    """Blender Glass distribution → ABI int (0 Beckmann / 1 GGX / 2 Multi-GGX)."""
+    dist = str(getattr(glass_node, "distribution", "") or "").upper()
+    if dist in ("GGX",):
+        return 1
+    if dist in ("MULTI_GGX", "MULTIGGX", "MULTI-GGX"):
+        return 2
+    # BECKMANN / SHARP (legacy) / unknown → Beckmann (loft Glass_02)
+    return 0
+
+
+def _glass_from_material(mat, *, object_name: str = "") -> dict:
+    """Map pure ShaderNodeBsdfGlass → Material Output into Principled-shaped dict.
+
+    Principled transmission is NOT stock-parity with GlassBsdfNode (HDR cube
+    Δmax ~0.15), so packer sets glass_bsdf_enable=1 and native emits
+    GlassBsdfNode. Color/Roughness/IOR reuse base_color/roughness/ior.
+    Linked Color/Roughness/IOR/Normal/Thin Film refuse (Slice 2bm).
+    Mix Shader / nested Light Path glass refuse (Slice 2bm follow-up).
+    """
+    ctx = _mat_refuse_ctx(object_name, mat)
+    root = _material_surface_root(mat)
+    if root is None:
+        raise QuantTraceSyncError(
+            f"{ctx} material has no Principled BSDF (Slice 2b); "
+            f"Surface unlinked/missing refused (Slice 2bm)"
+        )
+    rtype = getattr(root, "type", None)
+    if rtype == "MIX_SHADER":
+        raise QuantTraceSyncError(
+            f"{ctx} material Surface Mix Shader refused "
+            f"(Slice 2bm: pure Glass BSDF → Output only; "
+            f"nested Light Path / Mix glass is a follow-up)"
+        )
+    if rtype != "BSDF_GLASS":
+        raise QuantTraceSyncError(
+            f"{ctx} material has no Principled BSDF (Slice 2b); "
+            f"Surface={rtype!r} refused (Slice 2bm: pure Glass BSDF → Output only)"
+        )
+    # Refuse linked sockets — this slice is constant Glass only (Glass_02 shape).
+    for label, names in (
+        ("Color", ("Color",)),
+        ("Roughness", ("Roughness",)),
+        ("IOR", ("IOR",)),
+        ("Normal", ("Normal",)),
+        ("Thin Film Thickness", ("Thin Film Thickness",)),
+        ("Thin Film IOR", ("Thin Film IOR",)),
+    ):
+        _n, sock = _input_by_names(root, *names)
+        if sock is not None and getattr(sock, "is_linked", False):
+            raise QuantTraceSyncError(
+                f"{ctx} Glass BSDF.{label} is linked refused "
+                f"(Slice 2bm: unlinked Color/Roughness/IOR/Normal only)"
+            )
+    col_sock = root.inputs.get("Color")
+    rough_sock = root.inputs.get("Roughness")
+    ior_sock = root.inputs.get("IOR")
+    if col_sock is None or rough_sock is None or ior_sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Glass BSDF missing Color/Roughness/IOR (Slice 2bm)"
+        )
+    col = col_sock.default_value
+    base = (float(col[0]), float(col[1]), float(col[2]))
+    rough = float(rough_sock.default_value)
+    ior = float(ior_sock.default_value)
+    dist = _glass_distribution_code(root)
+    # Start from the same empty Principled-shaped dict as no-nodes materials.
+    empty = {
+        "base_color": base,
+        "roughness": rough,
+        "metallic": 0.0,
+        "ior": ior,
+        "alpha": 1.0,
+        **_empty_tex_info(),
+        **_prefix_tex(_empty_tex_info(), "rough_"),
+        **_prefix_tex(_empty_tex_info(), "metal_"),
+        **_empty_normal_info(),
+        **_prefix_tex(_empty_tex_info(), "ior_"),
+        **_prefix_tex(_empty_tex_info(), "alpha_"),
+        **_prefix_tex(_empty_tex_info(), "trans_"),
+        **_prefix_tex(_empty_tex_info(), "spec_"),
+        **_prefix_tex(_empty_tex_info(), "coat_"),
+        **_prefix_tex(_empty_tex_info(), "sheen_"),
+        **_prefix_tex(_empty_tex_info(), "emit_str_"),
+        **_prefix_tex(_empty_tex_info(), "emit_color_"),
+        **_prefix_tex(_empty_tex_info(), "coat_rough_"),
+        **_prefix_tex(_empty_tex_info(), "coat_ior_"),
+        **_prefix_tex(_empty_tex_info(), "coat_tint_"),
+        **_prefix_tex(_empty_tex_info(), "sheen_rough_"),
+        **_prefix_tex(_empty_tex_info(), "sheen_tint_"),
+        **_empty_normal_info("coat_normal_"),
+        **_prefix_tex(_empty_tex_info(), "spec_tint_"),
+        **_spec_tint_mix_identity(),
+        "specular_tint": (1.0, 1.0, 1.0),
+        **_prefix_tex(_empty_tex_info(), "film_thick_"),
+        **_prefix_tex(_empty_tex_info(), "film_ior_"),
+        **_prefix_tex(_empty_tex_info(), "sss_weight_"),
+        **_prefix_tex(_empty_tex_info(), "sss_radius_"),
+        **_prefix_tex(_empty_tex_info(), "sss_scale_"),
+        **_prefix_tex(_empty_tex_info(), "sss_ior_"),
+        **_prefix_tex(_empty_tex_info(), "sss_aniso_"),
+        **_prefix_tex(_empty_tex_info(), "thin_wall_"),
+        **_prefix_tex(_empty_tex_info(), "diffuse_rough_"),
+        **_prefix_tex(_empty_tex_info(), "aniso_"),
+        **_prefix_tex(_empty_tex_info(), "aniso_rot_"),
+        **_prefix_tex(_empty_tex_info(), "tangent_"),
+        **_empty_bump_info(),
+        **_empty_bevel_info(),
+        **_empty_rough_ramp_info(),
+        "thin_wall": 0,
+        "transmission_weight": 0.0,
+        "tex_ob_ref": None,
+        **_base_gamma_hsv_identity(),
+        **_base_mix_identity(),
+        **_base_curves_identity(),
+        "glass_bsdf_enable": 1,
+        "glass_distribution": int(dist),
+    }
+    return empty
+
+
 def _principled_from_material(mat, *, object_name: str = "") -> dict:
     """Return principled dict (constants + optional TEX_IMAGE on Base/Rough/Metal/IOR/Alpha/Trans/Spec/Coat/Sheen/EmitStr/EmitColor)."""
     empty = {
@@ -3557,6 +3714,8 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         **_base_gamma_hsv_identity(),
         **_base_mix_identity(),
         **_base_curves_identity(),
+        "glass_bsdf_enable": 0,
+        "glass_distribution": 0,
     }
     if mat is None:
         raise QuantTraceSyncError(
@@ -3572,9 +3731,8 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
             bsdf = node
             break
     if bsdf is None:
-        raise QuantTraceSyncError(
-            f"{_mat_refuse_ctx(object_name, mat)} material has no Principled BSDF (Slice 2b)"
-        )
+        # Slice 2bm: pure Glass BSDF → Output maps via glass_bsdf_enable.
+        return _glass_from_material(mat, object_name=object_name)
     base_tex = _empty_tex_info()
     rough_tex = _empty_tex_info()
     metal_tex = _empty_tex_info()
@@ -3794,6 +3952,8 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         **{k: v for k, v in normal_info.items() if str(k).startswith("bump_")},
         "thin_wall": int(thin_wall),
         "transmission_weight": float(transmission_weight),
+        "glass_bsdf_enable": 0,
+        "glass_distribution": 0,
         "tex_ob_ref": _resolve_tex_ob_ref(
             base_tex, rough_tex, metal_tex, ior_tex, alpha_tex, trans_tex,
             spec_tex, coat_tex, sheen_tex, emit_str_tex, emit_color_tex,
@@ -6075,6 +6235,16 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
             if pr.get("rough_separate_channel") is not None
             else 1
         ),
+        "glass_bsdf_enable": int(
+            pr["glass_bsdf_enable"]
+            if pr.get("glass_bsdf_enable") is not None
+            else 0
+        ),
+        "glass_distribution": int(
+            pr["glass_distribution"]
+            if pr.get("glass_distribution") is not None
+            else 0
+        ),
         "thin_wall": int(pr.get("thin_wall", 0) or 0),
         "transmission_weight": float(
             pr.get("transmission_weight", 0.0) if pr.get("transmission_weight") is not None else 0.0
@@ -7034,6 +7204,9 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     # Slice 2bj: enable 0 / channel 0 valid — never `or` on enable/channel.
     desc.rough_separate_enable = _bi("rough_separate_enable", 0)
     desc.rough_separate_channel = _bi("rough_separate_channel", 1)
+    # Slice 2bm: enable 0 / distribution 0 valid — never `or` on enable/dist.
+    desc.glass_bsdf_enable = _bi("glass_bsdf_enable", 0)
+    desc.glass_distribution = _bi("glass_distribution", 0)
     if ramp_list and ramp_n > 0:
         flat = [float(v) for v in ramp_list]
         if len(flat) < ramp_n * 3:
@@ -7461,6 +7634,8 @@ def make_qt_simple_scene_type():
             ("rough_invert_fac", ctypes.c_float),
             ("rough_separate_enable", ctypes.c_int),
             ("rough_separate_channel", ctypes.c_int),
+            ("glass_bsdf_enable", ctypes.c_int),
+            ("glass_distribution", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -7951,6 +8126,8 @@ def make_qt_scene_types():
             ("rough_invert_fac", ctypes.c_float),
             ("rough_separate_enable", ctypes.c_int),
             ("rough_separate_channel", ctypes.c_int),
+            ("glass_bsdf_enable", ctypes.c_int),
+            ("glass_distribution", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):
