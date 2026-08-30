@@ -1,8 +1,24 @@
-# QuantTrace Slice 2 — build order (cube pixel-match)
+# QuantTrace Slice 2 — Scene sync research
 
-Status: **Slice 2bm landed** (2026-08-30 5am PlugWalk ET). Pure `ShaderNodeBsdfGlass` → Material Output → native `GlassBsdfNode` (`glass_bsdf_enable` / `glass_distribution` after `rough_separate_*`). Principled transmission is **not** stock-parity with Glass (HDR cube Δmax ~0.15), so ABI reuses `base_color`/`roughness`/`ior` but emits GlassBsdfNode when enable=1. enable=0 keeps all prior Principled slices bit-identical. Census: loft `Realistic_Glass_01` is nested Mix/Light Path/Refraction/Glossy (not pure Glass); pure Glass→Output is `Glass_02` on `Decor_01`. Loft first PACK_FAIL updated to Mix refuse Slice 2bm (same object). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.66-slice2bm`. Addon `0.3.3`.
+Status: **Slice 2bn landed** (2026-08-30 6am PlugWalk ET). Mix Shader Fac=unlinked float **or** Light Path Is * Ray + Glass + Transparent → native `MixClosureNode` (+ optional `LightPathNode`) with `GlassBsdfNode` / `TransparentBsdfNode` (`mix_shader_*` after `glass_*`). enable=0 keeps Slice 2bm pure-Glass bit-identical. Census: loft `Realistic_Glass_01` root Mix Fac←MATH (Is Shadow/Reflection + Ray Depth) over nested Mix/Add/Refraction/Glossy/SSS/Glass(Color linked); **not** in this hop. Same-shape loft `lente` packs (Fac unlinked 0.317). First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now Fac←MATH Slice 2bn named refuse. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.67-slice2bn`. Addon `0.3.3`.
 
+## Slice 2bn — Mix Shader Glass+Transparent + Light Path Fac (2026-08-30 6am ET)
 
+Cite Cycles `shader_nodes.h` MixClosureNode (Fac / Closure1 / Closure2), LightPathNode (Is Camera/Shadow/Diffuse/Glossy/Singular/Reflection/Transmission Ray float outs), GlassBsdfNode, TransparentBsdfNode. Do **not** evaluate Light Path at pack time (ray-state). Unlinked Light Path sockets stay unlinked (LINK defaults).
+
+| plate | res/spp | Δmax | MAE | px≥1e-3 | gate |
+|---|---|---|---|---|---|
+| CLAIM Mix Fac=0.85 Glass+Transparent | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| CLAIM Mix Fac=0.85 Glass+Transparent | 256²/128 | **1.27e-4** | 2.04e-8 | **0** | **PASS** |
+| identity glass_only (2bm) | 32²/4 | **1.19e-5** | 4.81e-8 | **0** | **PASS** |
+| lightpath_shadow Fac←Is Shadow Ray | 32²/4 | **1.19e-5** | — | **0** | **PASS** |
+| mix 2ay / invert 2be / bump_sep 2bl / hdr 2aa | 32²/4 | 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4 | — | **0** | **PASS** |
+| live stock Mix vs Session pure-Glass bypass | 32²/4 | **0.547** | — | 146 | live (graph) |
+| refuse_nested / refuse_math_fac / refuse_linked / refuse_add | — | — | — | — | **REFUSE** Slice 2bn |
+
+Loft pack: `lente` Mix Glass+Transparent (Fac unlinked) packs; `Glass_02` pure Glass still packs. First PACK_FAIL `G-__555573` / `Realistic_Glass_01` — `Mix Shader Fac←'MATH' refused (Slice 2bn: Fac unlinked float or Light Path Is * Ray only; nested Math/TEX/Fresnel/GROUP Fac is a follow-up)`. Next: Math/Light Path Fac nest, nested Mix hop (Realistic inner Is Shadow Ray), Material.001 Glass.Roughness linked, Principled+Transparent Mix, GROUP/Botaniq, Diffuse/Emission/Hair leftovers. Not loft Session Δmax.
+
+ABI: `mix_shader_enable` / `mix_shader_fac` / `mix_shader_lightpath_enable` / `mix_shader_lightpath_output` (QT_LIGHTPATH_* 0..6) / `mix_closure1_kind` / `mix_closure2_kind` (0=Glass 1=Transparent) / `mix_transparent_color[3]` after `glass_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults 0 keep 2bm bit-identical. Native `0.0.67-slice2bn`. Box CPU only; 2080 not used.
 
 ## Slice 2bm — Glass BSDF → GlassBsdfNode (2026-08-30 5am ET)
 

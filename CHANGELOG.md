@@ -1,3 +1,13 @@
+## [0.3.3] — unreleased
+
+### QuantTrace Slice 2bn (2026-08-30 6am PlugWalk ET)
+- Native `0.0.67-slice2bn`: Mix Shader Fac=unlinked float **or** Light Path Is * Ray + Glass + Transparent → `MixClosureNode` (+ optional `LightPathNode`) / `GlassBsdfNode` / `TransparentBsdfNode`. ABI `mix_shader_*` after `glass_*`. `mix_shader_enable=0` keeps 2bm pure-Glass bit-identical. `is_tracer=1`. Addon still `0.3.3`.
+- CLAIM Mix Fac=0.85 Glass+Transparent (backplate): 32²/4 Δmax **1.91e-6** MAE 3.74e-8 0 px≥1e-3 **PASS**; 256²/128 Δmax **1.27e-4** MAE 2.04e-8 0 px≥1e-3 **PASS**.
+- Identity glass_only 32²/4 Δmax **1.19e-5** PASS; lightpath_shadow 32²/4 Δmax **1.19e-5** PASS; mix/invert/bump_sep/hdr 32²/4 PASS (Δmax 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4).
+- Live stock Mix vs Session pure-Glass bypass 32²/4 Δmax **0.547** (146 px≥1e-3) — Mix graph live.
+- Named REFUSE: nested Mix, Fac←MATH, Glass.Color linked, Mix←Add Shader (Slice 2bn tags).
+- Loft: `lente` packs; first PACK_FAIL still `G-__555573`/`Realistic_Glass_01` Fac←MATH Slice 2bn. No loft Session Δmax. No zip / no gibby / no 2080. Store Classroom 41% / loft 52%.
+
 # Changelog
 
 ## 0.3.3 — Unreleased

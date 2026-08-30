@@ -110,6 +110,10 @@
  * Slice 2bm: GlassBsdfNode surface (glass_bsdf_enable /
  *   glass_distribution after rough_separate_*). enable=0 keeps
  *   Principled path bit-identical. Cite GlassBsdfNode.
+ * Slice 2bn: MixClosureNode + optional LightPathNode Fac
+ *   (mix_shader_* after glass_*). enable=0 keeps 2bm bit-identical.
+ *   Cite MixClosureNode, LightPathNode, GlassBsdfNode,
+ *   TransparentBsdfNode.
  *   enable=0 keeps 2bc/2x bit-identical. Cite SeparateColorNode
  *   set_color_type NODE_COMBSEP_COLOR_RGB; float Red/Green/Blue → Height
  *   (no NODE_CONVERT_CF). Loft Sideboard: Blue ← TEX_IMAGE Color.
@@ -420,6 +424,15 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     /* Slice 2bm identity — enable=0 keeps Principled path bit-identical. */
     d->glass_bsdf_enable = 0;
     d->glass_distribution = 0; /* Beckmann — loft Glass_02 / Realistic census */
+    /* Slice 2bn identity — enable=0 keeps 2bm Glass path bit-identical. */
+    d->mix_shader_enable = 0;
+    d->mix_shader_fac = 0.5f;
+    d->mix_shader_lightpath_enable = 0;
+    d->mix_shader_lightpath_output = QT_LIGHTPATH_SHADOW_RAY;
+    d->mix_closure1_kind = 0; /* Glass */
+    d->mix_closure2_kind = 1; /* Transparent */
+    d->mix_transparent_color[0] = d->mix_transparent_color[1] =
+        d->mix_transparent_color[2] = 1.0f;
     /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
     d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
     d->spec_tint_mix_type = 0;
@@ -824,6 +837,16 @@ static void simple_to_qt(const QT_SimpleScene *s,
     /* Slice 2bm: GlassBsdfNode surface. */
     mesh->glass_bsdf_enable = s->glass_bsdf_enable;
     mesh->glass_distribution = s->glass_distribution;
+    /* Slice 2bn: MixClosure + LightPath Fac. */
+    mesh->mix_shader_enable = s->mix_shader_enable;
+    mesh->mix_shader_fac = s->mix_shader_fac;
+    mesh->mix_shader_lightpath_enable = s->mix_shader_lightpath_enable;
+    mesh->mix_shader_lightpath_output = s->mix_shader_lightpath_output;
+    mesh->mix_closure1_kind = s->mix_closure1_kind;
+    mesh->mix_closure2_kind = s->mix_closure2_kind;
+    mesh->mix_transparent_color[0] = s->mix_transparent_color[0];
+    mesh->mix_transparent_color[1] = s->mix_transparent_color[1];
+    mesh->mix_transparent_color[2] = s->mix_transparent_color[2];
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1271,6 +1294,79 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
 {
     Shader *surf = scene->create_node<Shader>();
     unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
+    /* Slice 2bn: Mix Shader Glass+Transparent (optional Light Path Fac).
+     * mix_shader_enable=0 keeps Slice 2bm pure-Glass path bit-identical. */
+    if (m->mix_shader_enable != 0) {
+        surf->name = string_printf("qt_mix_glass_%d", index);
+        MixClosureNode *mix = graph->create_node<MixClosureNode>();
+        if (m->mix_shader_lightpath_enable != 0) {
+            LightPathNode *lp = graph->create_node<LightPathNode>();
+            const char *lp_out = "Is Shadow Ray";
+            switch (m->mix_shader_lightpath_output) {
+                case QT_LIGHTPATH_CAMERA_RAY:
+                    lp_out = "Is Camera Ray";
+                    break;
+                case QT_LIGHTPATH_SHADOW_RAY:
+                    lp_out = "Is Shadow Ray";
+                    break;
+                case QT_LIGHTPATH_DIFFUSE_RAY:
+                    lp_out = "Is Diffuse Ray";
+                    break;
+                case QT_LIGHTPATH_GLOSSY_RAY:
+                    lp_out = "Is Glossy Ray";
+                    break;
+                case QT_LIGHTPATH_SINGULAR_RAY:
+                    lp_out = "Is Singular Ray";
+                    break;
+                case QT_LIGHTPATH_REFLECTION_RAY:
+                    lp_out = "Is Reflection Ray";
+                    break;
+                case QT_LIGHTPATH_TRANSMISSION_RAY:
+                    lp_out = "Is Transmission Ray";
+                    break;
+                default:
+                    lp_out = "Is Shadow Ray";
+                    break;
+            }
+            graph->connect(lp->output(lp_out), mix->input("Fac"));
+        }
+        else {
+            mix->set_fac(m->mix_shader_fac);
+        }
+        auto make_glass = [&]() -> ShaderOutput * {
+            GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
+            glass->set_color(
+                make_float3(m->base_color[0], m->base_color[1], m->base_color[2]));
+            glass->set_roughness(m->roughness);
+            glass->set_IOR(m->ior);
+            ClosureType dist = CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID;
+            if (m->glass_distribution == 1) {
+                dist = CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID;
+            }
+            else if (m->glass_distribution == 2) {
+                dist = CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID;
+            }
+            glass->set_distribution(dist);
+            return glass->output("BSDF");
+        };
+        auto make_transparent = [&]() -> ShaderOutput * {
+            TransparentBsdfNode *tr = graph->create_node<TransparentBsdfNode>();
+            tr->set_color(make_float3(m->mix_transparent_color[0],
+                                      m->mix_transparent_color[1],
+                                      m->mix_transparent_color[2]));
+            return tr->output("BSDF");
+        };
+        ShaderOutput *c1 = (m->mix_closure1_kind == 1) ? make_transparent() :
+                                                         make_glass();
+        ShaderOutput *c2 = (m->mix_closure2_kind == 1) ? make_transparent() :
+                                                         make_glass();
+        graph->connect(c1, mix->input("Closure1"));
+        graph->connect(c2, mix->input("Closure2"));
+        graph->connect(mix->output("Closure"), graph->output()->input("Surface"));
+        surf->set_graph(std::move(graph));
+        surf->tag_update(scene);
+        return surf;
+    }
     /* Slice 2bm: pure Glass BSDF → Material Output. Principled transmission
      * is NOT stock-parity with GlassBsdfNode (HDR cube Δmax ~0.15), so emit
      * GlassBsdfNode. enable=0 keeps all prior Principled slices bit-identical. */

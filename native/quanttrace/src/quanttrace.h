@@ -705,6 +705,19 @@ typedef struct QT_SimpleScene {
    * Cite Cycles shader_nodes.h GlassBsdfNode. */
   int glass_bsdf_enable;
   int glass_distribution;
+  /* Slice 2bn: MixClosureNode + optional LightPathNode Fac
+   * (mix_shader_* after glass_*). enable=0 keeps 2bm Glass->Output
+   * bit-identical. Classic artist glass: Mix Fac=Light Path Is Shadow
+   * Ray (or unlinked float), Closure1/2 = Glass + Transparent.
+   * Cite MixClosureNode, LightPathNode, GlassBsdfNode,
+   * TransparentBsdfNode. Do not evaluate Light Path at pack time. */
+  int mix_shader_enable;
+  float mix_shader_fac;
+  int mix_shader_lightpath_enable;
+  int mix_shader_lightpath_output; /* QT_LIGHTPATH_* */
+  int mix_closure1_kind; /* 0=Glass 1=Transparent */
+  int mix_closure2_kind; /* 0=Glass 1=Transparent */
+  float mix_transparent_color[3];
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1145,6 +1158,19 @@ typedef struct QT_Mesh {
    * Cite Cycles shader_nodes.h GlassBsdfNode. */
   int glass_bsdf_enable;
   int glass_distribution;
+  /* Slice 2bn: MixClosureNode + optional LightPathNode Fac
+   * (mix_shader_* after glass_*). enable=0 keeps 2bm Glass->Output
+   * bit-identical. Classic artist glass: Mix Fac=Light Path Is Shadow
+   * Ray (or unlinked float), Closure1/2 = Glass + Transparent.
+   * Cite MixClosureNode, LightPathNode, GlassBsdfNode,
+   * TransparentBsdfNode. Do not evaluate Light Path at pack time. */
+  int mix_shader_enable;
+  float mix_shader_fac;
+  int mix_shader_lightpath_enable;
+  int mix_shader_lightpath_output; /* QT_LIGHTPATH_* */
+  int mix_closure1_kind; /* 0=Glass 1=Transparent */
+  int mix_closure2_kind; /* 0=Glass 1=Transparent */
+  float mix_transparent_color[3];
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */
@@ -1152,6 +1178,15 @@ typedef struct QT_Mesh {
 #define QT_LIGHT_POINT 1
 #define QT_LIGHT_SUN   2
 #define QT_LIGHT_SPOT  3
+
+/* Slice 2bn: LightPathNode float outputs (Is * Ray only; Ray Depth refuse). */
+#define QT_LIGHTPATH_CAMERA_RAY        0
+#define QT_LIGHTPATH_SHADOW_RAY        1
+#define QT_LIGHTPATH_DIFFUSE_RAY       2
+#define QT_LIGHTPATH_GLOSSY_RAY        3
+#define QT_LIGHTPATH_SINGULAR_RAY      4
+#define QT_LIGHTPATH_REFLECTION_RAY    5
+#define QT_LIGHTPATH_TRANSMISSION_RAY  6
 
 /* Slice 2bb: NodeNoiseType (kernel/svm/types.h order). */
 #define QT_NOISE_MULTIFRACTAL           0
