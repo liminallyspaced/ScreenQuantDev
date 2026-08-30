@@ -1,8 +1,31 @@
 # QuantTrace Slice 2 — Scene sync research
 
-Status: **Slice 2bt landed** (2026-08-30 12pm PlugWalk ET). nested2 Mix.004 leaf Add Shader (`mix_nested2_add_*` after 2bs ramp-math HSV). enable=0 / nested2 kinds 0/1 keep 2bs Glass+Transparent bit-identical. Add children: unlinked Glass/Transparent/Glossy/SSS/Translucent (kinds 0/1/3/4/5). Cite AddClosureNode, GlossyBsdfNode, SubsurfaceScatteringNode, TranslucentBsdfNode, MixClosureNode, GlassBsdfNode, TransparentBsdfNode. Census loft Mix.004 Shader=Add (Mix.002 Glossy + Mix.003 SSS/Translucent); Shader_001 Glass Color+Roughness linked. Packable CLAIM = Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp(+MATH) Shader=Add(unlinked Glossy GGX + Transparent) Shader_001=unlinked Glass. Nested Mix under Add is the named leftover. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now Mix-under-Add Slice 2bt (Add Shader itself accepted). Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.73-slice2bt`. Addon `0.3.3`.
+Status: **Slice 2bu landed** (2026-08-30 1pm PlugWalk ET). Mix-under-Add (`mix_nested2_add_mix_*` after 2bt translucent). enable=0 keeps 2bt Add+leaf bit-identical. Add child kind 6=MixClosure (Fac unlinked float|LightPath; leaves 0/1/3/4/5 unlinked). Cite MixClosureNode nested under AddClosureNode; GlossyBsdfNode / GlassBsdfNode / TransparentBsdfNode / SubsurfaceScatteringNode / TranslucentBsdfNode. Census loft Mix.002 Fac←ColorRamp + nested Mix.001/Refraction + Glossy.Roughness←MATH; Mix.003 Fac unlinked SSS Color←ColorRamp + Translucent. Packable CLAIM = Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp(+MATH) Add( Mix(Fac unlinked, Glossy GGX + Transparent), Translucent )+Glass. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — now Mix Fac←ColorRamp Slice 2bu. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.74-slice2bu`. Addon `0.3.3`.
 
 
+
+## Slice 2bu — Mix-under-Add (2026-08-30 1pm ET)
+
+Cite Cycles `shader_nodes.h` / `shader_nodes.cpp` MixClosureNode (Fac / Closure1 / Closure2 → Closure) nested under AddClosureNode (Closure1 / Closure2 → Closure); GlossyBsdfNode / GlassBsdfNode / TransparentBsdfNode / SubsurfaceScatteringNode / TranslucentBsdfNode. Do **not** evaluate Light Path at pack time. ColorRamp Fac / nested Mix / linked Glossy.Roughness / SSS Color←ColorRamp / Refraction / nested Add / GROUP / Principled refuse named Slice 2bu.
+
+| plate | res/spp | Δmax | MAE | px≥1e-3 | gate |
+|---|---|---|---|---|---|
+| CLAIM Outer MATH + Mix.005 Is Shadow + Mix.004 Fac←ColorRamp Fac←MATH Add( Mix(Fac 0.5, Glossy GGX + Transparent), Translucent )+Glass | 32²/4 | **1.91e-6** | 3.84e-8 | **0** | **PASS** |
+| CLAIM same | 256²/128 | **7.37e-6** | 1.95e-8 | **0** | **PASS** |
+| identity add (2bt Glossy+Transparent, mix off) | 32²/4 | **1.91e-6** | 4.13e-8 | **0** | **PASS** |
+| identity ramp (2br) | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| identity nested2 (2bq Fac 0.35) | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| identity nested_mix (2bp) | 32²/4 | **1.91e-6** | 3.70e-8 | **0** | **PASS** |
+| identity glass_only (2bm) | 32²/4 | **1.19e-5** | 4.81e-8 | **0** | **PASS** |
+| mix 2ay / invert 2be / bump_sep 2bl / hdr 2aa | 32²/4 | 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4 | — | **0** | **PASS** |
+| live Session CLAIM vs Mix-under-Add-bypass | 32²/4 | **0.287** | — | — | live (graph) |
+| refuse_colorramp / refuse_nested / refuse_linked_rough / refuse_refraction / refuse_sss_ramp / refuse_third / refuse_linked | — | — | — | — | **REFUSE** Slice 2bu/2bt/2bs |
+
+Loft pack: Mix-under-Add topology accepted into the packer (no longer the 2bt Mix-under-Add refuse). First PACK_FAIL `G-__555573` / `Realistic_Glass_01` — `nested2 Mix Add Mix Fac<-ColorRamp refused (Slice 2bu: Fac unlinked float or Light Path only; ColorRamp Fac under Add Mix is a follow-up)`. Mix.002 Fac←ColorRamp + nested Mix.001/Refraction + Glossy.Roughness←MATH; Mix.003 SSS Color←ColorRamp. Shader_001 Glass Color+Roughness still linked. Next: ColorRamp Fac under Add Mix / nested Mix.001 / linked Glossy.Roughness / SSS Color←ColorRamp / Refraction / linked Glass.Color. Not loft Session Δmax.
+
+ABI: Add child kind 6=Mix; `mix_nested2_add_mix_enable` / `mix_fac` / `mix_lightpath_enable` / `mix_lightpath_output` / `mix_c1_kind` / `mix_c2_kind` after 2bt translucent_color on `QT_Mesh` + `QT_SimpleScene`. Defaults keep 2bt bit-identical. Native `0.0.74-slice2bu`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-mix-under-add-32-pair.png`. Tools `_quanttrace_slice2bu_scene/smoke.py` + `_quanttrace_slice2bu_census.py`.
 
 ## Slice 2bt — nested2 Mix ← Add+Glossy/SSS (2026-08-30 12pm ET)
 

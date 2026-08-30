@@ -133,7 +133,7 @@
  *   2br set_fac bit-identical. Wire MathNode +/- GeometryNode Backfacing +/-
  *   HSVNode (Color<-LightPath Ray Length) -> RGBRampNode Fac. Cite MathNode,
  *   GeometryNode, HSVNode, LightPathNode.
- * Slice 2bt: nested2 Mix leaf AddClosure (+ Glossy/SSS/Translucent).
+ * Slice 2bt/2bu: nested2 Mix leaf AddClosure (+ Glossy/SSS/Translucent/Mix).
  *   mix_nested2_add_enable=0 / nested2 kinds 0/1 keep 2bs Glass+Transparent
  *   bit-identical. Cite AddClosureNode, GlossyBsdfNode,
  *   SubsurfaceScatteringNode, TranslucentBsdfNode.
@@ -546,6 +546,13 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->mix_nested2_sss_method = 0;
     d->mix_nested2_translucent_color[0] = d->mix_nested2_translucent_color[1] =
         d->mix_nested2_translucent_color[2] = 0.8f;
+    /* Slice 2bu identity — add_mix_enable=0 keeps 2bt Add+leaf. */
+    d->mix_nested2_add_mix_enable = 0;
+    d->mix_nested2_add_mix_fac = 0.5f;
+    d->mix_nested2_add_mix_lightpath_enable = 0;
+    d->mix_nested2_add_mix_lightpath_output = 1;
+    d->mix_nested2_add_mix_c1_kind = 3;
+    d->mix_nested2_add_mix_c2_kind = 1;
     /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
     d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
     d->spec_tint_mix_type = 0;
@@ -1051,6 +1058,12 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->mix_nested2_translucent_color[0] = s->mix_nested2_translucent_color[0];
     mesh->mix_nested2_translucent_color[1] = s->mix_nested2_translucent_color[1];
     mesh->mix_nested2_translucent_color[2] = s->mix_nested2_translucent_color[2];
+    mesh->mix_nested2_add_mix_enable = s->mix_nested2_add_mix_enable;
+    mesh->mix_nested2_add_mix_fac = s->mix_nested2_add_mix_fac;
+    mesh->mix_nested2_add_mix_lightpath_enable = s->mix_nested2_add_mix_lightpath_enable;
+    mesh->mix_nested2_add_mix_lightpath_output = s->mix_nested2_add_mix_lightpath_output;
+    mesh->mix_nested2_add_mix_c1_kind = s->mix_nested2_add_mix_c1_kind;
+    mesh->mix_nested2_add_mix_c2_kind = s->mix_nested2_add_mix_c2_kind;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1923,9 +1936,9 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
                                           m->mix_nested2_translucent_color[2]));
                 return tl->output("BSDF");
             };
-            /* Slice 2bt: Add children 0=Glass 1=Transparent 3=Glossy 4=SSS
-             * 5=Translucent. enable=0 never reaches here. */
-            auto make_add_child = [&](int kind) -> ShaderOutput * {
+            /* Slice 2bt/2bu: Add children 0=Glass 1=Transparent 3=Glossy 4=SSS
+             * 5=Translucent 6=Mix (Mix-under-Add). enable=0 never reaches here. */
+            auto make_add_leaf = [&](int kind) -> ShaderOutput * {
                 if (kind == 1) {
                     return make_transparent();
                 }
@@ -1939,6 +1952,26 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
                     return make_translucent();
                 }
                 return make_glass();
+            };
+            auto make_add_child = [&](int kind) -> ShaderOutput * {
+                if (kind == 6 && m->mix_nested2_add_mix_enable != 0) {
+                    MixClosureNode *amix = graph->create_node<MixClosureNode>();
+                    if (m->mix_nested2_add_mix_lightpath_enable != 0) {
+                        LightPathNode *alp = graph->create_node<LightPathNode>();
+                        graph->connect(alp->output(qt_lightpath_out_name(
+                                           m->mix_nested2_add_mix_lightpath_output)),
+                                       amix->input("Fac"));
+                    }
+                    else {
+                        amix->set_fac(m->mix_nested2_add_mix_fac);
+                    }
+                    graph->connect(make_add_leaf(m->mix_nested2_add_mix_c1_kind),
+                                   amix->input("Closure1"));
+                    graph->connect(make_add_leaf(m->mix_nested2_add_mix_c2_kind),
+                                   amix->input("Closure2"));
+                    return amix->output("Closure");
+                }
+                return make_add_leaf(kind);
             };
             auto make_nested2_leaf = [&](int kind) -> ShaderOutput * {
                 if (kind == 2 && m->mix_nested2_add_enable != 0) {

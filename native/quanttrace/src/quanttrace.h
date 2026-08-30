@@ -814,12 +814,14 @@ typedef struct QT_SimpleScene {
   float mix_nested2_ramp_hsv_color[3];
   int mix_nested2_ramp_hsv_color_kind;
   int mix_nested2_ramp_hsv_color_lightpath;
-  /* Slice 2bt: nested2 Mix leaf AddClosure (+ Glossy/SSS/Translucent).
+  /* Slice 2bt/2bu: nested2 Mix leaf AddClosure (+ Glossy/SSS/Translucent/Mix).
    * mix_nested2_closure*_kind: 0=Glass 1=Transparent 2=Add.
    * enable=0 / kinds 0/1 keep 2bs Glass+Transparent bit-identical.
-   * Add children: 0=Glass 1=Transparent 3=Glossy 4=SSS 5=Translucent.
-   * Cite AddClosureNode, GlossyBsdfNode, SubsurfaceScatteringNode,
-   * TranslucentBsdfNode, MixClosureNode, GlassBsdfNode, TransparentBsdfNode. */
+   * Add children: 0=Glass 1=Transparent 3=Glossy 4=SSS 5=Translucent
+   * 6=Mix (Slice 2bu Mix-under-Add; needs add_mix_enable).
+   * Cite AddClosureNode, MixClosureNode, GlossyBsdfNode,
+   * SubsurfaceScatteringNode, TranslucentBsdfNode, GlassBsdfNode,
+   * TransparentBsdfNode. */
   int mix_nested2_add_enable;
   int mix_nested2_add_c1_kind;
   int mix_nested2_add_c2_kind;
@@ -833,6 +835,19 @@ typedef struct QT_SimpleScene {
   float mix_nested2_sss_roughness;
   int mix_nested2_sss_method; /* 0=burley 1=random_walk 2=skin 3=legacy */
   float mix_nested2_translucent_color[3];
+  /* Slice 2bu: one Add child is MixClosure (Mix-under-Add).
+   * enable=0 keeps 2bt Add+leaf bit-identical.
+   * Add child kind 6 = Mix. Fac unlinked float or LightPath.
+   * Mix leaves: 0=Glass 1=Transparent 3=Glossy 4=SSS 5=Translucent.
+   * Cite MixClosureNode nested under AddClosureNode; GlossyBsdfNode /
+   * GlassBsdfNode / TransparentBsdfNode / SubsurfaceScatteringNode /
+   * TranslucentBsdfNode. */
+  int mix_nested2_add_mix_enable;
+  float mix_nested2_add_mix_fac;
+  int mix_nested2_add_mix_lightpath_enable;
+  int mix_nested2_add_mix_lightpath_output; /* QT_LIGHTPATH_* */
+  int mix_nested2_add_mix_c1_kind;
+  int mix_nested2_add_mix_c2_kind;
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1364,12 +1379,14 @@ typedef struct QT_Mesh {
   float mix_nested2_ramp_hsv_color[3];
   int mix_nested2_ramp_hsv_color_kind;
   int mix_nested2_ramp_hsv_color_lightpath;
-  /* Slice 2bt: nested2 Mix leaf AddClosure (+ Glossy/SSS/Translucent).
+  /* Slice 2bt/2bu: nested2 Mix leaf AddClosure (+ Glossy/SSS/Translucent/Mix).
    * mix_nested2_closure*_kind: 0=Glass 1=Transparent 2=Add.
    * enable=0 / kinds 0/1 keep 2bs Glass+Transparent bit-identical.
-   * Add children: 0=Glass 1=Transparent 3=Glossy 4=SSS 5=Translucent.
-   * Cite AddClosureNode, GlossyBsdfNode, SubsurfaceScatteringNode,
-   * TranslucentBsdfNode, MixClosureNode, GlassBsdfNode, TransparentBsdfNode. */
+   * Add children: 0=Glass 1=Transparent 3=Glossy 4=SSS 5=Translucent
+   * 6=Mix (Slice 2bu Mix-under-Add; needs add_mix_enable).
+   * Cite AddClosureNode, MixClosureNode, GlossyBsdfNode,
+   * SubsurfaceScatteringNode, TranslucentBsdfNode, GlassBsdfNode,
+   * TransparentBsdfNode. */
   int mix_nested2_add_enable;
   int mix_nested2_add_c1_kind;
   int mix_nested2_add_c2_kind;
@@ -1383,6 +1400,19 @@ typedef struct QT_Mesh {
   float mix_nested2_sss_roughness;
   int mix_nested2_sss_method; /* 0=burley 1=random_walk 2=skin 3=legacy */
   float mix_nested2_translucent_color[3];
+  /* Slice 2bu: one Add child is MixClosure (Mix-under-Add).
+   * enable=0 keeps 2bt Add+leaf bit-identical.
+   * Add child kind 6 = Mix. Fac unlinked float or LightPath.
+   * Mix leaves: 0=Glass 1=Transparent 3=Glossy 4=SSS 5=Translucent.
+   * Cite MixClosureNode nested under AddClosureNode; GlossyBsdfNode /
+   * GlassBsdfNode / TransparentBsdfNode / SubsurfaceScatteringNode /
+   * TranslucentBsdfNode. */
+  int mix_nested2_add_mix_enable;
+  float mix_nested2_add_mix_fac;
+  int mix_nested2_add_mix_lightpath_enable;
+  int mix_nested2_add_mix_lightpath_output; /* QT_LIGHTPATH_* */
+  int mix_nested2_add_mix_c1_kind;
+  int mix_nested2_add_mix_c2_kind;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

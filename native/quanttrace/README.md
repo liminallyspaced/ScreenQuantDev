@@ -1,4 +1,4 @@
-<!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.26-slice2y -->
+<!-- Slice 2y: Principled Thin Wall BOOLEAN; version 0.0.74-slice2bu -->
 # QuantTrace native (`libquanttrace`)
 
 **Current native:** `0.0.72-slice2bs` — ColorRamp.Fac←MATH (Backfacing×HueSat) on nested2 ramp + Glass+Transparent. Addon still `0.3.3`.
@@ -122,7 +122,7 @@ See `SLICE2.md`. Working CPU binary after `make update` + cmake:
 ## ABI
 
 ```c
-const char *quanttrace_version(void);   /* "0.0.12-slice2k" */
+const char *quanttrace_version(void);   /* "0.0.74-slice2bu" */
 int quanttrace_is_tracer(void);         /* 1 when QT_WITH_CYCLES */
 int quanttrace_render_scene_rgba(...);  /* depsgraph-fed QT_SimpleScene (1+1) */
 int quanttrace_render_qt_scene_rgba(...); /* N mesh + N AREA QT_Scene */
