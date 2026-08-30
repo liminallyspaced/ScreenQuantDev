@@ -1,4 +1,16 @@
-## [0.3.3] — unreleased
+## [0.3.4] — 2026-08-30
+
+### Preserve Look and video-safe sampling
+- Replaced the broad tier-0/1 default with an explicit **Preserve Look** allowlist. The default no longer changes caustics, transparent/cutout shadows, light-tree allocation, light sampling thresholds, bounce/clamp response, glossy filtering, emitter sampling, object visibility, subdivision, denoiser enablement, or OIDN prefilter quality.
+- Added **Preserve Look / Balanced / Aggressive** quality contracts and **Auto / Video / Still** render intent. Auto resolves a multi-frame output range to Video.
+- Interactive **Analyze & Preview** always shows the plan before applying. The dialog reports the quality contract, render intent, representative video-frame count, and how many appearance-risk levers were withheld.
+- Video sample-floor probing checks representative frames across the shot and takes the highest accepted knee. Any frame that does not converge rejects the reduction for the entire shot. Video uses a stricter mean-linear-RGB threshold, a p95 local-detail guard, and a 128 spp floor.
+- Preserve Look/video probes measure the artist's existing denoiser choice instead of temporarily forcing OIDN. This prevents a denoised postage-stamp probe from selecting a sample count that smears an originally non-denoised final.
+- Multi-frame probes remove their temporary EXR directories after each checked frame.
+- Automatic Fit to Budget now remains separate from Preserve Look and Balanced; only explicit Aggressive keeps the historical auto-fit behavior.
+- Added policy, intent, local-detail, representative-frame, and headless no-look regression coverage. Published 0.3.3 timing plates remain historical aggressive-stack measurements, not new Preserve Look claims.
+
+## [0.3.3] — 2026-08-30
 
 ### QuantTrace Slice 2bt (2026-08-30 12pm PlugWalk ET)
 - Native `0.0.73-slice2bt`: nested2 Mix leaf Add Shader (+ unlinked Glossy/SSS/Translucent). ABI `mix_nested2_add_enable` / `add_c{1,2}_kind` + glossy color/roughness/distribution + sss color/scale/radius/ior/roughness/method + translucent_color after 2bs ramp-math HSV on `QT_Mesh` + `QT_SimpleScene`. enable=0 / nested2 kinds 0/1 keep 2bs Glass+Transparent bit-identical. Add children 0=Glass 1=Transparent 3=Glossy 4=SSS 5=Translucent. Cite Cycles `shader_nodes.h` AddClosureNode, GlossyBsdfNode, SubsurfaceScatteringNode (BSSRDF out), TranslucentBsdfNode, MixClosureNode, GlassBsdfNode, TransparentBsdfNode. `is_tracer=1`. Addon still `0.3.3`.

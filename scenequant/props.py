@@ -101,16 +101,58 @@ class SceneQuantSettings(bpy.types.PropertyGroup):
     )
     speed_mode: EnumProperty(
         name="Mode",
-        description="Auto applies the full stack in one click. Manual lets you pick what changes",
+        description="Auto builds the selected profile. Manual also exposes action classes",
         items=(
-            ("AUTO", "Auto", "One click: all safe speed levers plus a sample-knee probe"),
+            ("AUTO", "Auto", "Analyze and preview the selected quality profile"),
             ("MANUAL", "Manual", "Choose which classes to apply, then confirm the plan"),
         ),
         default="AUTO",
     )
+    speed_profile: EnumProperty(
+        name="Quality Contract",
+        description="How much SceneQuant may change in exchange for speed",
+        items=(
+            (
+                "PRESERVE_LOOK", "Preserve Look",
+                "Default: never alter lights, shadows, materials, visibility, "
+                "bounce response, or denoiser quality",
+            ),
+            (
+                "BALANCED", "Balanced",
+                "Allow measured sampling changes, but keep lighting, materials, "
+                "visibility, and denoiser quality intact",
+            ),
+            (
+                "AGGRESSIVE", "Aggressive",
+                "Opt in to the historical full stack, including perceptual and "
+                "visibility changes; inspect the preview carefully",
+            ),
+        ),
+        default="PRESERVE_LOOK",
+    )
+    speed_render_intent: EnumProperty(
+        name="Render Intent",
+        description="Video uses stricter multi-frame sampling checks",
+        items=(
+            ("AUTO", "Auto", "Use Video when the output frame range has more than one frame"),
+            ("VIDEO", "Video", "Protect frame-to-frame consistency and reject a weak sample knee"),
+            ("STILL", "Still", "Optimize the current frame only"),
+        ),
+        default="AUTO",
+    )
+    video_probe_frames: IntProperty(
+        name="Video Check Frames",
+        description="Representative frames checked before lowering samples; the hardest frame wins",
+        default=3,
+        min=2,
+        max=7,
+    )
     speed_probe_knee: BoolProperty(
-        name="Probe sample knee",
-        description="Render a cheap ladder and cap samples at the proven floor. Auto always does this",
+        name="Measure sample floor",
+        description=(
+            "Render a low-resolution ladder before lowering samples. Video checks "
+            "multiple frames and keeps the highest accepted floor"
+        ),
         default=True,
     )
     speed_apply_dead: BoolProperty(

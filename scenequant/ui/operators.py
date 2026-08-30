@@ -1284,7 +1284,7 @@ def _filter_manual_plan(plan, settings):
 
 
 class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
-    """Cut Cycles wall-clock time with free and perceptual levers; journaled and revertible"""
+    """Analyze, preview, and apply the selected quality contract; fully revertible"""
 
     bl_idname = "scenequant.make_it_fast"
     bl_label = "Make it Fast"
@@ -1345,15 +1345,15 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
             logger.exception("Make it Fast planning failed")
             self.report({'ERROR'}, f"Could not build speed plan: {error}")
             return {'CANCELLED'}
-        if not plan.actions:
+        if not plan.actions and not getattr(settings, "speed_probe_knee", True):
             self.report(
                 {'INFO'},
                 "Make it Fast: scene already at the sample knee / no dead work "
                 "(low-double-digit gains only)",
             )
             return {'CANCELLED'}
-        if getattr(settings, "speed_mode", "AUTO") == "AUTO":
-            return self.execute(context)
+        # Auto means automatic planning, not silent application.  Every
+        # interactive click previews the plan before a scene write.
         return context.window_manager.invoke_props_dialog(self, width=460)
 
     @staticmethod
@@ -1379,12 +1379,31 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
             layout.label(text="Plan unavailable", icon='ERROR')
             return
         remaining = plan.get("est_pct", 100.0)
+        profile = {
+            "PRESERVE_LOOK": "Preserve Look",
+            "BALANCED": "Balanced",
+            "AGGRESSIVE": "Aggressive",
+        }.get(plan.get("profile"), "Preserve Look")
+        intent = "Video" if plan.get("intent") == "VIDEO" else "Still"
+        layout.label(text=f"{profile} · {intent}", icon='LOCKED')
         layout.label(text=f"Estimated remaining time: ~{remaining:.0f}%")
+        if plan.get("intent") == "VIDEO" and getattr(
+                context.scene.scenequant, "speed_probe_knee", True):
+            count = int(getattr(
+                context.scene.scenequant, "video_probe_frames", 3) or 3)
+            layout.label(
+                text=f"Sample floor: check {count} frames; hardest frame wins",
+                icon='RENDER_ANIMATION')
         for action in plan.get("actions") or []:
             badge = TIER_BADGES.get(action.get("tier"), "?")
             label = action.get("label") or action.get("kind", "?")
             icon = 'CHECKMARK' if action.get("visual_cost", 0) == 0 else 'INFO'
             layout.label(text=_clip(f"{badge}  {label}"), icon=icon)
+        withheld = plan.get("withheld_kinds") or []
+        if withheld:
+            layout.label(
+                text=f"{len(withheld)} appearance-risk lever(s) withheld",
+                icon='LOCKED')
         caveats = plan.get("caveats") or []
         for caveat in caveats[:3]:
             layout.label(text=_clip(caveat), icon='INFO')
@@ -1421,12 +1440,14 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
         result, jrnl = self._apply_atomic(context, scene, settings, plan, cov, mem)
         if result is None:
             return {'CANCELLED'}
-        do_knee = (
-            getattr(settings, "speed_mode", "AUTO") == "AUTO"
-            or getattr(settings, "speed_probe_knee", True)
-        )
+        do_knee = getattr(settings, "speed_probe_knee", True)
         knee = knee_apply.auto_knee(
-            scene, already_adaptive=already_adaptive) if do_knee else {
+            scene,
+            already_adaptive=already_adaptive,
+            profile=plan.get("profile", "PRESERVE_LOOK"),
+            intent=plan.get("intent", "STILL"),
+            video_frame_count=getattr(settings, "video_probe_frames", 3),
+        ) if do_knee else {
             "applied": False, "reason": "sample knee off in Manual",
         }
         skip_entries = list(result["skipped"]) + _journal_skip_entries(jrnl)
@@ -1454,7 +1475,8 @@ class SCENEQUANT_OT_make_it_fast(bpy.types.Operator):
                 f"e.g. {example['name']}: {example['reason']}")
         else:
             self.report({'INFO'}, message)
-        if getattr(settings, "speed_mode", "AUTO") == "AUTO":
+        if (getattr(settings, "speed_mode", "AUTO") == "AUTO"
+                and plan.get("profile") == "AGGRESSIVE"):
             self._auto_fit_if_over(context)
         return {'FINISHED'}
 
@@ -1488,59 +1510,34 @@ class SCENEQUANT_OT_probe_sample_knee(bpy.types.Operator):
     bl_options = {'REGISTER'}
 
     def execute(self, context):
-        from ..analysis import sample_probe
         scene = context.scene
         if _not_cycles(self, scene):
             return {'CANCELLED'}
         if scene.camera is None:
             self.report({'ERROR'}, "Probe Sample Knee needs a scene camera")
             return {'CANCELLED'}
-        jrnl = journal.Journal.load(scene)
-        probe_id = uuid.uuid4().hex
-        scoped = plan_apply.RunScopedJournal(jrnl, probe_id)
-        knee = None
-        rungs = []
-        try:
-            render_at = knee_apply.make_blender_renderer(scene, scoped)
-            knee, ladder = sample_probe.run_knee_ladder(
-                render_at, eps=sample_probe.AUTO_EPS)
-            rungs = sorted(ladder.keys())
-        except Exception as error:
-            reverted = jrnl.revert_run(probe_id)
-            logger.exception("Probe Sample Knee failed; rolled back %d writes", reverted)
-            jrnl.save(scene)
-            self.report(
-                {'ERROR'},
-                "Probe failed (%s); rolled back %d changes" % (error, reverted))
-            return {'CANCELLED'}
-        jrnl.revert_run(probe_id)
-        apply_id = uuid.uuid4().hex
-        apply_scoped = plan_apply.RunScopedJournal(jrnl, apply_id)
-        try:
-            result = knee_apply.apply_knee(
-                scene, apply_scoped, knee,
-                probe_scale=knee_apply.PROBE_SCALE,
-                eps=sample_probe.AUTO_EPS)
-        except Exception as error:
-            reverted = jrnl.revert_run(apply_id)
-            logger.exception("Probe knee apply failed; rolled back %d writes", reverted)
-            jrnl.save(scene)
-            self.report(
-                {'ERROR'},
-                "Knee apply failed (%s); rolled back %d changes" % (error, reverted))
-            return {'CANCELLED'}
-        jrnl.save(scene)
-        rung_txt = ",".join(str(n) for n in rungs) or "-"
+        settings = scene.scenequant
+        result = knee_apply.auto_knee(
+            scene,
+            already_adaptive=bool(getattr(
+                getattr(scene, "cycles", None), "use_adaptive_sampling", False)),
+            profile=speed_solver.resolve_speed_profile(settings),
+            intent=speed_solver.resolve_render_intent(scene, settings),
+            video_frame_count=getattr(settings, "video_probe_frames", 3),
+        )
+        rung_txt = ",".join(str(n) for n in result.get("rungs", ())) or "-"
+        frame_txt = ",".join(str(n) for n in result.get("frames", ())) or "-"
         if result["applied"]:
             self.report(
                 {'INFO'},
-                "Sample knee %s (rungs %s) — %s" % (
-                    result["knee"], rung_txt, result["reason"]))
+                "Sample knee %s (frames %s; rungs %s) — %s" % (
+                    result["knee"], frame_txt, rung_txt, result["reason"]))
         else:
             self.report(
                 {'INFO'},
-                "Sample knee %s (rungs %s) — %s" % (
-                    result["knee"], rung_txt, result["reason"] or "no samples write"))
+                "Sample knee %s (frames %s; rungs %s) — %s" % (
+                    result["knee"], frame_txt, rung_txt,
+                    result["reason"] or "no samples write"))
         return {'FINISHED'}
 
 

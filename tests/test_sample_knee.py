@@ -80,13 +80,17 @@ def test_encode_last_report_keeps_grade():
     data["speed_plan"] = {"est_pct": 70.0, "actions": [
         {"kind": "CAMERA_CULL", "payload": {"objects": ["Chair.%03d" % i]}}
         for i in range(30)
-    ]}
+    ], "profile": "PRESERVE_LOOK", "intent": "VIDEO",
+        "withheld_kinds": ["CAMERA_CULL", "OPAQUE_CUTOUT_SHADOWS"]}
     merged = report.encode_last_report(data, maxlen=1024)
     check(len(merged) <= 1024, "merged speed plan still fits")
     out = report.decode_last_report(merged)
     check(out.get("grade") == "B",
           "grade kept after Make it Fast merge onto last_report")
     check("speed_plan" in out, "speed_plan kept after compact merge")
+    check(out["speed_plan"].get("profile") == "PRESERVE_LOOK"
+          and out["speed_plan"].get("intent") == "VIDEO",
+          "quality contract and render intent survive compact merge")
 
 
 
@@ -111,6 +115,30 @@ def main():
     mean, peak = probe.verify_delta(truth, shifted)
     check(abs(mean - 0.1) < 1e-5, "known +0.1 shift → mean Δ ≈ 0.1 (got %s)" % mean)
     check(abs(peak - 0.1) < 1e-5, "known +0.1 shift → max Δ ≈ 0.1 (got %s)" % peak)
+
+    section("local-detail guard")
+    local = truth.copy()
+    local.reshape(-1, 3)[:32] += 0.1  # 12.5% of pixels, small global mean
+    metrics = probe.delta_metrics(truth, local)
+    check(metrics["mean"] < 0.02, "small region stays under a loose mean threshold")
+    check(metrics["p95"] > 0.02, "p95 exposes the local change")
+    loose = probe.find_sample_knee({64: truth, 128: local}, eps=0.02)
+    guarded = probe.find_sample_knee(
+        {64: truth, 128: local}, eps=0.02, p95_eps=0.02)
+    check(loose == 64, "mean-only comparison accepts the small region")
+    check(guarded is None, "p95 guard rejects the local-detail loss")
+
+    section("representative video frames")
+    check(probe.representative_frames(1, 101, 3) == (1, 51, 101),
+          "three-frame probe includes start, middle and end")
+    check(probe.representative_frames(5, 5, 3) == (5,),
+          "single-frame range stays a still")
+    check(probe.representative_frames(1, 3, 7) == (1, 2, 3),
+          "short shots check every frame without duplicates")
+    check(probe.VIDEO_EPS < probe.AUTO_EPS,
+          "video convergence is stricter than the historical auto probe")
+    check(probe.VIDEO_KNEE_FLOOR > probe.KNEE_FLOOR,
+          "video keeps a higher minimum sample floor")
 
     section("monotonic noise knee")
     rng = np.random.RandomState(0)

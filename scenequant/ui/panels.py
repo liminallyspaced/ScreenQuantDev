@@ -275,14 +275,33 @@ class SCENEQUANT_PT_speed(SceneQuantPanelMixin, bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        settings = context.scene.scenequant
+        layout.prop(settings, "speed_profile", text="")
+        layout.prop(settings, "speed_render_intent", expand=True)
+        if settings.speed_render_intent in ("AUTO", "VIDEO"):
+            layout.prop(settings, "video_probe_frames")
         row = layout.row()
         row.scale_y = 2.2
-        row.operator("scenequant.make_it_fast", text="Make it Fast")
-        layout.operator("scenequant.revert_all", text="Revert")
+        row.operator("scenequant.make_it_fast", text="Analyze & Preview")
+        if settings.speed_profile == "PRESERVE_LOOK":
+            layout.label(text="Lights, shadows, materials and visibility stay intact", icon='LOCKED')
+        elif settings.speed_profile == "AGGRESSIVE":
+            warning = layout.row()
+            warning.alert = True
+            warning.label(text="May change the look — review every action", icon='ERROR')
+        layout.operator("scenequant.revert_all", text="Revert SceneQuant Changes")
         data = parse_report(context.scene)
         plan = data.get("speed_plan") if isinstance(data, dict) else None
         if isinstance(plan, dict) and isinstance(plan.get("est_pct"), (int, float)):
-            layout.label(text="Last: ~%.0f%% remaining time" % plan["est_pct"])
+            profile = {
+                "PRESERVE_LOOK": "Preserve Look",
+                "BALANCED": "Balanced",
+                "AGGRESSIVE": "Aggressive",
+            }.get(plan.get("profile"), "")
+            intent = "Video" if plan.get("intent") == "VIDEO" else "Still"
+            prefix = (profile + " · " + intent + " · ") if profile else ""
+            layout.label(text="Last: %s~%.0f%% remaining time" % (
+                prefix, plan["est_pct"]))
         verify = data.get("verify") if isinstance(data, dict) else None
         if isinstance(verify, dict) and "mean" in verify:
             layout.label(text="Verify Δ mean %.4f  max %.4f" % (
@@ -334,9 +353,9 @@ class SCENEQUANT_PT_levers(SceneQuantPanelMixin, bpy.types.Panel):
         settings = scene.scenequant
         row = layout.row(align=True)
         row.prop(settings, "speed_mode", expand=True)
+        layout.prop(settings, "speed_probe_knee")
         if settings.speed_mode == "MANUAL":
             box = layout.box()
-            box.prop(settings, "speed_probe_knee")
             box.prop(settings, "speed_apply_dead")
             box.prop(settings, "speed_apply_paths")
         row = layout.row(align=True)

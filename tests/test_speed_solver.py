@@ -77,9 +77,10 @@ def _scene(**cycles_kw):
     )
 
 
-def _settings():
+def _settings(profile="AGGRESSIVE", intent="AUTO"):
     return Obj(vram_budget_gb=8.0, min_texture_size=256,
-               coverage_frame_samples=5, quality_factor=2.0)
+               coverage_frame_samples=5, quality_factor=2.0,
+               speed_profile=profile, speed_render_intent=intent)
 
 
 def _mem(total=400.0):
@@ -101,19 +102,34 @@ def test_independence():
 
 
 def test_default_plan_filters():
-    section("default plan filters")
+    section("Preserve Look default policy")
     scene = _scene(use_adaptive_sampling=False, samples=4096,
                    use_denoising=False, adaptive_threshold=0.01)
     scene.render.use_lock_interface = False
-    plan = speed_solver.build_speed_plan(scene, {}, _mem(), _settings())
+    settings = Obj(vram_budget_gb=8.0, min_texture_size=256,
+                   coverage_frame_samples=5, quality_factor=2.0)
+    plan = speed_solver.build_speed_plan(scene, {}, _mem(), settings)
     kinds = [a.kind for a in plan.actions]
     check(all(a.tier <= 1 for a in plan.actions),
           "tier 2/3 never in default plan")
     check(all(a.kind not in speed_solver.FORBIDDEN_KINDS for a in plan.actions),
           "no QUANTIZE/DRAFT/DEDUP in default plan")
     check("ADAPTIVE_ON" in kinds, "adaptive-off scene proposes ADAPTIVE_ON")
-    check("SAMPLES_CAP" in kinds, "4096 samples proposes SAMPLES_CAP")
+    check("SAMPLES_CAP" not in kinds,
+          "Preserve Look does not guess a universal sample cap")
+    check("DENOISE_ON" not in kinds,
+          "Preserve Look keeps the artist's denoise choice")
     check("LOCK_INTERFACE" in kinds, "unlocked interface proposes LOCK_INTERFACE")
+    risky = {
+        "APPLY_PERCEPTUAL_PATHS", "LIGHT_TREE", "CAUSTICS_OFF",
+        "MICRO_EMITTERS", "CAMERA_CULL", "OPAQUE_CUTOUT_SHADOWS",
+        "TRANSPARENT_SHADOW_CAP", "FILTER_GLOSSY", "DENOISE_PREFILTER",
+    }
+    check(not (set(kinds) & risky),
+          "Preserve Look withholds lighting/shadow/visibility/denoise-risk actions")
+    check(plan.profile == "PRESERVE_LOOK", "missing profile fails safe")
+    check(plan.intent == "STILL", "one-frame AUTO intent resolves to Still")
+    check(bool(plan.withheld_kinds), "withheld risky kinds are reported")
     check("DEAD_CLOSURE_PRUNE" not in kinds,
           "DEAD_CLOSURE_PRUNE is not in the default Auto plan")
     check("PRUNE_BUMP" not in kinds and "PRUNE_BEVEL" not in kinds,
@@ -140,6 +156,70 @@ def test_default_plan_filters():
         speed_solver.strongest_per_class(plan.actions))
     check(abs(plan.est_factor - expected) < 1e-9,
           "est_factor is the class-deduped product")
+
+
+def test_profile_and_video_policy():
+    section("quality profiles and video policy")
+    scene = _scene(
+        use_adaptive_sampling=False,
+        samples=4096,
+        use_denoising=False,
+        adaptive_threshold=0.01,
+        use_light_tree=True,
+    )
+    scene.frame_end = 120
+
+    balanced = speed_solver.build_speed_plan(
+        scene, {}, _mem(), _settings("BALANCED", "AUTO"))
+    balanced_kinds = {a.kind for a in balanced.actions}
+    check(balanced.intent == "VIDEO", "multi-frame AUTO intent resolves to Video")
+    check("SAMPLES_CAP" in balanced_kinds,
+          "Balanced can propose a sampling ceiling")
+    check("DENOISE_ON" not in balanced_kinds,
+          "Video never silently enables denoising")
+    check("LIGHT_TREE" not in balanced_kinds,
+          "Video keeps light sampling distribution stable")
+    check("APPLY_PERCEPTUAL_PATHS" not in balanced_kinds,
+          "Balanced keeps bounce and clamp response intact")
+
+    aggressive = speed_solver.build_speed_plan(
+        scene, {}, _mem(), _settings("AGGRESSIVE", "VIDEO"))
+    aggressive_kinds = {a.kind for a in aggressive.actions}
+    check("DENOISE_ON" in aggressive_kinds,
+          "Aggressive remains an explicit full-stack opt-in")
+
+
+def test_unproven_gpu_has_no_speed_credit():
+    section("unproven GPU recommendation is not credited")
+    original = speed_solver._gpu_backends
+    speed_solver._gpu_backends = lambda: (None, ())
+    try:
+        scene = _scene(device="CPU")
+        plan = speed_solver.build_speed_plan(
+            scene, {}, _mem(), _settings("PRESERVE_LOOK", "STILL"))
+        gpu = [a for a in plan.actions if a.kind == "DEVICE_GPU"]
+        check(len(gpu) == 1, "CPU scene keeps the GPU setup recommendation")
+        check(gpu[0].payload == {}, "unproven backend has no apply payload")
+        check(gpu[0].time_factor == 1.0,
+              "unproven backend contributes no estimated speedup")
+    finally:
+        speed_solver._gpu_backends = original
+
+    speed_solver._gpu_backends = lambda: ("CUDA", ("CUDA",))
+    try:
+        scene = _scene(device="CPU")
+        plan = speed_solver.build_speed_plan(
+            scene, {}, _mem(total=9000.0),
+            _settings("PRESERVE_LOOK", "STILL"))
+        gpu = [a for a in plan.actions if a.kind == "DEVICE_GPU"]
+        check(len(gpu) == 1 and gpu[0].payload.get("set_device"),
+              "known backend remains a visible recommendation")
+        check(gpu[0].time_factor == 1.0,
+              "over-VRAM scene receives no GPU speed credit")
+        check(any("VRAM headroom" in c for c in plan.caveats),
+              "over-VRAM GPU recommendation is caveated")
+    finally:
+        speed_solver._gpu_backends = original
 
 
 def test_never_raise_samples():
@@ -347,9 +427,8 @@ def test_honest_estimate_gated_noops():
     check("PERSISTENT_DATA" in kinds, "still proposes persistent data")
     check(abs(kinds["PERSISTENT_DATA"] - 1.0) < 1e-9,
           "VRAM 0 → persistent factor 1.0")
-    check("GPU_DENOISE" in kinds, "still proposes GPU denoise")
-    check(abs(kinds["GPU_DENOISE"] - 1.0) < 1e-9,
-          "VRAM 0 → GPU denoise factor 1.0")
+    check("GPU_DENOISE" not in kinds,
+          "denoise-off scene has no meaningless GPU-denoise action")
     check(abs(kinds.get("DENOISE_ON", 1.0) - 1.0) < 1e-9,
           "OIDN without sample drop is factor 1.0")
     winners = speed_solver.strongest_per_class(plan.actions)
@@ -360,6 +439,7 @@ def test_honest_estimate_gated_noops():
           "caveat names unset VRAM budget")
 
     rich = _settings()
+    scene.cycles.use_denoising = True
     plan2 = speed_solver.build_speed_plan(scene, {}, _mem(), rich)
     kinds2 = {a.kind: a.time_factor for a in plan2.actions}
     check(abs(kinds2["PERSISTENT_DATA"] - 0.55) < 1e-9,
@@ -1528,6 +1608,8 @@ def test_auto_scramble_gpu_only():
 def main():
     test_independence()
     test_default_plan_filters()
+    test_profile_and_video_policy()
+    test_unproven_gpu_has_no_speed_credit()
     test_never_raise_samples()
     test_already_fast()
     test_light_tree_product_shot()

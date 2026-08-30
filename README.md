@@ -1,8 +1,8 @@
 # SceneQuant
 
-**One click. Faster Cycles. Full revert.**
+**Faster Cycles without casually changing the shot.**
 
-Free Blender addon. Press **Make it Fast** — it plans a stack of Cycles speed levers, applies them through a journal, and you can undo the whole thing.
+Free Blender addon. Press **Analyze & Preview** — SceneQuant builds a quality-aware Cycles speed plan, shows every proposed change, and journals the accepted plan for full revert.
 
 [Download the zip](https://github.com/liminallyspaced/ScreenQuantDev/releases/latest) · [itch.io](https://liminalvisual.itch.io/scenequant) · [Gumroad](https://8139959199815.gumroad.com/l/exyxdi)
 
@@ -28,30 +28,39 @@ loft was timed at 100% (the native file is 250%). Already-tuned scenes may only 
 
 ![loft.blend on Blender 5.1.2 — 5:50 down to 2:12, 62% faster](docs/proof/loft-51-pair.jpg)
 
-## What Make it Fast does
+## What Analyze & Preview does
 
-It builds a revertible speed plan for **this** scene, then applies it. The default click covers:
+It builds a revertible speed plan for **this** scene and shows it before any render optimization is applied. The default **Preserve Look** contract covers:
 
-- Adaptive sampling and a sample-knee cap (never below a safe floor)
-- OIDN / GPU denoise placement
-- Bounce and clamp tightening
-- Light tree, caustics, camera cull
-- Dead geometry and off-screen work that still gets traced
+- Adaptive sampling with a measured sample floor
+- Three representative frame checks for video by default; the hardest frame wins
+- Persistent render data when VRAM headroom is available
+- GPU render/denoise/compositor placement when supported and memory-safe
+- Proven no-op work such as GPU path-guiding flags and static deform motion blur
 
-Draft mode, Fast GI, and resolution tricks are **not** in the default click.
+Preserve Look does **not** change lights, shadows, material response, object visibility, bounce limits, denoiser choice, or denoiser quality. In particular, it never turns OIDN on and never changes Accurate prefiltering to Fast. Draft mode, Fast GI, and resolution tricks are also excluded.
+
+Three quality contracts are available:
+
+- **Preserve Look** — default for final renders and video.
+- **Balanced** — permits measured sampling changes, while keeping lighting, materials, visibility, and denoiser quality intact.
+- **Aggressive** — explicit opt-in to the historical perceptual/culling stack.
+
+The exact allowlist, video probe rules, and acceptance gates live in
+[`docs/VIDEO-SAFE.md`](docs/VIDEO-SAFE.md).
 
 Everything it writes goes through a journal. **Revert All** puts the scene back.
 
-The N-panel is one **Make it Fast** button plus Revert. Analyze, VRAM, Manual, Tune, and Safety stay closed. The click runs Analyze, then the speed stack, then Fit to Budget only if VRAM is over.
+The N-panel exposes the quality contract, render intent, **Analyze & Preview**, and revert. Auto-detected video ranges use stricter multi-frame sample validation. Fit to Budget remains separate because automatic texture reduction is not part of Preserve Look.
 
 Also in the addon: Analyze, Fit to Budget (VRAM), Probe Sample Knee, Verify Render.
 
 ## Install
 
-1. Download `scenequant-0.3.3.zip` from [Releases](https://github.com/liminallyspaced/ScreenQuantDev/releases/latest).
+1. Download `scenequant-0.3.4.zip` from [Releases](https://github.com/liminallyspaced/ScreenQuantDev/releases/latest).
 2. Blender → Edit → Preferences → Add-ons → Install from Disk.
 3. Enable **SceneQuant — Scene & Render Optimizer**.
-4. 3D Viewport → N panel → **SceneQuant** → **Make it Fast**.
+4. 3D Viewport → N panel → **SceneQuant** → **Analyze & Preview**.
 
 Do **not** install the GitHub “Source code” zip. That is the repo, not the addon.
 
@@ -61,7 +70,8 @@ Once it is on [extensions.blender.org](https://extensions.blender.org/), use Get
 
 - These numbers are two files on one laptop. Your file will differ.
 - A scene that is already well-tuned may only move a little.
-- Quality change is small on the measured pairs (MAE ~5.6–7.0 / 255), not zero.
+- The published timing plates used the older aggressive stack and measured MAE ~5.6–7.0 / 255; they are not Preserve Look performance claims.
+- Preserve Look is a stricter policy and multi-frame sampling guard, not a promise of pixel identity on every device. Validate important shots before committing a full sequence.
 - Fit to Budget is a separate VRAM tool. It is not what the 41 / 52 / 62% plates measure.
 
 ## License

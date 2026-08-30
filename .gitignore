@@ -6,6 +6,7 @@ __pycache__/
 *.scenequant.json
 .DS_Store
 Thumbs.db
+graphify-out/
 
 # QuantTrace native build (ship sources; build locally)
 native/quanttrace/build/

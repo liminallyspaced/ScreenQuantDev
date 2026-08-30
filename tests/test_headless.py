@@ -266,15 +266,29 @@ def main():
     check(scene.scenequant.journal_data == "", "empty journal stored as empty string")
 
     section("make it Fast")
+    scene.scenequant.speed_profile = "PRESERVE_LOOK"
+    scene.scenequant.speed_render_intent = "VIDEO"
+    scene.scenequant.speed_probe_knee = False
     samples_before = scene.cycles.samples
     bounces_before = scene.cycles.max_bounces
     simplify_before = scene.render.use_simplify
+    denoise_before = scene.cycles.use_denoising
+    light_tree_before = scene.cycles.use_light_tree
+    reflective_caustics_before = scene.cycles.caustics_reflective
+    refractive_caustics_before = scene.cycles.caustics_refractive
     result = bpy.ops.scenequant.make_it_fast()
     check(result == {"FINISHED"}, "make_it_fast returns FINISHED")
     check(scene.cycles.samples <= samples_before,
           f"make_it_fast never raises samples ({samples_before} -> {scene.cycles.samples})")
-    check(scene.cycles.max_bounces <= bounces_before,
-          f"make_it_fast never raises max_bounces ({bounces_before} -> {scene.cycles.max_bounces})")
+    check(scene.cycles.max_bounces == bounces_before,
+          f"Preserve Look keeps max_bounces ({bounces_before} -> {scene.cycles.max_bounces})")
+    check(scene.cycles.use_denoising == denoise_before,
+          "Preserve Look keeps the artist's denoise choice")
+    check(scene.cycles.use_light_tree == light_tree_before,
+          "Video Preserve Look keeps light-tree sampling stable")
+    check(scene.cycles.caustics_reflective == reflective_caustics_before
+          and scene.cycles.caustics_refractive == refractive_caustics_before,
+          "Preserve Look keeps both caustics settings")
     check(scene.render.use_simplify == simplify_before
           or not scene.render.use_simplify,
           "make_it_fast does not turn Simplify on")

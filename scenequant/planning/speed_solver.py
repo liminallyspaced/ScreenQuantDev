@@ -11,6 +11,65 @@ from dataclasses import dataclass, field, asdict
 
 WASTE_CLASSES = ("device", "rebuild", "samples", "paths", "dead", "variance")
 DEFAULT_TIER_MAX = 1
+# The public default is an outcome contract, not a tier number.  Tier 1 still
+# contains deliberately perceptual levers (opaque cutout shadows, caustics,
+# bounce caps, denoiser changes, culling), so it cannot define "Preserve Look".
+PROFILE_PRESERVE_LOOK = "PRESERVE_LOOK"
+PROFILE_BALANCED = "BALANCED"
+PROFILE_AGGRESSIVE = "AGGRESSIVE"
+INTENT_AUTO = "AUTO"
+INTENT_STILL = "STILL"
+INTENT_VIDEO = "VIDEO"
+
+# Only actions whose qualifying predicate proves that the Combined result is
+# unchanged, or which raise a quality floor, belong in the default profile.
+# Sample-count reduction is handled separately by the measured knee probe.
+PRESERVE_LOOK_KINDS = {
+    "DEVICE_GPU",
+    "PERSISTENT_DATA",
+    "LOCK_INTERFACE",
+    "DEFORM_MBLUR_OFF",
+    "ADAPTIVE_ON",
+    "MIN_SAMPLES",
+    "PATH_GUIDING_OFF",
+    "WORLD_MIS_NONE",
+    "VOLUME_BOUNCES_ZERO",
+    "HOMOGENEOUS_VOLUME",
+    "GPU_DENOISE",
+    "COMPOSITOR_GPU",
+}
+
+# Balanced may change sampling/noise distribution, but never lighting,
+# materials, visibility, geometry, transparent shadows, or denoiser quality.
+BALANCED_BLOCKED_KINDS = {
+    "ANIMATED_SEED",
+    "APPLY_PERCEPTUAL_PATHS",
+    "CAUSTICS_OFF",
+    "LIGHT_SAMPLING_THRESHOLD",
+    "TRANSPARENT_SHADOW_CAP",
+    "FILTER_GLOSSY",
+    "DENOISE_PREFILTER",
+    "TRIM_OFFSCREEN",
+    "HIDE_OFFSCREEN_INSTANCES",
+    "SUBDIV_TRIM",
+    "ADAPTIVE_SUBDIV_CAP",
+    "OFFSCREEN_DICING",
+    "MICRO_EMITTERS",
+    "CAMERA_CULL",
+    "HAIR_RIBBONS",
+    "OPAQUE_CUTOUT_SHADOWS",
+}
+
+# Animation is less forgiving than a still: small per-frame sampling changes
+# become flicker, crawling edges, or denoiser smearing.  Aggressive remains an
+# explicit escape hatch; the two safer profiles obey this additional block.
+VIDEO_BLOCKED_KINDS = {
+    "ANIMATED_SEED",
+    "DENOISE_ON",
+    "DENOISE_PREFILTER",
+    "AUTO_SCRAMBLE",
+    "LIGHT_TREE",
+}
 # Never in the default Make it Fast plan (VRAM / draft / opt-in).
 FORBIDDEN_KINDS = {
     "QUANTIZE", "TEX_LIMIT", "DEDUP", "HALF_FLOAT", "DRAFT",
@@ -122,6 +181,9 @@ class SpeedPlan:
     est_pct: float              # remaining time as a percent (est_factor * 100)
     caveats: list = field(default_factory=list)
     applied_classes: list = field(default_factory=list)
+    profile: str = PROFILE_PRESERVE_LOOK
+    intent: str = INTENT_STILL
+    withheld_kinds: list = field(default_factory=list)
 
 
 def strongest_per_class(actions):
@@ -160,25 +222,45 @@ def plan_to_dict(plan):
         "est_pct": plan.est_pct,
         "caveats": list(plan.caveats),
         "applied_classes": list(plan.applied_classes),
+        "profile": plan.profile,
+        "intent": plan.intent,
+        "withheld_kinds": list(plan.withheld_kinds),
     }
 
 
 def build_speed_plan(scene, coverage, mem, settings, findings=None):
-    """Default Make it Fast plan: tiers 0+1 only, class-deduped estimate."""
+    """Build the selected quality contract, then estimate independent wins.
+
+    Preserve Look is the public default.  Balanced permits sampling-only
+    tradeoffs.  Aggressive retains the historical tier-0/1 stack.
+    """
     caveats = []
     actions = []
-    actions.extend(_device_actions(scene, caveats))
+    actions.extend(_device_actions(scene, caveats, mem, settings))
     actions.extend(_rebuild_actions(scene, mem, settings, caveats))
     actions.extend(_sample_actions(scene, caveats))
     actions.extend(_path_actions(scene, caveats))
     actions.extend(_dead_actions(scene, coverage or {}, caveats))
     actions.extend(_variance_actions(scene, settings, caveats))
 
-    default = [a for a in actions
-               if a.tier <= DEFAULT_TIER_MAX and a.kind not in FORBIDDEN_KINDS]
+    candidates = [a for a in actions
+                  if a.tier <= DEFAULT_TIER_MAX and a.kind not in FORBIDDEN_KINDS]
+    profile = resolve_speed_profile(settings)
+    intent = resolve_render_intent(scene, settings)
+    default = [a for a in candidates if _allowed_by_policy(a, profile, intent)]
+    withheld = sorted({a.kind for a in candidates if a not in default})
+    if withheld:
+        caveats.append(
+            "%s withheld %d appearance/consistency-risk lever(s)" % (
+                _profile_label(profile), len(withheld)))
+    if intent == INTENT_VIDEO:
+        caveats.append(
+            "Video: the sample knee is checked across representative frames; "
+            "the hardest accepted frame wins")
     if not default:
         caveats.append(ALREADY_FAST_CAVEAT)
-        return SpeedPlan([], 1.0, 100.0, caveats, [])
+        return SpeedPlan(
+            [], 1.0, 100.0, caveats, [], profile, intent, withheld)
 
     winners = strongest_per_class(default)
     factor = multiply_factors(winners)
@@ -188,12 +270,52 @@ def build_speed_plan(scene, coverage, mem, settings, findings=None):
         est_pct=factor * 100.0,
         caveats=caveats,
         applied_classes=[a.waste_class for a in winners],
+        profile=profile,
+        intent=intent,
+        withheld_kinds=withheld,
     )
+
+
+def resolve_speed_profile(settings):
+    value = getattr(settings, "speed_profile", PROFILE_PRESERVE_LOOK)
+    if value not in (PROFILE_PRESERVE_LOOK, PROFILE_BALANCED,
+                     PROFILE_AGGRESSIVE):
+        return PROFILE_PRESERVE_LOOK
+    return value
+
+
+def resolve_render_intent(scene, settings):
+    value = getattr(settings, "speed_render_intent", INTENT_AUTO)
+    if value == INTENT_AUTO:
+        start = int(getattr(scene, "frame_start", 1) or 1)
+        end = int(getattr(scene, "frame_end", start) or start)
+        value = INTENT_VIDEO if end > start else INTENT_STILL
+    if value not in (INTENT_STILL, INTENT_VIDEO):
+        return INTENT_STILL
+    return value
+
+
+def _allowed_by_policy(action, profile, intent):
+    if profile == PROFILE_PRESERVE_LOOK:
+        return action.kind in PRESERVE_LOOK_KINDS
+    if profile == PROFILE_BALANCED and action.kind in BALANCED_BLOCKED_KINDS:
+        return False
+    if profile != PROFILE_AGGRESSIVE and intent == INTENT_VIDEO:
+        return action.kind not in VIDEO_BLOCKED_KINDS
+    return True
+
+
+def _profile_label(profile):
+    return {
+        PROFILE_PRESERVE_LOOK: "Preserve Look",
+        PROFILE_BALANCED: "Balanced",
+        PROFILE_AGGRESSIVE: "Aggressive",
+    }.get(profile, "Preserve Look")
 
 
 # ------------------------------------------------------------------ device
 
-def _device_actions(scene, caveats):
+def _device_actions(scene, caveats, mem=None, settings=None):
     cycles = _cycles(scene)
     if cycles is None:
         return []
@@ -212,8 +334,20 @@ def _device_actions(scene, caveats):
             "switch Cycles to GPU in Preferences > System > Cycles Render "
             "Devices, then set Render Properties > Device to GPU Compute")
         label = "Cycles is on CPU — GPU would be much faster (Preferences)"
+    budget_mb = float(getattr(settings, "vram_budget_gb", 0.0) or 0.0) * 1024.0
+    scene_mb = getattr(mem, "total_mb", None)
+    headroom = (
+        isinstance(scene_mb, (int, float)) and budget_mb > 0.0
+        and scene_mb < budget_mb * 0.8
+    )
+    if payload and not headroom:
+        caveats.append(
+            "GPU switch withheld at apply unless the scene has measured VRAM headroom")
+    # Do not credit a GPU speedup when discovery or VRAM fit is unproven.  The
+    # recommendation can stay in the preview with factor 1.0.
     return [SpeedAction(
-        "DEVICE_GPU", label, "device", 0, 0.4, 0, payload)]
+        "DEVICE_GPU", label, "device", 0,
+        0.4 if payload and headroom else 1.0, 0, payload)]
 
 
 def _gpu_backends():
@@ -232,7 +366,7 @@ def _rebuild_actions(scene, mem, settings, caveats):
     if rend is not None and not getattr(rend, "use_persistent_data", False):
         # First F12 still pays the BVH. The next F12 on a weak GPU does not.
         # Apply stays VRAM-headroom gated so an 8 GB box cannot OOM.
-        anim = _is_anim(scene)
+        anim = resolve_render_intent(scene, settings) == INTENT_VIDEO
         if anim:
             factor = 0.55 if _budget_known(settings) else 1.0
             label = "Persistent Data (animation; VRAM-headroom gated)"
@@ -1195,7 +1329,8 @@ def _compositor_has_crypto(scene):
 def _variance_actions(scene, settings, caveats):
     actions = []
     cycles = _cycles(scene)
-    if cycles is not None and _has_attr(cycles, "denoising_use_gpu"):
+    if (cycles is not None and getattr(cycles, "use_denoising", False)
+            and _has_attr(cycles, "denoising_use_gpu")):
         # Policy decides enable vs disable from VRAM headroom at apply time.
         factor = 0.85 if _budget_known(settings) else 1.0
         actions.append(SpeedAction(

@@ -63,7 +63,7 @@ def apply_speed_plan(scene, settings, jrnl, plan, coverage_map=None,
                           cache, skipped, progress)
         if outcome:
             outcomes.append(outcome)
-        applied += 1
+            applied += 1
     return {"applied": applied, "outcomes": outcomes, "skipped": skipped}
 
 
@@ -818,6 +818,15 @@ def _apply_device_gpu(scene, settings, jrnl, payload, cache, skipped, progress):
         skipped.append(_skip(
             "DEVICE_GPU", "-",
             "switch Cycles to GPU in Preferences > System > Cycles Render Devices"))
+        return None
+    mem = _need_mem(cache, skipped, "DEVICE_GPU")
+    usable = settings_apply._usable_mb(_vram_mb(settings))
+    total = getattr(mem, "total_mb", None) if mem is not None else None
+    if (not usable or not isinstance(total, (int, float))
+            or total >= usable):
+        skipped.append(_skip(
+            "DEVICE_GPU", "-",
+            "scene does not have proven GPU VRAM headroom; keeping current device"))
         return None
     if jrnl.set_prop(scene, "cycles.device", "GPU", SPEED_TAG):
         return "scene device → GPU Compute"

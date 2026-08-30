@@ -108,7 +108,11 @@ def encode_last_report(data, maxlen=LAST_REPORT_MAXLEN):
         return encoded
     plan = slim.get("speed_plan")
     if isinstance(plan, dict):
-        slim["speed_plan"] = {k: plan[k] for k in ("est_pct", "est_factor") if k in plan}
+        slim["speed_plan"] = {
+            k: plan[k] for k in (
+                "est_pct", "est_factor", "profile", "intent", "withheld_kinds"
+            ) if k in plan
+        }
         encoded = json.dumps(slim, default=str)
         if len(encoded) <= maxlen:
             return encoded

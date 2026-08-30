@@ -4,8 +4,12 @@
 
 DEFAULT_EPS = 0.01          # ~1% mean abs linear RGB (full-res, raw)
 AUTO_EPS = 0.015            # ~4/255; OIDN 25% interiors rarely hit 0.01
+PRESERVE_EPS = 0.008        # stricter: no forced denoise, no small-region hiding
+VIDEO_EPS = 0.006           # multiple frames must each meet this mean delta
+VIDEO_P95_EPS = 0.020       # 95% of channels stay within ~5/255 linear
 RGB_CHANNELS = 3
 KNEE_FLOOR = 64
+VIDEO_KNEE_FLOOR = 128
 
 
 def _as_float_rgb(buffer):
@@ -53,6 +57,29 @@ def verify_delta(buffer_a, buffer_b):
     return float(diff.mean()), float(diff.max())
 
 
+def delta_metrics(buffer_a, buffer_b):
+    """Mean, p95 and peak absolute linear-RGB delta.
+
+    Mean alone can hide a moving face, a thin highlight, or a small shadow in a
+    mostly static frame.  The p95 guard makes the video probe sensitive to those
+    local failures without letting one firefly veto the entire ladder.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        raise RuntimeError("numpy is required for sample-knee helpers")
+    a = _as_float_rgb(buffer_a)
+    b = _as_float_rgb(buffer_b)
+    if a.shape != b.shape:
+        raise ValueError("buffers must have the same RGB shape")
+    diff = abs(a - b)
+    return {
+        "mean": float(diff.mean()),
+        "p95": float(np.percentile(diff, 95)),
+        "max": float(diff.max()),
+    }
+
+
 def _ladder_pairs(ladder):
     """Sorted (N, buffer) pairs from a dict or a list of tuples."""
     if hasattr(ladder, "items"):
@@ -63,7 +90,7 @@ def _ladder_pairs(ladder):
     return items
 
 
-def find_sample_knee(ladder, eps=DEFAULT_EPS):
+def find_sample_knee(ladder, eps=DEFAULT_EPS, p95_eps=None):
     """Lowest N where Δ(N, 2N) < eps. None if the ladder never converges.
 
     `ladder` is {samples: buffer} or [(samples, buffer), ...] — buffers are
@@ -82,17 +109,39 @@ def find_sample_knee(ladder, eps=DEFAULT_EPS):
         doubled = by_n.get(2 * n)
         if doubled is None:
             continue
-        if mean_abs_linear_delta(buf, doubled) < eps:
+        metrics = delta_metrics(buf, doubled)
+        if (metrics["mean"] < eps
+                and (p95_eps is None or metrics["p95"] < p95_eps)):
             return n
     # No exact double: consecutive rungs, still require n2 > n.
     for (n, a), (n2, b) in zip(items, items[1:]):
         if n2 <= n:
             continue
-        if mean_abs_linear_delta(a, b) < eps:
+        metrics = delta_metrics(a, b)
+        if (metrics["mean"] < eps
+                and (p95_eps is None or metrics["p95"] < p95_eps)):
             return n
     return None
 
 DEFAULT_RUNGS = (64, 128, 256, 512)
+
+
+def representative_frames(frame_start, frame_end, count=3):
+    """Evenly spaced inclusive frame sample with deterministic de-duplication."""
+    start = int(frame_start)
+    end = int(frame_end)
+    if end <= start:
+        return (start,)
+    count = max(2, int(count))
+    if count >= end - start + 1:
+        return tuple(range(start, end + 1))
+    frames = []
+    span = end - start
+    for index in range(count):
+        frame = int(round(start + span * (index / float(count - 1))))
+        if frame not in frames:
+            frames.append(frame)
+    return tuple(frames)
 
 
 def pad_cheap_probe_knee(knee, current, probe_scale, floor=KNEE_FLOOR,
@@ -160,7 +209,8 @@ def rungs_for_current(current, rungs=DEFAULT_RUNGS):
     return tuple(picked)
 
 
-def run_knee_ladder(render_at, rungs=DEFAULT_RUNGS, eps=DEFAULT_EPS):
+def run_knee_ladder(render_at, rungs=DEFAULT_RUNGS, eps=DEFAULT_EPS,
+                    p95_eps=None):
     """Call render_at(n) for each rung until a knee appears.
 
     render_at is injected so this stays pure (operators render; tests fake).
@@ -171,7 +221,7 @@ def run_knee_ladder(render_at, rungs=DEFAULT_RUNGS, eps=DEFAULT_EPS):
     ladder = {}
     for n in rungs:
         ladder[int(n)] = render_at(int(n))
-        knee = find_sample_knee(ladder, eps)
+        knee = find_sample_knee(ladder, eps, p95_eps=p95_eps)
         if knee is not None:
             return knee, ladder
     return None, ladder
