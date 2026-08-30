@@ -1,6 +1,34 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bf landed** (2026-08-29 10pm PlugWalk ET). MixColorNode Factor ← FresnelNode (`base_mix_fresnel_enable` / `base_mix_fresnel_ior` after last `base_mix_*`). enable=0 keeps 2ay unlinked Fac bit-identical. Cite FresnelNode set_IOR; output Fac; MixColorNode Factor socket; Normal unlinked LINK_NORMAL. Loft Object003.002 Material.003: Mix RGBA MIX clamp_factor, Fac ← Fresnel IOR=1.45 unlinked Normal; A/B leftover nested Mix + Curves. 14 loft Mix→Base Color linked Fac are FRESNEL (2 NEW_GEOMETRY / 1 INVERT). Named refuse Fac←Noise/TEX_IMAGE/LayerWeight/GROUP/Geometry/Invert + linked Fresnel IOR/Normal. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.59-slice2bf`. Addon `0.3.3`.
+Status: **Slice 2bg landed** (2026-08-29 11pm PlugWalk ET). Nested constant Mix and/or RGB Curves(constant) on Mix A/B of Principled.Base Color fold to dual-constant MixColorNode (optional Fac←Fresnel 2bf). **No new C++ ABI** — enable=0 / no nested fold keeps 2ay mix, 2bf fresnel, 2bd curves bit-identical. Cite MixColorNode; RGBCurvesNode evaluate at pack-time for constant Color-in; existing `base_mix_*` / `base_mix_fresnel_*`. Native mesh order remains Color→Mix→Curves (2bd); loft Material.003 Mix(const, Curves(const)) is rewritten as Mix(const, curved_const). Loft Object003.002 Material.003 cleared. First PACK_FAIL now Object003.015 Carpet Soft Rug Curves←TEX_IMAGE on Mix side. Named refuse nested non-constant Mix / Curves Color-in TEX_IMAGE / Fac←Noise/NEW_GEOMETRY/Invert. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.60-slice2bg`. Addon `0.3.3`.
+
+## Slice 2bg — nested constant Mix / Curves(constant) on Mix A/B → Base Color (2026-08-29 11pm ET)
+
+Loft leftover after 2bf (Mix both sides linked): object `Object003.002` / material `Material.003`. Principled.Base Color ← Mix RGBA MIX clamp_factor, Fac ← Fresnel IOR=1.45. A ← Mix.001 (both-unlinked constant MIX foldable → RGB≈0.15879). B ← RGB Curves (master I mid 0.313637/0.7125, R/G/B identity, Fac=1) ← Mix.001. Census verified live loft graph. Claim cube matches that shape. Packer folds nested constant Mix and evaluates Curves on constant Color-in into `base_color` + `base_mix_other` (curves_n=0); Fresnel Fac still 2bf ABI.
+
+Cite Cycles `shader_nodes.h` MixColorNode; pack-time CurveMapping evaluate (channel then master I) instead of wiring RGBCurvesNode on a Mix input (native order is Mix→Curves for Concrete_Facade 2bd).
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| nested CLAIM | 32²/4 | 1.79e-7 | 5.11e-10 | 0 | **PASS** |
+| nested CLAIM | 256²/128 | 1.49e-7 | 3.57e-10 | 0 | **PASS** |
+| mix 2ay (enable=0) | 32²/4 | 5.36e-7 | 3.54e-9 | 0 | **PASS** |
+| fresnel 2bf | 32²/4 | 9.54e-7 | 6.36e-9 | 0 | **PASS** |
+| curves 2bd (n==0 on claim) | 32²/4 | 8.34e-7 | 1.50e-9 | 0 | **PASS** |
+| invert 2be | 32²/4 | 4.77e-7 | 6.55e-9 | 0 | **PASS** |
+| point 2av | 32²/4 | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| live stock CLAIM vs unlinked-Fac | 32²/4 | 0.275 | 3.64e-3 | 29 | graph live |
+| nested Mix←TEX_IMAGE | — | — | — | — | **REFUSE** Slice 2bg |
+| Fac←Noise | — | — | — | — | **REFUSE** Slice 2bf |
+| Curves Color-in←TEX_IMAGE on Mix side | — | — | — | — | **REFUSE** Slice 2bg |
+
+Loft pack: Object003.002 Material.003 nested Mix+Curves fold accepted. First PACK_FAIL `object='Object003.015' material='Carpet Soft Rug Dark Grey Pattern 2' Principled.Base Color Mix Curves Color-in not constant refused (Slice 2bg: constant / nested-constant-Mix Color-in only; TEX_IMAGE under Curves-on-Mix-side still refuse)`. Next: Curves←TEX_IMAGE on Mix A/B (needs Curves-on-Mix-side ABI or bake), leftover Fac←NEW_GEOMETRY/INVERT, GROUP/Botaniq, Bump Height VALTORGB/SEPARATE/MATH. Not loft Session Δmax.
+
+ABI: **none new** (Python fold only). Native version stamp `0.0.60-slice2bg`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-nested-mix-fold-32-pair.png`. Tools `_quanttrace_slice2bg_scene/smoke.py`.
+
 
 ## Slice 2bf — Fresnel Fac → Mix → Principled Base Color (2026-08-29 10pm ET)
 

@@ -93,6 +93,9 @@
 #   TEX_IMAGE / Mix / Gamma/HSV / constant. Linked Fac / second Curves /
 #   Vector/Float Curve refuse Slice 2bd. Native Mix then Curves (loft
 #   Concrete_Facade: dual TEX Mix → Curves → Base Color).
+# Slice 2bg: nested constant Mix / Curves(constant) on Mix A/B fold to
+#   dual-constant MixColorNode (optional Fac←Fresnel 2bf). No new C++ ABI.
+#   Curves Color-in←TEX_IMAGE on Mix side / nested non-constant Mix refuse.
 # Slice 2be: Invert → Principled.Roughness (rough_invert_enable / fac).
 #   enable=0 skips InvertNode (2ba/2bb/2i bit-identical). Unlinked Fac;
 #   Color <- TEX_IMAGE or ColorRamp (or constant Color fold via Rec.709
@@ -1688,6 +1691,180 @@ def _mix_side_tex_node(sock):
     return fn
 
 
+def _try_fold_linked_constant_mix_side(sock, ctx: str):
+    """Slice 2bg: if Mix A/B links to both-unlinked constant Mix, return folded RGB.
+
+    Returns None when the side is not a Mix (TEX_IMAGE / Curves / etc. stay chain).
+    Raises QuantTraceSyncError when the side is a nested Mix that is not
+    constant-foldable (linked Fac/A/B, VECTOR, unsupported blend).
+    """
+    if sock is None or not getattr(sock, "is_linked", False):
+        return None
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        return None
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    ntype = getattr(fn, "type", None) if fn is not None else None
+    if ntype not in ("MIX", "MIX_RGB"):
+        return None
+    if ntype == "MIX":
+        data_type = str(getattr(fn, "data_type", "FLOAT") or "FLOAT")
+        if data_type in ("VECTOR", "ROTATION"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix nested Mix data_type {data_type!r} "
+                "refused (Slice 2bg: RGBA constant Mix fold only)"
+            )
+        if data_type == "FLOAT":
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix nested FLOAT Mix refused "
+                "(Slice 2bg: RGBA constant Mix fold only)"
+            )
+        if data_type not in ("RGBA", "COLOR"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix nested Mix data_type {data_type!r} "
+                "refused (Slice 2bg)"
+            )
+    fac_sock, a_sock, b_sock = _mix_input_socks(fn)
+    a_l = bool(getattr(a_sock, "is_linked", False)) if a_sock is not None else False
+    b_l = bool(getattr(b_sock, "is_linked", False)) if b_sock is not None else False
+    fac_l = bool(getattr(fac_sock, "is_linked", False)) if fac_sock is not None else False
+    if fac_l or a_l or b_l:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix nested Mix not constant-foldable refused "
+            "(Slice 2bg: both-unlinked constant Mix on A/B only; "
+            "nested TEX_IMAGE/Curves/Fresnel Mix still refuse)"
+        )
+    return _fold_constant_mix_base_rgb(fn, ctx)
+
+
+def _eval_rgb_curves_constant(node, rgb, ctx: str):
+    """Evaluate ShaderNodeRGBCurve on a constant RGB (pack-time fold, Slice 2bg).
+
+    Matches Blender CurveMapping channel then master I (identity R/G/B + I mid
+    is the loft Material.003 shape). Fac unlinked blend: (1-fac)*in + fac*curved.
+    """
+    mapping = getattr(node, "mapping", None)
+    if mapping is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color RGB Curves missing mapping (Slice 2bg)"
+        )
+    inputs = getattr(node, "inputs", None)
+    fac_sock = None
+    if inputs is not None:
+        g = getattr(inputs, "get", None)
+        if callable(g):
+            fac_sock = g("Fac") or g("Factor")
+        if fac_sock is None:
+            fac_sock = _sock_ident_or_name(inputs, "Fac", "Factor")
+    if fac_sock is not None and getattr(fac_sock, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color RGB Curves.Fac is linked refused "
+            "(Slice 2bg: unlinked Fac only)"
+        )
+    fac = 1.0
+    if fac_sock is not None and getattr(fac_sock, "default_value", None) is not None:
+        fac = float(fac_sock.default_value)
+    curves = list(getattr(mapping, "curves", None) or [])
+    if len(curves) < 4:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color RGB Curves needs 4 curves (Slice 2bg)"
+        )
+    mapping.update()
+    mapR, mapG, mapB, mapI = curves[0], curves[1], curves[2], curves[3]
+    r = float(mapping.evaluate(mapR, float(rgb[0])))
+    g = float(mapping.evaluate(mapG, float(rgb[1])))
+    b = float(mapping.evaluate(mapB, float(rgb[2])))
+    r = float(mapping.evaluate(mapI, r))
+    g = float(mapping.evaluate(mapI, g))
+    b = float(mapping.evaluate(mapI, b))
+    curved = (r, g, b)
+    if fac == 0.0:
+        return (float(rgb[0]), float(rgb[1]), float(rgb[2]))
+    if fac == 1.0:
+        return curved
+    return tuple((1.0 - fac) * float(rgb[i]) + fac * curved[i] for i in range(3))
+
+
+def _constant_rgb_from_sock_or_link(sock, ctx: str):
+    """Unlinked RGB / RGB node / both-unlinked constant Mix → RGB, else None.
+
+    Raises when a nested Mix is present but not foldable (Slice 2bg).
+    """
+    if sock is None:
+        return None
+    if not getattr(sock, "is_linked", False):
+        stype = getattr(sock, "type", None)
+        dv = getattr(sock, "default_value", None)
+        if stype == "RGBA" or (hasattr(dv, "__len__") and not isinstance(dv, (str, bytes))):
+            return (float(dv[0]), float(dv[1]), float(dv[2]))
+        try:
+            v = float(dv) if dv is not None else 0.0
+        except (TypeError, ValueError):
+            return None
+        return (v, v, v)
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        return None
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    ntype = getattr(fn, "type", None) if fn is not None else None
+    if ntype == "RGB":
+        # ShaderNodeRGB: output Color default, or inputs[0]
+        outs = getattr(fn, "outputs", None)
+        if outs:
+            ov = getattr(outs[0], "default_value", None)
+            if ov is not None and hasattr(ov, "__len__"):
+                return (float(ov[0]), float(ov[1]), float(ov[2]))
+        return None
+    if ntype in ("MIX", "MIX_RGB"):
+        return _try_fold_linked_constant_mix_side(sock, ctx)
+    return None
+
+
+def _try_eval_linked_curves_constant_side(sock, ctx: str):
+    """If sock ← CURVE_RGB Color with constant Color-in, return curved RGB else None.
+
+    None when the side is not Curves (caller may treat as chain / TEX / etc.).
+    Raises when Curves is present but Color-in is not constant-foldable.
+    """
+    if sock is None or not getattr(sock, "is_linked", False):
+        return None
+    links = list(getattr(sock, "links", None) or [])
+    if len(links) != 1:
+        return None
+    fn = getattr(links[0], "from_node", None)
+    fs = getattr(links[0], "from_socket", None)
+    fn, fs = _peel_reroute(fn, fs)
+    ntype = getattr(fn, "type", None) if fn is not None else None
+    fsname = str(getattr(fs, "name", "") or "") if fs is not None else ""
+    if ntype != "CURVE_RGB":
+        return None
+    if fsname not in ("Color", "color", ""):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix Curves out {fsname!r} refused "
+            "(Slice 2bg: Color out only)"
+        )
+    inputs = getattr(fn, "inputs", None)
+    color_sock = None
+    if inputs is not None:
+        g = getattr(inputs, "get", None)
+        if callable(g):
+            color_sock = g("Color")
+        if color_sock is None:
+            color_sock = _sock_ident_or_name(inputs, "Color")
+    cin = _constant_rgb_from_sock_or_link(color_sock, ctx)
+    if cin is None:
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix Curves Color-in not constant refused "
+            "(Slice 2bg: constant / nested-constant-Mix Color-in only; "
+            "TEX_IMAGE under Curves-on-Mix-side still refuse)"
+        )
+    return _eval_rgb_curves_constant(fn, cin, ctx)
+
+
 def _fold_constant_mix_base_rgb(mix_node, ctx: str):
     """Fold both-unlinked constant Mix into Base Color RGB (prefer over Mix ABI)."""
     fac_sock, a_sock, b_sock = _mix_input_socks(mix_node)
@@ -1746,15 +1923,18 @@ def _fold_constant_mix_base_rgb(mix_node, ctx: str):
 
 
 def _peel_base_color_mix(from_node, from_sock, ctx: str):
-    """Peel Mix immediately on Principled Base Color (Slice 2ay).
+    """Peel Mix immediately on Principled Base Color (Slice 2ay / 2bf / 2bg).
 
     Returns (from_node, from_sock, mix_dict, dual_b_tex_node_or_None).
     Shape 1: exactly one of A/B linked = chain; other unlinked constant RGB.
     Shape 2: both linked TEX_IMAGE Color with matching Vector graphs; dual_b
     is the non-chain TEX_IMAGE node; chain side returned as from_node/from_sock.
+    Shape 3 (Slice 2bg): both linked, but one side is both-unlinked constant Mix
+    → fold that side to RGB so the outer Mix becomes one-side-linked (other side
+    stays chain: TEX_IMAGE / Curves / Gamma…). Nested Mix with linked inputs refuse.
     Both-unlinked constants: leave Mix in place (fold later; mix_type stays 0).
     Linked Fac: Fresnel Factor (IOR+Normal unlinked) is Slice 2bf;
-    other Fac sources / VECTOR / unsupported blend / both-linked non-TEX_IMAGE refuse.
+    other Fac sources / VECTOR / unsupported blend / both-linked non-fold refuse.
     """
     mix = dict(_base_mix_identity())
     from_node, from_sock = _peel_reroute(from_node, from_sock)
@@ -1853,31 +2033,87 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
     if a_linked and b_linked:
         tex_a = _mix_side_tex_node(a_sock)
         tex_b = _mix_side_tex_node(b_sock)
-        if tex_a is None or tex_b is None:
-            raise QuantTraceSyncError(
-                f"{ctx} Principled.Base Color Mix both sides linked refused "
-                "(Slice 2ay: dual TEX_IMAGE Color only; Curves/Fresnel/nested Mix refuse)"
-            )
-        key_a = _tex_vector_source_key(tex_a)
-        key_b = _tex_vector_source_key(tex_b)
-        if key_a != key_b:
-            raise QuantTraceSyncError(
-                f"{ctx} Principled.Base Color Mix dual TEX_IMAGE Vector graphs differ "
-                "(Slice 2ay: shared unlinked UV / same Mapping / same TEX_COORD only)"
-            )
-        # Primary chain = A (chain_is_a=1); B path = other image.
-        mix["base_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
-        mix["base_mix_fac"] = float(fac)
-        mix["base_mix_other"] = (0.0, 0.0, 0.0)
-        mix["base_mix_chain_is_a"] = 1
-        mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
-        mix["base_mix_clamp_result"] = 1 if clamp_result else 0
-        # B image path filled by caller after packing tex_b.
-        a_links = list(getattr(a_sock, "links", None) or [])
-        fn = getattr(a_links[0], "from_node", None)
-        fs = getattr(a_links[0], "from_socket", None)
-        fn, fs = _peel_reroute(fn, fs)
-        return fn, fs, mix, tex_b
+        if tex_a is not None and tex_b is not None:
+            key_a = _tex_vector_source_key(tex_a)
+            key_b = _tex_vector_source_key(tex_b)
+            if key_a != key_b:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color Mix dual TEX_IMAGE Vector graphs differ "
+                    "(Slice 2ay: shared unlinked UV / same Mapping / same TEX_COORD only)"
+                )
+            # Primary chain = A (chain_is_a=1); B path = other image.
+            mix["base_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+            mix["base_mix_fac"] = float(fac)
+            mix["base_mix_other"] = (0.0, 0.0, 0.0)
+            mix["base_mix_chain_is_a"] = 1
+            mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
+            mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+            # B image path filled by caller after packing tex_b.
+            a_links = list(getattr(a_sock, "links", None) or [])
+            fn = getattr(a_links[0], "from_node", None)
+            fs = getattr(a_links[0], "from_socket", None)
+            fn, fs = _peel_reroute(fn, fs)
+            return fn, fs, mix, tex_b
+        # Slice 2bg: fold constant nested Mix and/or Curves(constant) on A/B.
+        # Native mesh order is Color→Mix→Curves (2bd Concrete_Facade). Loft
+        # Material.003 is Mix(const, Curves(const)) — fold Curves on constants
+        # into Mix A/B so Factor←Fresnel stays correct (no new C++ ABI).
+        fold_a = _try_fold_linked_constant_mix_side(a_sock, ctx)
+        fold_b = _try_fold_linked_constant_mix_side(b_sock, ctx)
+        curv_a = _try_eval_linked_curves_constant_side(a_sock, ctx)
+        curv_b = _try_eval_linked_curves_constant_side(b_sock, ctx)
+        const_a = fold_a if fold_a is not None else curv_a
+        const_b = fold_b if fold_b is not None else curv_b
+        if const_a is not None and const_b is not None:
+            mix["base_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+            mix["base_mix_fac"] = float(fac)
+            mix["base_mix_other"] = const_b
+            mix["base_mix_chain_is_a"] = 1
+            mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
+            mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+            # Chain constant rides base_color via caller (_chain_const_rgb).
+            mix["_chain_const_rgb"] = const_a
+            return None, None, mix, None
+        if const_a is not None and const_b is None:
+            # A constant; B is chain (TEX_IMAGE / Gamma…).
+            mix["base_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+            mix["base_mix_fac"] = float(fac)
+            mix["base_mix_other"] = const_a
+            mix["base_mix_chain_is_a"] = 0
+            mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
+            mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+            links = list(getattr(b_sock, "links", None) or [])
+            if len(links) != 1:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color Mix chain multi-link refused "
+                    "(Slice 2bg)"
+                )
+            fn = getattr(links[0], "from_node", None)
+            fs = getattr(links[0], "from_socket", None)
+            fn, fs = _peel_reroute(fn, fs)
+            return fn, fs, mix, None
+        if const_b is not None and const_a is None:
+            mix["base_mix_type"] = int(_WORLD_MIX_TYPE_MAP[op])
+            mix["base_mix_fac"] = float(fac)
+            mix["base_mix_other"] = const_b
+            mix["base_mix_chain_is_a"] = 1
+            mix["base_mix_clamp_factor"] = 1 if clamp_factor else 0
+            mix["base_mix_clamp_result"] = 1 if clamp_result else 0
+            links = list(getattr(a_sock, "links", None) or [])
+            if len(links) != 1:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color Mix chain multi-link refused "
+                    "(Slice 2bg)"
+                )
+            fn = getattr(links[0], "from_node", None)
+            fs = getattr(links[0], "from_socket", None)
+            fn, fs = _peel_reroute(fn, fs)
+            return fn, fs, mix, None
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color Mix both sides linked refused "
+            "(Slice 2bg: dual TEX_IMAGE Color or constant nested Mix / "
+            "Curves(constant) fold; nested non-constant Mix still refuse)"
+        )
 
     # Exactly one side linked = chain; other must be unlinked constant RGB.
     chain_is_a = 1 if a_linked else 0
@@ -2138,6 +2374,10 @@ def _base_color_tex_and_gh(sock, *, object_name: str = "", mat=None):
     from_sock = getattr(links[0], "from_socket", None)
     from_node, from_sock = _peel_reroute(from_node, from_sock)
     from_node, from_sock, mix, dual_b = _peel_base_color_mix(from_node, from_sock, ctx)
+    # Slice 2bg: dual-constant Mix (nested Mix / Curves fold) → base_color chain.
+    chain_const = mix.pop("_chain_const_rgb", None)
+    if chain_const is not None:
+        return {**empty, **mix, **curves}, gh, chain_const
     # Both-unlinked constant Mix left in place — fold now (mix_type stays 0).
     ntype0 = getattr(from_node, "type", None) if from_node is not None else None
     if (

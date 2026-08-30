@@ -232,7 +232,7 @@ def main():
     check("QT_EXPORT int quanttrace_is_tracer" not in hello_c
           and "quanttrace_is_tracer(void)" not in hello_c,
           "hello.c no longer exports is_tracer (session_bridge does)")
-    check("0.0.51-slice2ax" in hello_c, "hello.c version string 0.0.51-slice2ax")
+    check("0.0.60-slice2bg" in hello_c, "hello.c version string 0.0.60-slice2bg")
     readme = _read("native/quanttrace/README.md").lower()
     check("cube" in readme and "slice" in readme, "native README names cube slice")
     check("is_tracer" in readme, "native README documents is_tracer")
@@ -765,7 +765,7 @@ def main():
     check("set_thin_wall" in bridge, "bridge sets thin_wall")
     check("set_transmission_weight" in bridge, "bridge sets transmission_weight")
     hello = _read("native/quanttrace/src/hello.c")
-    check("0.0.51-slice2ax" in hello, "hello version is 0.0.51-slice2ax")
+    check("0.0.60-slice2bg" in hello, "hello version is 0.0.60-slice2bg")
     ytools = _read("tools/_quanttrace_slice2y_scene.py")
     check("ThinWall" in ytools and "Thin Wall" in ytools, "slice2y scene wires Thin Wall")
     ysmoke = _read("tools/_quanttrace_slice2y_smoke.py")
@@ -845,6 +845,205 @@ def main():
     msg = str(raised_tw).lower()
     check("boolean" in msg and "tex_image" in msg,
           "refuse names BOOLEAN, not TEX_IMAGE")
+
+    section("Slice 2bg nested constant Mix fold on Mix A/B")
+    sync_src = _read("scenequant/quanttrace/sync.py")
+    check("_try_fold_linked_constant_mix_side" in sync_src, "sync has nested Mix fold helper")
+    check("Slice 2bg" in sync_src, "sync names Slice 2bg refuse")
+    check(callable(sync._try_fold_linked_constant_mix_side), "fold helper callable")
+    check(callable(sync._peel_base_color_mix), "peel mix callable")
+    hello = _read("native/quanttrace/src/hello.c")
+    check("0.0.60-slice2bg" in hello, "native version 0.0.60-slice2bg")
+    bgtools = _read("tools/_quanttrace_slice2bg_scene.py")
+    check("qt_nested_const_mix" in bgtools or "LOFT_MIX_A" in bgtools, "2bg scene has loft nested Mix")
+    check("ShaderNodeRGBCurve" in bgtools, "2bg scene wires RGB Curves")
+    check("ShaderNodeFresnel" in bgtools, "2bg scene wires Fresnel Fac")
+    bgsmoke = _read("tools/_quanttrace_slice2bg_smoke.py")
+    check("pack_scene" in bgsmoke and "render_qt_scene_rgba" in bgsmoke, "2bg smoke packs QT_Scene")
+    check("nested_tex" in bgsmoke and "Slice 2bg" in bgsmoke, "2bg smoke expects nested_tex refuse")
+
+    # Mock: outer Mix both-linked; A = nested constant Mix; B = unlinked RGB via fake Color sock
+    # Exercise _peel_base_color_mix fold path (no Curves — B constant RGB socket default through link to RGB node).
+    class _FromSockRGB:
+        name = "Color"
+        type = "RGBA"
+    class _RGBNode:
+        type = "RGB"
+        outputs = []
+        def __init__(self, rgb=(0.2, 0.3, 0.4)):
+            self._rgb = rgb
+    class _MixSock:
+        def __init__(self, value, linked=False, links=None, stype="RGBA", name="A"):
+            self.default_value = value
+            self.is_linked = linked
+            self.links = links or []
+            self.type = stype
+            self.name = name
+            self.identifier = name
+            self.enabled = True
+    class _InnerMix:
+        type = "MIX"
+        data_type = "RGBA"
+        blend_type = "MIX"
+        clamp_factor = True
+        clamp_result = False
+        use_clamp = False
+        def __init__(self):
+            self.inputs = [
+                _MixSock(0.5, name="Factor", stype="VALUE"),
+                _MixSock((0.082, 0.082, 0.082, 1.0), name="A_Color"),
+                _MixSock((0.236, 0.236, 0.236, 1.0), name="B_Color"),
+            ]
+            # also expose .get
+            class _In:
+                def __init__(self, outer):
+                    self._o = outer
+                def get(self, k, default=None):
+                    for s in self._o.inputs:
+                        if s.name == k or s.identifier == k:
+                            return s
+                    return default
+                def __iter__(self):
+                    return iter(self._o.inputs)
+                def __len__(self):
+                    return len(self._o.inputs)
+                def __getitem__(self, i):
+                    return self._o.inputs[i]
+            self.inputs = _In(self)
+            # rebuild proper
+    # Simpler: use sync._fold via peel with minimal socks matching _mix_input_socks
+
+    class _SockM:
+        def __init__(self, value, linked=False, links=None, stype="RGBA", name="", ident=None):
+            self.default_value = value
+            self.is_linked = linked
+            self.links = links or []
+            self.type = stype
+            self.name = name
+            self.identifier = ident or name
+            self.enabled = True
+
+    class _InputsList(list):
+        def get(self, k, default=None):
+            for s in self:
+                if s.name == k or s.identifier == k:
+                    return s
+            return default
+
+    class _LinkM:
+        def __init__(self, node, sock_name="Result"):
+            self.from_node = node
+            class _FS:
+                name = sock_name
+            self.from_socket = _FS()
+
+    class _InnerConstMix:
+        type = "MIX"
+        data_type = "RGBA"
+        blend_type = "MIX"
+        clamp_factor = True
+        clamp_result = False
+        use_clamp = False
+        def __init__(self):
+            self.inputs = _InputsList([
+                _SockM(0.5, stype="VALUE", name="Factor", ident="Factor_Float"),
+                _SockM((0.082, 0.082, 0.082, 1.0), name="A", ident="A_Color"),
+                _SockM((0.236, 0.236, 0.236, 1.0), name="B", ident="B_Color"),
+            ])
+
+    class _ConstRGB:
+        type = "RGB"
+        def __init__(self):
+            self.outputs = []
+
+    inner = _InnerConstMix()
+    rgb = _ConstRGB()
+    # Outer mix: A <- inner, B <- RGB constant node (chain); Fac unlinked
+    class _OuterMix:
+        type = "MIX"
+        data_type = "RGBA"
+        blend_type = "MIX"
+        clamp_factor = True
+        clamp_result = False
+        use_clamp = False
+        def __init__(self):
+            self.inputs = _InputsList([
+                _SockM(0.5, stype="VALUE", name="Factor", ident="Factor_Float"),
+                _SockM((0.5, 0.5, 0.5, 1.0), linked=True, links=[_LinkM(inner)], name="A", ident="A_Color"),
+                _SockM((0.5, 0.5, 0.5, 1.0), linked=True, links=[_LinkM(rgb, "Color")], name="B", ident="B_Color"),
+            ])
+
+    outer = _OuterMix()
+    class _FSOut:
+        name = "Result"
+    fn, fs, mix, dual = sync._peel_base_color_mix(outer, _FSOut(), "object='T' material='M'")
+    check(int(mix.get("base_mix_type", 0)) == 1, "2bg fold sets mix_type MIX=1")
+    check(int(mix.get("base_mix_chain_is_a", 1)) == 0, "2bg fold A→const so chain_is_a=0 (B chain)")
+    check(dual is None, "2bg fold has no dual_b")
+    other = mix.get("base_mix_other") or (0, 0, 0)
+    expected = (1 - 0.5) * 0.082 + 0.5 * 0.236
+    check(abs(float(other[0]) - expected) < 1e-6, "2bg folded other matches Mix.001 fold")
+    check(getattr(fn, "type", None) == "RGB", "2bg chain is B RGB node")
+
+    # Nested Mix with linked A must refuse Slice 2bg
+    class _NestedLinked:
+        type = "MIX"
+        data_type = "RGBA"
+        blend_type = "MIX"
+        clamp_factor = True
+        clamp_result = False
+        use_clamp = False
+        def __init__(self):
+            tex = type("T", (), {"type": "TEX_IMAGE"})()
+            self.inputs = _InputsList([
+                _SockM(0.5, stype="VALUE", name="Factor", ident="Factor_Float"),
+                _SockM((0.1, 0.1, 0.1, 1.0), linked=True, links=[_LinkM(tex, "Color")], name="A", ident="A_Color"),
+                _SockM((0.9, 0.9, 0.9, 1.0), name="B", ident="B_Color"),
+            ])
+    nested_bad = _NestedLinked()
+    class _OuterBad:
+        type = "MIX"
+        data_type = "RGBA"
+        blend_type = "MIX"
+        clamp_factor = True
+        clamp_result = False
+        use_clamp = False
+        def __init__(self):
+            self.inputs = _InputsList([
+                _SockM(0.5, stype="VALUE", name="Factor", ident="Factor_Float"),
+                _SockM((0.5, 0.5, 0.5, 1.0), linked=True, links=[_LinkM(nested_bad)], name="A", ident="A_Color"),
+                _SockM((0.5, 0.5, 0.5, 1.0), linked=True, links=[_LinkM(rgb, "Color")], name="B", ident="B_Color"),
+            ])
+    raised_bg = None
+    try:
+        sync._peel_base_color_mix(_OuterBad(), _FSOut(), "object='T' material='M'")
+    except sync.QuantTraceSyncError as exc:
+        raised_bg = exc
+    check(raised_bg is not None, "nested linked Mix refuses")
+    check("Slice 2bg" in str(raised_bg), "refuse names Slice 2bg")
+
+    # Dual nested constant Mix → both sides fold to RGB (no Curves ABI).
+    inner_b = _InnerConstMix()
+    class _OuterDual:
+        type = "MIX"
+        data_type = "RGBA"
+        blend_type = "MIX"
+        clamp_factor = True
+        clamp_result = False
+        use_clamp = False
+        def __init__(self):
+            self.inputs = _InputsList([
+                _SockM(0.5, stype="VALUE", name="Factor", ident="Factor_Float"),
+                _SockM((0.5, 0.5, 0.5, 1.0), linked=True, links=[_LinkM(inner)], name="A", ident="A_Color"),
+                _SockM((0.5, 0.5, 0.5, 1.0), linked=True, links=[_LinkM(inner_b)], name="B", ident="B_Color"),
+            ])
+    fn2, fs2, mix2, dual2 = sync._peel_base_color_mix(_OuterDual(), _FSOut(), "object='T' material='M'")
+    check(fn2 is None and dual2 is None, "dual nested const returns no chain node")
+    check(int(mix2.get("base_mix_type", 0)) == 1, "dual nested const mix_type=1")
+    check("_chain_const_rgb" in mix2, "dual nested const stashes chain rgb")
+    check(abs(float(mix2["_chain_const_rgb"][0]) - expected) < 1e-6, "chain const matches fold")
+    check(abs(float(mix2["base_mix_other"][0]) - expected) < 1e-6, "other const matches fold")
+
 
     section("research brief present")
     brief = os.path.join(PROJECT_ROOT, "docs", "research", "SIDECAR-INTEGRATOR.md")
