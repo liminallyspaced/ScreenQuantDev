@@ -754,8 +754,19 @@ typedef struct QT_SimpleScene {
   float mix_nested_fac;
   int mix_nested_lightpath_enable;
   int mix_nested_lightpath_output; /* QT_LIGHTPATH_* */
-  int mix_nested_closure1_kind; /* 0=Glass 1=Transparent */
-  int mix_nested_closure2_kind; /* 0=Glass 1=Transparent */
+  int mix_nested_closure1_kind; /* 0=Glass 1=Transparent 2=NestedMix2 (Slice 2bq) */
+  int mix_nested_closure2_kind; /* 0=Glass 1=Transparent 2=NestedMix2 (Slice 2bq) */
+  /* Slice 2bq: second nested MixClosure hop (Mix Shader.004 after Mix.005).
+   * mix_nested_closure*_kind 2 = NestedMix2. When nested kinds stay 0/1,
+   * bit-identical to Slice 2bp (no nested2 MixClosureNode).
+   * Nested2 Fac: unlinked float or LightPath (not ColorRamp this turn).
+   * Nested2 leaves: Glass+Transparent only.
+   * Cite MixClosureNode nesting; GlassBsdfNode; TransparentBsdfNode. */
+  float mix_nested2_fac;
+  int mix_nested2_lightpath_enable;
+  int mix_nested2_lightpath_output; /* QT_LIGHTPATH_* */
+  int mix_nested2_closure1_kind; /* 0=Glass 1=Transparent */
+  int mix_nested2_closure2_kind; /* 0=Glass 1=Transparent */
 } QT_SimpleScene;
 
 QT_EXPORT int quanttrace_render_scene_rgba(const QT_SimpleScene *scene,
@@ -1239,6 +1250,12 @@ typedef struct QT_Mesh {
   int mix_nested_lightpath_output;
   int mix_nested_closure1_kind;
   int mix_nested_closure2_kind;
+  /* Slice 2bq: second nested MixClosure hop (same layout as QT_SimpleScene). */
+  float mix_nested2_fac;
+  int mix_nested2_lightpath_enable;
+  int mix_nested2_lightpath_output;
+  int mix_nested2_closure1_kind;
+  int mix_nested2_closure2_kind;
 } QT_Mesh;
 
 /* Light kinds for QT_Light.kind */

@@ -1,6 +1,27 @@
 # QuantTrace Slice 2 — Scene sync research
 
-Status: **Slice 2bp landed** (2026-08-30 8am PlugWalk ET). One nested MixClosure hop (`mix_closure*_kind` 2=NestedMix; `mix_nested_*` after `mix_shader_math_*`). Nested Fac unlinked|LightPath; leaves Glass+Transparent. kinds 0/1 keep Slice 2bo bit-identical. Census loft `Realistic_Glass_01`: Outer Mix.006 MATH Fac + Inner Mix.005 Is Shadow over Mix.004 (ColorRamp/Add/Refraction/Glossy/SSS/Glass.Color linked) + Transparent Color linked; outer Transparent white. CLAIM packs Outer MATH + Inner Is Shadow Glass+Transparent. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — deeper Mix.004 Slice 2bp. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.69-slice2bp`. Addon `0.3.3`.
+Status: **Slice 2bq landed** (2026-08-30 9am PlugWalk ET). Second nested MixClosure hop (`mix_nested_closure*_kind` 2=NestedMix2; `mix_nested2_*` after `mix_nested_*`). Nested2 Fac unlinked|LightPath; leaves Glass+Transparent. nested kinds 0/1 keep Slice 2bp bit-identical. Census loft `Realistic_Glass_01` Mix Shader.004: Fac←ColorRamp.002; Shader=Add (Glossy/SSS/Translucent); Shader_001=Glass Color+Rough linked. CLAIM packs Outer MATH + Mix.005 Is Shadow + Mix.004 Fac=0.35 Glass+Transparent. First PACK_FAIL still `G-__555573` / `Realistic_Glass_01` — nested2 Fac←ColorRamp Slice 2bq. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.70-slice2bq`. Addon `0.3.3`.
+
+
+## Slice 2bq — second nested Mix Shader hop (2026-08-30 9am ET)
+
+Cite Cycles `shader_nodes.h` MixClosureNode (Fac / Closure1 / Closure2 → Closure; nest a second hop), LightPathNode Is * Ray, GlassBsdfNode, TransparentBsdfNode. Do **not** evaluate Light Path at pack time. Nested2 Fac MATH / ColorRamp / TEX / third Mix / Add / Refraction / Glossy / SSS / linked Glass.Color refuse named Slice 2bq.
+
+| plate | res/spp | Δmax | MAE | px≥1e-3 | gate |
+|---|---|---|---|---|---|
+| CLAIM Outer MATH + Mix.005 Is Shadow + Mix.004 Fac=0.35 Glass+Transparent | 32²/4 | **1.91e-6** | 3.74e-8 | **0** | **PASS** |
+| CLAIM same | 256²/128 | **6.63e-4** | 2.44e-8 | **0** | **PASS** |
+| identity nested_mix (2bp) | 32²/4 | **1.91e-6** | 3.70e-8 | **0** | **PASS** |
+| identity glass_only (2bm) | 32²/4 | **1.19e-5** | 4.81e-8 | **0** | **PASS** |
+| mix 2ay / invert 2be / bump_sep 2bl / hdr 2aa | 32²/4 | 5.36e-7 / 4.77e-7 / 2.38e-7 / 6.13e-4 | — | **0** | **PASS** |
+| live stock CLAIM vs Session nested2-bypass | 32²/4 | **0.181** | 2.73e-3 | 110 | live (graph) |
+| refuse_colorramp / refuse_add / refuse_third / refuse_linked | — | — | — | — | **REFUSE** Slice 2bq |
+
+Loft pack: Mix Shader.004 accepted as nested2 hop into the packer. First PACK_FAIL `G-__555573` / `Realistic_Glass_01` — `nested2 Mix Fac←ColorRamp refused (Slice 2bq: Fac unlinked float or Light Path only; ColorRamp Fac on Mix Shader.004 is a follow-up)`. Next: Mix.004 Fac←ColorRamp (RGBRampNode) / Add+Refraction/Glossy/SSS / Glass.Color linked / Transparent.Color linked / dual Transparent color ABI. Not loft Session Δmax.
+
+ABI: `mix_nested_closure*_kind` extends 2=NestedMix2; `mix_nested2_fac` / `mix_nested2_lightpath_enable` / `mix_nested2_lightpath_output` / `mix_nested2_closure1_kind` / `mix_nested2_closure2_kind` after `mix_nested_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults keep 2bp bit-identical. Native `0.0.70-slice2bq`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-nested2-mix-32-pair.png`. Tools `_quanttrace_slice2bq_scene/smoke.py` + `_quanttrace_slice2bq_census.py`.
 
 ## Slice 2bp — nested Mix Shader hop (2026-08-30 8am ET)
 

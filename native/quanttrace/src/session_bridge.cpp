@@ -122,6 +122,10 @@
  *   mix_closure*_kind 2 = NestedMix). kinds 0/1 keep 2bo bit-identical.
  *   Nested Fac: unlinked float or LightPath. Nested leaves Glass+Transparent.
  *   Cite MixClosureNode nesting.
+ * Slice 2bq: second nested MixClosure hop (mix_nested2_* after mix_nested_*;
+ *   mix_nested_closure*_kind 2 = NestedMix2). nested kinds 0/1 keep 2bp
+ *   bit-identical (no nested2 MixClosureNode). Nested2 Fac unlinked|LightPath;
+ *   leaves Glass+Transparent. Cite MixClosureNode nesting.
  *   enable=0 keeps 2bc/2x bit-identical. Cite SeparateColorNode
  *   set_color_type NODE_COMBSEP_COLOR_RGB; float Red/Green/Blue → Height
  *   (no NODE_CONVERT_CF). Loft Sideboard: Blue ← TEX_IMAGE Color.
@@ -469,6 +473,11 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->mix_nested_lightpath_output = QT_LIGHTPATH_SHADOW_RAY;
     d->mix_nested_closure1_kind = 0;
     d->mix_nested_closure2_kind = 1;
+    d->mix_nested2_fac = 0.5f;
+    d->mix_nested2_lightpath_enable = 0;
+    d->mix_nested2_lightpath_output = QT_LIGHTPATH_SHADOW_RAY;
+    d->mix_nested2_closure1_kind = 0;
+    d->mix_nested2_closure2_kind = 1;
     /* Slice 2bk identity — mix_type=0 + specular_tint=(1,1,1) keeps 2u bit-identical. */
     d->specular_tint[0] = d->specular_tint[1] = d->specular_tint[2] = 1.0f;
     d->spec_tint_mix_type = 0;
@@ -911,6 +920,11 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->mix_nested_lightpath_output = s->mix_nested_lightpath_output;
     mesh->mix_nested_closure1_kind = s->mix_nested_closure1_kind;
     mesh->mix_nested_closure2_kind = s->mix_nested_closure2_kind;
+    mesh->mix_nested2_fac = s->mix_nested2_fac;
+    mesh->mix_nested2_lightpath_enable = s->mix_nested2_lightpath_enable;
+    mesh->mix_nested2_lightpath_output = s->mix_nested2_lightpath_output;
+    mesh->mix_nested2_closure1_kind = s->mix_nested2_closure1_kind;
+    mesh->mix_nested2_closure2_kind = s->mix_nested2_closure2_kind;
 
     std::memset(light, 0, sizeof(*light));
     std::memcpy(light->tfm, s->light_tfm, sizeof(light->tfm));
@@ -1534,9 +1548,34 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             return tr->output("BSDF");
         };
         /* Slice 2bp: kind 2 = nested MixClosure (Fac unlinked|LightPath,
-         * leaves Glass+Transparent). kinds 0/1 keep 2bo path. */
+         * leaves Glass+Transparent). kinds 0/1 keep 2bo path.
+         * Slice 2bq: mix_nested_closure*_kind 2 = NestedMix2 (MixClosureNode).
+         * nested kinds 0/1 skip nested2 — 2bp bit-identical. Cite MixClosureNode. */
         auto make_leaf = [&](int kind) -> ShaderOutput * {
             return (kind == 1) ? make_transparent() : make_glass();
+        };
+        auto make_nested2 = [&]() -> ShaderOutput * {
+            MixClosureNode *n2 = graph->create_node<MixClosureNode>();
+            if (m->mix_nested2_lightpath_enable != 0) {
+                LightPathNode *n2lp = graph->create_node<LightPathNode>();
+                graph->connect(n2lp->output(qt_lightpath_out_name(
+                                   m->mix_nested2_lightpath_output)),
+                               n2->input("Fac"));
+            }
+            else {
+                n2->set_fac(m->mix_nested2_fac);
+            }
+            graph->connect(make_leaf(m->mix_nested2_closure1_kind),
+                           n2->input("Closure1"));
+            graph->connect(make_leaf(m->mix_nested2_closure2_kind),
+                           n2->input("Closure2"));
+            return n2->output("Closure");
+        };
+        auto make_nested_leaf = [&](int kind) -> ShaderOutput * {
+            if (kind == 2) {
+                return make_nested2();
+            }
+            return make_leaf(kind);
         };
         auto make_nested = [&]() -> ShaderOutput * {
             MixClosureNode *inner = graph->create_node<MixClosureNode>();
@@ -1549,9 +1588,9 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             else {
                 inner->set_fac(m->mix_nested_fac);
             }
-            graph->connect(make_leaf(m->mix_nested_closure1_kind),
+            graph->connect(make_nested_leaf(m->mix_nested_closure1_kind),
                            inner->input("Closure1"));
-            graph->connect(make_leaf(m->mix_nested_closure2_kind),
+            graph->connect(make_nested_leaf(m->mix_nested_closure2_kind),
                            inner->input("Closure2"));
             return inner->output("Closure");
         };

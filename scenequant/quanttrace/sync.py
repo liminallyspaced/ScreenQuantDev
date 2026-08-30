@@ -3643,28 +3643,180 @@ def _mix_nested_identity() -> dict:
         "mix_nested_lightpath_output": 1,  # Shadow
         "mix_nested_closure1_kind": 0,
         "mix_nested_closure2_kind": 1,
+        **_mix_nested2_identity(),
+    }
+
+
+def _mix_nested2_identity() -> dict:
+    """nested2 Mix enable off — Slice 2bp bit-identical. Never or-coerce 0."""
+    return {
+        "mix_nested2_fac": 0.5,
+        "mix_nested2_lightpath_enable": 0,
+        "mix_nested2_lightpath_output": 1,  # Shadow
+        "mix_nested2_closure1_kind": 0,
+        "mix_nested2_closure2_kind": 1,
     }
 
 
 def _copy_mix_nested_fields(pr: dict) -> dict:
-    """Copy Slice 2bp nested ABI. Never `or` 0 / 0.5."""
+    """Copy Slice 2bp/2bq nested ABI. Never `or` 0 / 0.5."""
     out = {}
     for k, default in _mix_nested_identity().items():
         raw = pr.get(k)
         if raw is None:
             out[k] = default
-        elif k == "mix_nested_fac":
+        elif k in ("mix_nested_fac", "mix_nested2_fac"):
             out[k] = float(raw)
         else:
             out[k] = int(raw)
     return out
 
 
-def _pack_nested_mix_shader(inner, ctx: str) -> dict:
-    """Slice 2bp: one nested Mix Fac=unlinked|LightPath + Glass+Transparent.
+def _pack_nested2_mix_shader(inner, ctx: str) -> dict:
+    """Slice 2bq: second nested Mix Fac=unlinked|LightPath + Glass+Transparent.
 
-    Deeper Mix / Add / Refraction / Glossy / SSS / MATH Fac / linked Color
-    refuse with named Slice 2bp leftover (loft Mix.005 → Mix.004 ColorRamp).
+    ColorRamp Fac / Add / third Mix / Refraction / Glossy / SSS / linked Color
+    refuse with named Slice 2bq leftover (loft Mix Shader.004 ColorRamp/Add).
+    """
+    fac_sock = _mix_shader_fac_sock(inner)
+    if fac_sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} nested2 Mix Shader missing Fac/Factor refused (Slice 2bq)"
+        )
+    nest_fac = 0.5
+    nest_lp_enable = 0
+    nest_lp_out = 1
+    if getattr(fac_sock, "is_linked", False):
+        links = list(fac_sock.links or [])
+        if len(links) != 1:
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix Shader Fac multi-link refused (Slice 2bq)"
+            )
+        fn = _peel_surface_reroute(links[0].from_node)
+        fs = links[0].from_socket
+        ftype = getattr(fn, "type", None)
+        if ftype == "LIGHT_PATH":
+            sock_name = getattr(fs, "name", None)
+            if getattr(links[0].from_node, "type", None) == "REROUTE":
+                cur = links[0].from_node
+                cur_sock = links[0].from_socket
+                for _ in range(64):
+                    if getattr(cur, "type", None) == "LIGHT_PATH":
+                        sock_name = getattr(cur_sock, "name", sock_name)
+                        break
+                    if getattr(cur, "type", None) != "REROUTE":
+                        break
+                    if not cur.inputs or not cur.inputs[0].is_linked:
+                        break
+                    lk = list(cur.inputs[0].links or [])
+                    if len(lk) != 1:
+                        break
+                    cur_sock = lk[0].from_socket
+                    cur = lk[0].from_node
+                sock_name = getattr(cur_sock, "name", sock_name)
+            code = _lightpath_output_code(sock_name)
+            if code is None:
+                raise QuantTraceSyncError(
+                    f"{ctx} nested2 Mix Fac←Light Path.{sock_name!r} refused "
+                    f"(Slice 2bq: Is * Ray / Ray Length / Ray Depth / "
+                    f"Transparent Depth only)"
+                )
+            nest_lp_enable = 1
+            nest_lp_out = int(code)
+        elif ftype == "MATH":
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix Fac←MATH refused "
+                f"(Slice 2bq: nested2 Fac unlinked float or Light Path only; "
+                f"MATH nest on Mix.004 is a follow-up)"
+            )
+        elif ftype == "VALTORGB":
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix Fac←ColorRamp refused "
+                f"(Slice 2bq: Fac unlinked float or Light Path only; "
+                f"ColorRamp Fac on Mix Shader.004 is a follow-up)"
+            )
+        else:
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix Fac←{ftype!r} refused "
+                f"(Slice 2bq: Fac unlinked float or Light Path only; "
+                f"ColorRamp/TEX/Fresnel/GROUP Fac is a follow-up)"
+            )
+    else:
+        nest_fac = float(fac_sock.default_value)
+
+    sh0 = inner.inputs.get("Shader")
+    sh1 = inner.inputs.get("Shader_001")
+    if sh0 is None or sh1 is None:
+        raise QuantTraceSyncError(
+            f"{ctx} nested2 Mix missing Shader sockets refused (Slice 2bq)"
+        )
+    if not getattr(sh0, "is_linked", False) or not getattr(sh1, "is_linked", False):
+        raise QuantTraceSyncError(
+            f"{ctx} nested2 Mix unlinked Shader input refused (Slice 2bq)"
+        )
+    l0 = list(sh0.links or [])
+    l1 = list(sh1.links or [])
+    if len(l0) != 1 or len(l1) != 1:
+        raise QuantTraceSyncError(
+            f"{ctx} nested2 Mix multi-link Shader refused (Slice 2bq)"
+        )
+    c0 = _peel_surface_reroute(l0[0].from_node)
+    c1 = _peel_surface_reroute(l1[0].from_node)
+    t0 = getattr(c0, "type", None)
+    t1 = getattr(c1, "type", None)
+    kinds = {t0, t1}
+    if kinds != {"BSDF_GLASS", "BSDF_TRANSPARENT"}:
+        if "MIX_SHADER" in kinds:
+            raise QuantTraceSyncError(
+                f"{ctx} Mix Shader nested Mix beyond packed depth refused "
+                f"(Slice 2bq: two nested Mix hops Glass+Transparent leaves only; "
+                f"third Mix/Add/Refraction/Glossy/SSS/ColorRamp is a follow-up)"
+            )
+        if "ADD_SHADER" in kinds:
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix ← Add Shader refused "
+                f"(Slice 2bq: Glass+Transparent leaves only; "
+                f"Add+Refraction/Glossy/SSS under Mix.004 is a follow-up)"
+            )
+        if (
+            "SUBSURFACE_SCATTERING" in kinds
+            or "BSDF_REFRACTION" in kinds
+            or "BSDF_GLOSSY" in kinds
+            or "BSDF_TRANSLUCENT" in kinds
+        ):
+            raise QuantTraceSyncError(
+                f"{ctx} nested2 Mix closures {t0!r}+{t1!r} refused "
+                f"(Slice 2bq: Glass+Transparent only; "
+                f"Refraction/Glossy/SSS/Translucent is a follow-up)"
+            )
+        raise QuantTraceSyncError(
+            f"{ctx} nested2 Mix closures {t0!r}+{t1!r} refused "
+            f"(Slice 2bq: Glass+Transparent leaves only)"
+        )
+    if t0 == "BSDF_GLASS":
+        glass, tr = c0, c1
+        k1, k2 = 0, 1
+    else:
+        glass, tr = c1, c0
+        k1, k2 = 1, 0
+    g = _pack_constant_glass_node(glass, ctx)
+    tcol = _pack_constant_transparent_node(tr, ctx)
+    return {
+        "mix_nested2_fac": float(nest_fac),
+        "mix_nested2_lightpath_enable": int(nest_lp_enable),
+        "mix_nested2_lightpath_output": int(nest_lp_out),
+        "mix_nested2_closure1_kind": int(k1),
+        "mix_nested2_closure2_kind": int(k2),
+        "glass": g,
+        "transparent_color": tcol,
+    }
+
+
+def _pack_nested_mix_shader(inner, ctx: str) -> dict:
+    """Slice 2bp/2bq: nested Mix Fac=unlinked|LightPath + Glass+Transparent
+    or one NestedMix2 hop (Slice 2bq Mix Shader.004).
+
+    Mix.004 ColorRamp Fac / Add / third Mix / linked Color refuse Slice 2bq.
     """
     fac_sock = _mix_shader_fac_sock(inner)
     if fac_sock is None:
@@ -3747,50 +3899,117 @@ def _pack_nested_mix_shader(inner, ctx: str) -> dict:
     t0 = getattr(c0, "type", None)
     t1 = getattr(c1, "type", None)
     kinds = {t0, t1}
-    if kinds != {"BSDF_GLASS", "BSDF_TRANSPARENT"}:
-        if "MIX_SHADER" in kinds:
+    ident2 = _mix_nested2_identity()
+
+    if kinds == {"BSDF_GLASS", "BSDF_TRANSPARENT"}:
+        if t0 == "BSDF_GLASS":
+            glass, tr = c0, c1
+            k1, k2 = 0, 1
+        else:
+            glass, tr = c1, c0
+            k1, k2 = 1, 0
+        g = _pack_constant_glass_node(glass, ctx)
+        tcol = _pack_constant_transparent_node(tr, ctx)
+        return {
+            "mix_nested_fac": float(nest_fac),
+            "mix_nested_lightpath_enable": int(nest_lp_enable),
+            "mix_nested_lightpath_output": int(nest_lp_out),
+            "mix_nested_closure1_kind": int(k1),
+            "mix_nested_closure2_kind": int(k2),
+            **ident2,
+            "glass": g,
+            "transparent_color": tcol,
+        }
+
+    if "MIX_SHADER" in kinds:
+        if t0 == "MIX_SHADER" and t1 == "MIX_SHADER":
             raise QuantTraceSyncError(
-                f"{ctx} Mix Shader nested Mix beyond packed depth refused "
-                f"(Slice 2bp: one nested Mix hop Glass+Transparent leaves only; "
-                f"deeper Mix/Add/Refraction/Glossy/SSS/ColorRamp is a follow-up)"
+                f"{ctx} nested Mix both sides nested Mix refused "
+                f"(Slice 2bq: one nested2 Mix hop only)"
             )
-        if "ADD_SHADER" in kinds:
-            raise QuantTraceSyncError(
-                f"{ctx} nested Mix ← Add Shader refused "
-                f"(Slice 2bp: Glass+Transparent leaves only)"
-            )
-        if (
-            "SUBSURFACE_SCATTERING" in kinds
-            or "BSDF_REFRACTION" in kinds
-            or "BSDF_GLOSSY" in kinds
-            or "BSDF_TRANSLUCENT" in kinds
-        ):
+        leaf_ok = {"BSDF_GLASS", "BSDF_TRANSPARENT"}
+        other = kinds - {"MIX_SHADER"}
+        if not other or not other.issubset(leaf_ok):
+            if "ADD_SHADER" in kinds:
+                raise QuantTraceSyncError(
+                    f"{ctx} nested Mix ← Add Shader refused "
+                    f"(Slice 2bq: Glass+Transparent or one nested2 Mix only)"
+                )
             raise QuantTraceSyncError(
                 f"{ctx} nested Mix closures {t0!r}+{t1!r} refused "
-                f"(Slice 2bp: Glass+Transparent only; "
-                f"Refraction/Glossy/SSS/Translucent is a follow-up)"
+                f"(Slice 2bq: nested2 Mix opposite Glass or Transparent only)"
             )
+        if t0 == "MIX_SHADER":
+            inner2, leaf_node, leaf_type = c0, c1, t1
+            k1, k2 = 2, (0 if leaf_type == "BSDF_GLASS" else 1)
+        else:
+            inner2, leaf_node, leaf_type = c1, c0, t0
+            k1, k2 = (0 if leaf_type == "BSDF_GLASS" else 1), 2
+        n2 = _pack_nested2_mix_shader(inner2, ctx)
+        glass_g = n2.get("glass")
+        if leaf_type == "BSDF_GLASS":
+            if glass_g is not None:
+                raise QuantTraceSyncError(
+                    f"{ctx} nested Mix nested2 hop has two Glass BSDFs refused "
+                    f"(Slice 2bq: one Glass in tree)"
+                )
+            g = _pack_constant_glass_node(leaf_node, ctx)
+            tcol = n2["transparent_color"]
+        else:
+            if glass_g is None:
+                raise QuantTraceSyncError(
+                    f"{ctx} nested Mix nested2 hop missing Glass BSDF refused "
+                    f"(Slice 2bq: need Glass+Transparent somewhere)"
+                )
+            g = glass_g
+            leaf_tcol = _pack_constant_transparent_node(leaf_node, ctx)
+            nest_tcol = n2["transparent_color"]
+            if any(
+                abs(float(a) - float(b)) > 1e-6
+                for a, b in zip(leaf_tcol, nest_tcol)
+            ):
+                raise QuantTraceSyncError(
+                    f"{ctx} nested Mix nested2 Transparent colors differ refused "
+                    f"(Slice 2bq: shared mix_transparent_color only; "
+                    f"dual Transparent color ABI is a follow-up)"
+                )
+            tcol = leaf_tcol
+        return {
+            "mix_nested_fac": float(nest_fac),
+            "mix_nested_lightpath_enable": int(nest_lp_enable),
+            "mix_nested_lightpath_output": int(nest_lp_out),
+            "mix_nested_closure1_kind": int(k1),
+            "mix_nested_closure2_kind": int(k2),
+            "mix_nested2_fac": float(n2["mix_nested2_fac"]),
+            "mix_nested2_lightpath_enable": int(n2["mix_nested2_lightpath_enable"]),
+            "mix_nested2_lightpath_output": int(n2["mix_nested2_lightpath_output"]),
+            "mix_nested2_closure1_kind": int(n2["mix_nested2_closure1_kind"]),
+            "mix_nested2_closure2_kind": int(n2["mix_nested2_closure2_kind"]),
+            "glass": g,
+            "transparent_color": tcol,
+        }
+
+    if "ADD_SHADER" in kinds:
+        raise QuantTraceSyncError(
+            f"{ctx} nested Mix ← Add Shader refused "
+            f"(Slice 2bq: Glass+Transparent or one nested2 Mix only)"
+        )
+    if (
+        "SUBSURFACE_SCATTERING" in kinds
+        or "BSDF_REFRACTION" in kinds
+        or "BSDF_GLOSSY" in kinds
+        or "BSDF_TRANSLUCENT" in kinds
+    ):
         raise QuantTraceSyncError(
             f"{ctx} nested Mix closures {t0!r}+{t1!r} refused "
-            f"(Slice 2bp: Glass+Transparent leaves only)"
+            f"(Slice 2bq: Glass+Transparent or one nested2 Mix only; "
+            f"Refraction/Glossy/SSS/Translucent is a follow-up)"
         )
-    if t0 == "BSDF_GLASS":
-        glass, tr = c0, c1
-        k1, k2 = 0, 1
-    else:
-        glass, tr = c1, c0
-        k1, k2 = 1, 0
-    g = _pack_constant_glass_node(glass, ctx)
-    tcol = _pack_constant_transparent_node(tr, ctx)
-    return {
-        "mix_nested_fac": float(nest_fac),
-        "mix_nested_lightpath_enable": int(nest_lp_enable),
-        "mix_nested_lightpath_output": int(nest_lp_out),
-        "mix_nested_closure1_kind": int(k1),
-        "mix_nested_closure2_kind": int(k2),
-        "glass": g,
-        "transparent_color": tcol,
-    }
+    raise QuantTraceSyncError(
+        f"{ctx} nested Mix closures {t0!r}+{t1!r} refused "
+        f"(Slice 2bq: Glass+Transparent or one nested2 Mix only)"
+    )
+
 
 
 def _pack_math_leaf(node, sock, ctx: str, *, allow_nest: bool, depth: int) -> dict:
@@ -3955,14 +4174,14 @@ def _pack_constant_glass_node(glass, ctx: str) -> dict:
         if sock is not None and getattr(sock, "is_linked", False):
             raise QuantTraceSyncError(
                 f"{ctx} Glass BSDF.{label} is linked refused "
-                f"(Slice 2bp: unlinked Color/Roughness/IOR/Normal only)"
+                f"(Slice 2bq: unlinked Color/Roughness/IOR/Normal only)"
             )
     col_sock = glass.inputs.get("Color")
     rough_sock = glass.inputs.get("Roughness")
     ior_sock = glass.inputs.get("IOR")
     if col_sock is None or rough_sock is None or ior_sock is None:
         raise QuantTraceSyncError(
-            f"{ctx} Glass BSDF missing Color/Roughness/IOR (Slice 2bp)"
+            f"{ctx} Glass BSDF missing Color/Roughness/IOR (Slice 2bq)"
         )
     col = col_sock.default_value
     return {
@@ -3979,11 +4198,11 @@ def _pack_constant_transparent_node(tr, ctx: str) -> tuple:
     if sock is not None and getattr(sock, "is_linked", False):
         raise QuantTraceSyncError(
             f"{ctx} Transparent BSDF.Color is linked refused "
-            f"(Slice 2bp: unlinked Color only)"
+            f"(Slice 2bq: unlinked Color only)"
         )
     if sock is None:
         raise QuantTraceSyncError(
-            f"{ctx} Transparent BSDF missing Color (Slice 2bp)"
+            f"{ctx} Transparent BSDF missing Color (Slice 2bq)"
         )
     col = sock.default_value
     return (float(col[0]), float(col[1]), float(col[2]))
@@ -4063,8 +4282,8 @@ def _mix_glass_transparent_from_material(mat, root, *, object_name: str = "") ->
     Outer Fac: unlinked / LightPath / MATH (Slice 2bo). Closures: Glass+
     Transparent (2bn/2bo) OR one side Nested Mix (Fac unlinked|LightPath,
     leaves Glass+Transparent). kinds 0/1 keep 2bo bit-identical.
-    Deeper Mix/Add/SSS/Refraction/Glossy/ColorRamp/TEX Fac refuse Slice 2bp
-    (loft Realistic_Glass_01 outer nested Mix clears; Mix.004 ColorRamp left).
+    Mix.004 ColorRamp Fac / Add / third Mix / linked Color refuse Slice 2bq
+    (loft Realistic_Glass_01 Mix.005 nested2 hop packs; Mix.004 ColorRamp left).
     """
     ctx = _mat_refuse_ctx(object_name, mat)
     fac_sock = _mix_shader_fac_sock(root)
@@ -4211,6 +4430,31 @@ def _mix_glass_transparent_from_material(mat, root, *, object_name: str = "") ->
             ),
             "mix_nested_closure1_kind": int(nested["mix_nested_closure1_kind"]),
             "mix_nested_closure2_kind": int(nested["mix_nested_closure2_kind"]),
+            "mix_nested2_fac": float(
+                nested["mix_nested2_fac"]
+                if nested.get("mix_nested2_fac") is not None
+                else 0.5
+            ),
+            "mix_nested2_lightpath_enable": int(
+                nested["mix_nested2_lightpath_enable"]
+                if nested.get("mix_nested2_lightpath_enable") is not None
+                else 0
+            ),
+            "mix_nested2_lightpath_output": int(
+                nested["mix_nested2_lightpath_output"]
+                if nested.get("mix_nested2_lightpath_output") is not None
+                else 1
+            ),
+            "mix_nested2_closure1_kind": int(
+                nested["mix_nested2_closure1_kind"]
+                if nested.get("mix_nested2_closure1_kind") is not None
+                else 0
+            ),
+            "mix_nested2_closure2_kind": int(
+                nested["mix_nested2_closure2_kind"]
+                if nested.get("mix_nested2_closure2_kind") is not None
+                else 1
+            ),
         }
         # Exactly one Glass in {nested leaves, outer leaf}
         glass_g = nested.get("glass")
@@ -7945,6 +8189,12 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     desc.mix_nested_lightpath_output = _bi("mix_nested_lightpath_output", 1)
     desc.mix_nested_closure1_kind = _bi("mix_nested_closure1_kind", 0)
     desc.mix_nested_closure2_kind = _bi("mix_nested_closure2_kind", 1)
+    # Slice 2bq: nested2 fac 0.5 / enable 0 / kind 0 valid — never `or`.
+    desc.mix_nested2_fac = _bf("mix_nested2_fac", 0.5)
+    desc.mix_nested2_lightpath_enable = _bi("mix_nested2_lightpath_enable", 0)
+    desc.mix_nested2_lightpath_output = _bi("mix_nested2_lightpath_output", 1)
+    desc.mix_nested2_closure1_kind = _bi("mix_nested2_closure1_kind", 0)
+    desc.mix_nested2_closure2_kind = _bi("mix_nested2_closure2_kind", 1)
     if ramp_list and ramp_n > 0:
         flat = [float(v) for v in ramp_list]
         if len(flat) < ramp_n * 3:
@@ -8408,6 +8658,11 @@ def make_qt_simple_scene_type():
             ("mix_nested_lightpath_output", ctypes.c_int),
             ("mix_nested_closure1_kind", ctypes.c_int),
             ("mix_nested_closure2_kind", ctypes.c_int),
+            ("mix_nested2_fac", ctypes.c_float),
+            ("mix_nested2_lightpath_enable", ctypes.c_int),
+            ("mix_nested2_lightpath_output", ctypes.c_int),
+            ("mix_nested2_closure1_kind", ctypes.c_int),
+            ("mix_nested2_closure2_kind", ctypes.c_int),
         ]
 
     return QT_SimpleScene
@@ -8934,6 +9189,11 @@ def make_qt_scene_types():
             ("mix_nested_lightpath_output", ctypes.c_int),
             ("mix_nested_closure1_kind", ctypes.c_int),
             ("mix_nested_closure2_kind", ctypes.c_int),
+            ("mix_nested2_fac", ctypes.c_float),
+            ("mix_nested2_lightpath_enable", ctypes.c_int),
+            ("mix_nested2_lightpath_output", ctypes.c_int),
+            ("mix_nested2_closure1_kind", ctypes.c_int),
+            ("mix_nested2_closure2_kind", ctypes.c_int),
         ]
 
     class QT_Light(ctypes.Structure):
