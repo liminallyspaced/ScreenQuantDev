@@ -329,6 +329,13 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->base_mix_clamp_result = 0;
     d->base_mix_b_image_path = nullptr;
     d->base_mix_b_image_colorspace = nullptr;
+    /* Slice 2bd identity — n==0 skips RGBCurvesNode. */
+    d->base_curves = nullptr;
+    d->base_curves_n = 0;
+    d->base_curves_min_x = 0.0f;
+    d->base_curves_max_x = 1.0f;
+    d->base_curves_fac = 1.0f;
+    d->base_curves_extrapolate = 1;
     /* Slice 2az identity — bevel off. */
     d->bevel_enable = 0;
     d->bevel_samples = 4;
@@ -668,6 +675,13 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->base_mix_clamp_result = s->base_mix_clamp_result;
     mesh->base_mix_b_image_path = s->base_mix_b_image_path;
     mesh->base_mix_b_image_colorspace = s->base_mix_b_image_colorspace;
+    /* Slice 2bd: RGB Curves LUT → Principled Base Color. */
+    mesh->base_curves = s->base_curves;
+    mesh->base_curves_n = s->base_curves_n;
+    mesh->base_curves_min_x = s->base_curves_min_x;
+    mesh->base_curves_max_x = s->base_curves_max_x;
+    mesh->base_curves_fac = s->base_curves_fac;
+    mesh->base_curves_extrapolate = s->base_curves_extrapolate;
     /* Slice 2az: Bevel → Principled.Normal. */
     mesh->bevel_enable = s->bevel_enable;
     mesh->bevel_samples = s->bevel_samples;
@@ -1160,17 +1174,20 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
      * mode 6: TextureCoordinate Object → Mapping → Image Vector.
      * mode 7: TextureCoordinate Camera → Image Vector (NODE_TEXCO_CAMERA).
      * mode 8: TextureCoordinate Camera → Mapping → Image Vector. */
-    /* Slice 2ax/2ay: Color source → Gamma (if gamma!=1) → HSV (if not identity)
-     * → MixColorNode (if base_mix_type!=0) → Principled Base Color.
-     * type 0 keeps 2ax/2f bit-identical. Cite GammaNode/HSVNode/MixColorNode
-     * (world 2ao/2aq). Empty base_mix_b_image_path → constant other;
-     * nonempty → second ImageTextureNode sharing primary Vector graph. */
+    /* Slice 2ax/2ay/2bd: Color source → Gamma (if gamma!=1) → HSV (if not
+     * identity) → MixColorNode (if base_mix_type!=0) → RGBCurvesNode
+     * (if n>0 && fac!=0) → Principled Base Color.
+     * n==0 keeps 2ay/2ax/2f bit-identical. Cite GammaNode/HSVNode/MixColorNode/
+     * RGBCurvesNode (world 2ao/2aq/2as). Curves last (closest to Principled)
+     * matches loft Concrete_Facade: Mix → Curves → Base Color. */
     {
         const float3 bcol = make_float3(m->base_color[0], m->base_color[1], m->base_color[2]);
         const bool use_gamma = (m->base_gamma != 1.0f);
         const bool use_hsv = !(m->base_hsv_hue == 0.5f && m->base_hsv_sat == 1.0f &&
                                m->base_hsv_val == 1.0f && m->base_hsv_fac == 1.0f);
         const bool use_mix = (m->base_mix_type != 0);
+        const bool use_curves = (m->base_curves != nullptr && m->base_curves_n > 0 &&
+                                 m->base_curves_fac != 0.0f);
         ShaderOutput *cur = nullptr;
         if (m->image_path && m->image_path[0]) {
             ImageTextureNode *img = wire_tex_image(
@@ -1249,6 +1266,27 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
                 }
             }
             cur = mx->output("Result");
+        }
+        if (use_curves) {
+            RGBCurvesNode *rc = graph->create_node<RGBCurvesNode>();
+            array<packed_float3> curves;
+            curves.resize(m->base_curves_n);
+            for (int i = 0; i < m->base_curves_n; i++) {
+                const float *p = m->base_curves + i * 3;
+                curves[i] = make_float3(p[0], p[1], p[2]);
+            }
+            rc->set_curves(curves);
+            rc->set_min_x(m->base_curves_min_x);
+            rc->set_max_x(m->base_curves_max_x);
+            rc->set_fac(m->base_curves_fac);
+            rc->set_extrapolate(m->base_curves_extrapolate != 0);
+            if (cur) {
+                graph->connect(cur, rc->input("Color"));
+            }
+            else {
+                rc->set_value(bcol);
+            }
+            cur = rc->output("Color");
         }
         if (cur) {
             graph->connect(cur, bsdf->input("Base Color"));

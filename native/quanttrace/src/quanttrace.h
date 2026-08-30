@@ -81,6 +81,14 @@
  *   2f TEX_IMAGE cubes stay bit-identical. Color → Gamma → HSV → Base Color
  *   (cite shader_nodes.h GammaNode/HSVNode; same as world 2ao). Mix on Base
  *   Color still refuses (named Slice 2ax).
+ * Slice 2bd: ShaderNodeRGBCurve → Principled Base Color as packed LUT
+ *   (base_curves / n / min_x / max_x / fac / extrapolate after last
+ *   base_mix_*). n==0 / NULL / fac==0 skips native RGBCurvesNode —
+ *   2ay/2ax/2f bit-identical. Official Cycles curvemapping_color_to_array
+ *   (RAMP_TABLE_SIZE=256 → 257; DNA cm[0]=R..cm[3]=I). Native:
+ *   Color → Gamma → HSV → Mix → RGBCurves → Principled Base Color
+ *   (Curves closest to Principled — loft Concrete_Facade). Linked Fac /
+ *   second Curves / Vector Curves / Float Curve refuse Slice 2bd.
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
@@ -549,6 +557,15 @@ typedef struct QT_SimpleScene {
   int base_mix_clamp_result;
   const char *base_mix_b_image_path;
   const char *base_mix_b_image_colorspace;
+  /* Slice 2bd: RGB Curves LUT → Principled Base Color (mesh analog of world 2as).
+   * NULL / n==0 / fac==0 skips RGBCurvesNode — 2ay/2ax/2f bit-identical.
+   * Official Cycles curvemapping_color_to_array (RAMP_TABLE_SIZE=256 → 257). */
+  const float *base_curves; /* n * 3 RGB floats; NULL / n==0 = skip */
+  int base_curves_n;
+  float base_curves_min_x;  /* default 0 */
+  float base_curves_max_x;  /* default 1 */
+  float base_curves_fac;    /* default 1 */
+  int base_curves_extrapolate; /* default 1 */
   /* Slice 2az: Bevel → Principled.Normal (0 = off, bit-identical 2ay/2x/2j).
    * samples default 4; radius unlinked float (Blender 5.2 RNA 0.05).
    * Nested Normal via bump_* / normal_* (NormalMap → Bump.Normal OK). */
@@ -912,6 +929,15 @@ typedef struct QT_Mesh {
   int base_mix_clamp_result;
   const char *base_mix_b_image_path;
   const char *base_mix_b_image_colorspace;
+  /* Slice 2bd: RGB Curves LUT → Principled Base Color (mesh analog of world 2as).
+   * NULL / n==0 / fac==0 skips RGBCurvesNode — 2ay/2ax/2f bit-identical.
+   * Official Cycles curvemapping_color_to_array (RAMP_TABLE_SIZE=256 → 257). */
+  const float *base_curves; /* n * 3 RGB floats; NULL / n==0 = skip */
+  int base_curves_n;
+  float base_curves_min_x;  /* default 0 */
+  float base_curves_max_x;  /* default 1 */
+  float base_curves_fac;    /* default 1 */
+  int base_curves_extrapolate; /* default 1 */
   /* Slice 2az: Bevel → Principled.Normal (0 = off, bit-identical 2ay/2x/2j).
    * samples default 4; radius unlinked float (Blender 5.2 RNA 0.05).
    * Nested Normal via bump_* / normal_* (NormalMap → Bump.Normal OK). */

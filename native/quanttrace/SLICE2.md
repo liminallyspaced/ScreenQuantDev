@@ -1,6 +1,33 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2bc landed** (2026-08-29 7pm PlugWalk ET). NoiseTextureNode → BumpNode Height (`bump_noise_*` after `bump_invert`). enable=0 keeps 2x bit-identical (TEX_IMAGE Height). Pack Blender 5.2 RNA Cycles uses (dimensions, type, normalize, W/Scale/Detail/Roughness/Lacunarity/Offset/Gain/Distortion); Vector unlinked Generated. Loft Plane census: 3D FBM normalize, Color (or Factor) out → Bump.Height, Scale=150 Detail=16 Distortion=0.2, identity mapping. Named refuse linked Vector / non-identity texture_mapping / linked Scale. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.56-slice2bc`. Addon `0.3.3`.
+Status: **Slice 2bd landed** (2026-08-29 8pm PlugWalk ET). RGBCurvesNode → Principled Base Color (`base_curves*` after last `base_mix_*`). n==0 / NULL / fac==0 keeps 2ay/2ax/2f identity skip. Official `curvemapping_color_to_array` LUT 257 (DNA cm[0]=R..[3]=I, EXTRAPOLATED). Mesh analog of world 2as. Loft Cube.001 Concrete_Facade: Fac unlinked 1.0, Color-in Mix MULTIPLY dual packed TEX, extend EXTRAPOLATED, master I mid (0.36818, 0.60625). Isolated Cube.001 PACKS curves_n=257. Named refuse linked Fac / second Curves / Vector/Float Curve. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.57-slice2bd`. Addon `0.3.3`.
+
+## Slice 2bd — RGB Curves → Principled Base Color (2026-08-29 8pm ET)
+
+Loft leftover after 2bc (Base Color from CURVE_RGB): object `Cube.001` / material `Concrete_Facade_ufouccbo`. Principled.Base Color ← RGB Curves Color-out (`CURVE_RGB`, node `RGB Curves`). Fac **unlinked** default 1.0. Color-in ← Mix.Result (`ShaderNodeMix` RGBA MULTIPLY, clamp_factor=True, Fac unlinked 0.5). Mix A ← packed `ufouccbo_2K_Albedo.jpg` sRGB; Mix B ← packed `ufouccbo_2K_AO.jpg` Non-Color. Both images FLAT / Linear / REPEAT; Vector ← Mapping TEXTURE identity ← TEX_COORD UV. Curve extend=EXTRAPOLATED, clip 0..1; R/G/B identity 2-pt AUTO; master I mid `(0.36818, 0.60625)` AUTO. Claim cube: unlinked RGB(1.0, 0.25, 0.1) → Curves (master I mid_y=0.35 like world 2as), camera 1.8×. Native order Color → Gamma → HSV → Mix → RGBCurves → Principled.
+
+Cite Cycles `shader_nodes.h` RGBCurvesNode set_curves/set_min_x/set_max_x/set_fac/set_extrapolate. Shared `_pack_rgb_curves_lut` with world 2as (RAMP_TABLE_SIZE 256 → 257 RGB floats).
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| curves CLAIM | 32²/4 | 8.34e-7 | 1.50e-9 | 0 | **PASS** |
+| curves CLAIM | 256²/128 | 4.77e-7 | 7.55e-10 | 0 | **PASS** |
+| curves_mix | 32²/4 | 9.54e-7 | 8.96e-10 | 0 | **PASS** |
+| mix 2ay (n==0) | 32²/4 | 1.37e-6 | 1.38e-9 | 0 | **PASS** |
+| hsv 2ax (n==0) | 32²/4 | 2.38e-6 | 3.28e-9 | 0 | **PASS** |
+| tex 2f (n==0) | 32²/4 | 2.74e-6 | 2.83e-9 | 0 | **PASS** |
+| noise 2bc | 32²/4 | 4.65e-6 | 4.22e-8 | 0 | **PASS** |
+| bevel 2az | 32²/4 | 4.77e-6 | 2.05e-8 | 0 | **PASS** |
+| point 2av | 32²/4 | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| live stock curves vs unlinked RGB | 32²/4 | 0.202 | 1.20e-3 | 29 | graph live |
+| Fac←Noise | — | — | — | — | **REFUSE** Slice 2bd |
+
+Loft pack: Concrete_Facade CURVE_RGB cleared (isolated Cube.001 PACKS curves_n=257 mix=MULTIPLY img packed; mesh index 3 before Plane.008 index 9). First PACK_FAIL `object='Plane.008' material='IE_Brushed_Steel_02' Principled.Roughness from 'INVERT' refused (Slice 2bb: ColorRamp or TEX_IMAGE Color only)`. Next: Invert→Roughness, leftover Bump Height VALTORGB/SEPARATE/MATH, Fresnel-Fac Mix / GROUP / Botaniq. Not loft Session Δmax.
+
+ABI: `base_curves` / `base_curves_n` / `base_curves_min_x` / `base_curves_max_x` / `base_curves_fac` / `base_curves_extrapolate` after last `base_mix_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults NULL / 0 / 0 / 1 / 1 / 1. Native `0.0.57-slice2bd`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-base-curves-32-pair.png`. Tools `_quanttrace_slice2bd_scene/smoke.py`.
 
 ## Slice 2bc — Noise → Bump.Height → Principled.Normal (2026-08-29 7pm ET)
 

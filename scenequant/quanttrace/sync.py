@@ -88,6 +88,11 @@
 # Slice 2as: ShaderNodeRGBCurve → world Color packed LUT (world_curves_*).
 #   n==0 skip; Fac==0 skip; official curvemapping_color_to_array (257).
 #   Noise / Vector Curves / Float Curve / second RGB Curves / linked Fac refuse.
+# Slice 2bd: ShaderNodeRGBCurve → Principled Base Color packed LUT (base_curves_*).
+#   n==0 / Fac==0 skip (2ay/2ax/2f bit-identical). Unlinked Fac; Color-in
+#   TEX_IMAGE / Mix / Gamma/HSV / constant. Linked Fac / second Curves /
+#   Vector/Float Curve refuse Slice 2bd. Native Mix then Curves (loft
+#   Concrete_Facade: dual TEX Mix → Curves → Base Color).
 # Slice 2e: soft POINT radius + is_sphere=!use_soft_falloff; SUN angle.
 # Slice 2g: SPOT spot_size/spot_blend (+ soft radius / is_sphere).
 # Make it Fast stays on stock Cycles.
@@ -1436,6 +1441,18 @@ def _base_mix_identity():
     }
 
 
+def _base_curves_identity():
+    """Slice 2bd identity — skip RGBCurvesNode on Principled Base Color (2ay/2ax/2f bit-identical)."""
+    return {
+        "base_curves": None,
+        "base_curves_n": 0,
+        "base_curves_min_x": 0.0,
+        "base_curves_max_x": 1.0,
+        "base_curves_fac": 1.0,
+        "base_curves_extrapolate": 1,
+    }
+
+
 def _tex_vector_source_key(tex_node):
     """Comparable Vector-graph key for dual TEX_IMAGE Mix (Slice 2ay).
 
@@ -1797,18 +1814,22 @@ def _gamma_hsv_color_source_mesh(node, ctx: str):
 
 
 def _peel_base_color_gamma_hsv(from_node, from_sock, ctx: str):
-    """Peel one unlinked Gamma + HueSat on Principled Base Color (≤2 hops).
+    """Peel one unlinked Gamma + HueSat + RGB Curves on Principled Base Color (≤3 hops).
 
-    Returns (from_node, from_sock, unlinked_rgb_or_None, gamma_hsv_dict).
-    Mix / Noise / second Gamma/HueSat refuse (Mix named Slice 2ax).
-    Always peel REROUTE before classifying (caller peels first hop too).
+    Returns (from_node, from_sock, unlinked_rgb_or_None, gamma_hsv_dict, curves_dict).
+    Mix remaining after Curves is left for the caller (loft Concrete_Facade:
+    Mix → Curves → Principled). Mix after Gamma/HueSat with no Curves still
+    refuses Slice 2ay. Noise / second Gamma/HueSat/Curves / Vector/Float Curve
+    refuse. Always peel REROUTE before classifying.
     """
     gh = dict(_base_gamma_hsv_identity())
+    curves = dict(_base_curves_identity())
     seen_gamma = False
     seen_hsv = False
+    seen_curves = False
     unlinked_rgb = None
     from_node, from_sock = _peel_reroute(from_node, from_sock)
-    for _hop in range(2):
+    for _hop in range(3):
         ntype = getattr(from_node, "type", None) if from_node is not None else None
         if ntype == "GAMMA":
             if seen_gamma:
@@ -1849,40 +1870,79 @@ def _peel_base_color_gamma_hsv(from_node, from_sock, ctx: str):
             if unlinked_rgb is not None:
                 break
             continue
+        if ntype == "CURVE_RGB":
+            if seen_curves:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color second RGB Curves refused "
+                    "(Slice 2bd)"
+                )
+            packed = _pack_base_rgb_curves_lut(from_node, ctx)
+            # Fac==0: Cycles folds — keep n==0 so native skips (bit-identical).
+            if float(packed["base_curves_fac"]) == 0.0:
+                packed = dict(_base_curves_identity())
+                packed["base_curves_fac"] = 0.0
+            curves.update(packed)
+            seen_curves = True
+            from_node, from_sock, unlinked_rgb = _gamma_hsv_color_source_mesh(
+                from_node, ctx
+            )
+            if unlinked_rgb is not None:
+                break
+            continue
+        if ntype in ("CURVE_VEC", "CURVE_VECTOR", "CURVE_FLOAT"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color from {ntype!r} refused "
+                "(Slice 2bd: ShaderNodeRGBCurve only; Vector/Float Curve still refuse)"
+            )
         break
     from_node, from_sock = _peel_reroute(from_node, from_sock)
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype in ("MIX", "MIX_RGB"):
-        raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color from {ntype!r} refused "
-            f"(Slice 2ay: unsupported Mix after Gamma/HueSat peel)"
-        )
+        # Loft Concrete_Facade: Mix is Color-in of Curves — leave for caller.
+        if int(curves.get("base_curves_n", 0) or 0) == 0:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color from {ntype!r} refused "
+                f"(Slice 2ay: unsupported Mix after Gamma/HueSat peel)"
+            )
     if ntype in ("TEX_NOISE", "NOISE"):
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color Noise refused (Slice 2ax)"
+            f"{ctx} Principled.Base Color Noise refused (Slice 2bd)"
         )
-    return from_node, from_sock, unlinked_rgb, gh
+    if ntype in ("CURVE_VEC", "CURVE_VECTOR", "CURVE_FLOAT"):
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color from {ntype!r} refused "
+            "(Slice 2bd: ShaderNodeRGBCurve only)"
+        )
+    if ntype == "CURVE_RGB":
+        raise QuantTraceSyncError(
+            f"{ctx} Principled.Base Color RGB Curves hop refused "
+            "(Slice 2bd: ≤3 hops; second Curves or Curves beyond Gamma/HSV chain)"
+        )
+    return from_node, from_sock, unlinked_rgb, gh, curves
 
 
 def _base_color_tex_and_gh(sock, *, object_name: str = "", mat=None):
-    """Principled Base Color: peel REROUTE + Mix + Gamma/HueSat then TEX_IMAGE/constant.
+    """Principled Base Color: peel REROUTE + Mix + Curves + Gamma/HueSat then TEX_IMAGE/constant.
 
-    Returns (tex_info_with_mix, gamma_hsv_dict, base_color_rgb_or_None).
-    Mix peel (Slice 2ay) runs before Gamma/HueSat. tex_info carries base_mix_*
-    (and optional base_mix_b_image_path for dual TEX_IMAGE). type 0 = identity.
+    Returns (tex_info_with_mix_and_curves, gamma_hsv_dict, base_color_rgb_or_None).
+    Mix peel (Slice 2ay) runs first if Mix is immediate, then Curves/Gamma/HSV
+    (Slice 2bd/2ax). If Curves Color-in is Mix (loft Concrete_Facade), Mix is
+    peeled after Curves. tex_info carries base_mix_* and base_curves_*.
     """
     ctx = _mat_refuse_ctx(object_name, mat)
     empty = _empty_tex_info()
     gh = dict(_base_gamma_hsv_identity())
     mix = dict(_base_mix_identity())
+    curves = dict(_base_curves_identity())
+    ident = {**empty, **mix, **curves}
     if sock is None or not getattr(sock, "is_linked", False):
-        return {**empty, **mix}, gh, None
+        return ident, gh, None
     links = list(getattr(sock, "links", None) or [])
     if not links:
-        return {**empty, **mix}, gh, None
+        return ident, gh, None
     if len(links) != 1:
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color has multiple links (Slice 2ay)"
+            f"{ctx} Principled.Base Color has multiple links (Slice 2bd)"
         )
     from_node = getattr(links[0], "from_node", None)
     from_sock = getattr(links[0], "from_socket", None)
@@ -1900,28 +1960,66 @@ def _base_color_tex_and_gh(sock, *, object_name: str = "", mat=None):
         b_l = bool(getattr(b_sock, "is_linked", False)) if b_sock is not None else False
         if not a_l and not b_l:
             folded = _fold_constant_mix_base_rgb(from_node, ctx)
-            return {**empty, **mix}, gh, folded
+            return {**empty, **mix, **curves}, gh, folded
         # FLOAT Mix or other leftover — refuse named 2ay.
         raise QuantTraceSyncError(
             f"{ctx} Principled.Base Color from {ntype0!r} refused "
             f"(Slice 2ay: RGBA Mix chain / dual TEX_IMAGE / constant fold only)"
         )
-    from_node, from_sock, unlinked_rgb, gh = _peel_base_color_gamma_hsv(
+    from_node, from_sock, unlinked_rgb, gh, curves = _peel_base_color_gamma_hsv(
         from_node, from_sock, ctx
     )
+    # Loft Concrete_Facade: remaining Mix is Color-in of Curves.
+    ntype_m = getattr(from_node, "type", None) if from_node is not None else None
+    if (
+        mix.get("base_mix_type", 0) == 0
+        and dual_b is None
+        and ntype_m in ("MIX", "MIX_RGB")
+        and int(curves.get("base_curves_n", 0) or 0) > 0
+    ):
+        from_node, from_sock, mix, dual_b = _peel_base_color_mix(
+            from_node, from_sock, ctx
+        )
+        ntype_m = getattr(from_node, "type", None) if from_node is not None else None
+        if (
+            mix.get("base_mix_type", 0) == 0
+            and dual_b is None
+            and ntype_m in ("MIX", "MIX_RGB")
+        ):
+            fac_sock, a_sock, b_sock = _mix_input_socks(from_node)
+            a_l = bool(getattr(a_sock, "is_linked", False)) if a_sock is not None else False
+            b_l = bool(getattr(b_sock, "is_linked", False)) if b_sock is not None else False
+            if not a_l and not b_l:
+                folded = _fold_constant_mix_base_rgb(from_node, ctx)
+                return {**empty, **mix, **curves}, gh, folded
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color from {ntype_m!r} refused "
+                f"(Slice 2bd: Mix Color-in of RGB Curves must be RGBA chain / dual TEX_IMAGE)"
+            )
+        # Mix peel walked to TEX/constant; re-peel Gamma/HSV on remaining if needed.
+        if unlinked_rgb is None:
+            from_node, from_sock, unlinked_rgb, gh2, curves2 = _peel_base_color_gamma_hsv(
+                from_node, from_sock, ctx
+            )
+            # Keep already-packed curves (second peel must not find another Curves).
+            if int(curves2.get("base_curves_n", 0) or 0) > 0:
+                raise QuantTraceSyncError(
+                    f"{ctx} Principled.Base Color second RGB Curves refused (Slice 2bd)"
+                )
+            if gh2.get("base_gamma") != 1.0 or gh2.get("base_hsv_hue") != 0.5:
+                gh = gh2
     if unlinked_rgb is not None:
-        return {**empty, **mix}, gh, unlinked_rgb
+        return {**empty, **mix, **curves}, gh, unlinked_rgb
     ntype = getattr(from_node, "type", None) if from_node is not None else None
     if ntype == "TEX_IMAGE":
         sock_name = getattr(from_sock, "name", "Color") if from_sock is not None else "Color"
         if sock_name not in ("Color", "color"):
             raise QuantTraceSyncError(
                 f"{ctx} Principled.Base Color must come from Image Texture Color "
-                f"(Slice 2ay; got {sock_name!r})"
+                f"(Slice 2bd; got {sock_name!r})"
             )
         tex = _tex_image_from_tex_node(from_node, from_sock, "Base Color", ctx)
         if dual_b is not None:
-            # Shape 2: pack B image path/cs; reuse primary Vector (already matched).
             img = getattr(dual_b, "image", None)
             if img is None:
                 raise QuantTraceSyncError(
@@ -1940,7 +2038,7 @@ def _base_color_tex_and_gh(sock, *, object_name: str = "", mat=None):
                 cs = str(getattr(settings, "name", "") or "")
             mix["base_mix_b_image_path"] = path
             mix["base_mix_b_image_colorspace"] = cs
-        return {**tex, **mix}, gh, None
+        return {**tex, **mix, **curves}, gh, None
     if ntype in ("MIX", "MIX_RGB"):
         raise QuantTraceSyncError(
             f"{ctx} Principled.Base Color from {ntype!r} refused "
@@ -1948,11 +2046,11 @@ def _base_color_tex_and_gh(sock, *, object_name: str = "", mat=None):
         )
     if ntype in ("TEX_NOISE", "NOISE"):
         raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color Noise refused (Slice 2ay)"
+            f"{ctx} Principled.Base Color Noise refused (Slice 2bd)"
         )
     raise QuantTraceSyncError(
         f"{ctx} Principled.Base Color from {ntype!r} refused "
-        f"(Slice 2ay: TEX_IMAGE / Mix / unlinked Gamma/HueSat / constant only)"
+        f"(Slice 2bd: TEX_IMAGE / Mix / unlinked Gamma/HueSat / RGB Curves / constant only)"
     )
 
 
@@ -2024,6 +2122,7 @@ def _principled_from_material(mat, *, object_name: str = "") -> dict:
         "tex_ob_ref": None,
         **_base_gamma_hsv_identity(),
         **_base_mix_identity(),
+        **_base_curves_identity(),
     }
     if mat is None:
         raise QuantTraceSyncError(
@@ -3471,27 +3570,49 @@ def _peel_world_mix(from_node, from_sock):
 _RAMP_TABLE_SIZE = 256  # Cycles RAMP_TABLE_SIZE; table length = size + 1 = 257
 
 
-def _pack_world_rgb_curves_lut(node) -> dict:
+def _pack_rgb_curves_lut(node, *, ctx: str, slice_tag: str) -> dict:
     """Official Cycles curvemapping_color_to_array (rgb_curve=true).
 
     DNA/cm order used by Cycles util.h: cm[0]=R, cm[1]=G, cm[2]=B, cm[3]=I.
     bpy mapping.curves mirrors that DNA for ShaderNodeRGBCurve.
     Call mapping.update() before evaluate (== BKE_curvemapping_changed_all + init).
-    Fac must be unlinked. Linked Fac refuses.
+    Fac must be unlinked. Linked Fac refuses (named slice_tag).
+    Returns generic keys: curves / n / min_x / max_x / fac / extrapolate.
     """
     mapping = getattr(node, "mapping", None)
     if mapping is None:
         raise QuantTraceSyncError(
-            "world Background Color RGB Curves missing mapping (Slice 2as)"
+            f"{ctx} RGB Curves missing mapping (Slice {slice_tag})"
         )
     curves = list(getattr(mapping, "curves", None) or [])
     if len(curves) < 4:
         raise QuantTraceSyncError(
-            f"world Background Color RGB Curves needs 4 curves got {len(curves)} "
-            "(Slice 2as)"
+            f"{ctx} RGB Curves needs 4 curves got {len(curves)} "
+            f"(Slice {slice_tag})"
         )
     # Fac unlinked (Cycles folds fac==0; we still pack and let native skip).
-    fac = _require_unlinked_float(node, ("Fac", "Factor"), "RGBCurves.Fac")
+    inputs = getattr(node, "inputs", None)
+    if inputs is None:
+        raise QuantTraceSyncError(
+            f"{ctx} RGBCurves.Fac has no inputs (Slice {slice_tag})"
+        )
+    fac_sock = _sock_ident_or_name(inputs, "Fac", "Factor")
+    if fac_sock is None:
+        raise QuantTraceSyncError(
+            f"{ctx} RGBCurves.Fac missing (Slice {slice_tag})"
+        )
+    if getattr(fac_sock, "is_linked", False):
+        from_n = None
+        links = list(getattr(fac_sock, "links", None) or [])
+        if links:
+            from_n = getattr(links[0], "from_node", None)
+        ntype = getattr(from_n, "type", None) if from_n is not None else "?"
+        raise QuantTraceSyncError(
+            f"{ctx} RGBCurves.Fac from {ntype!r} is linked refused "
+            f"(Slice {slice_tag}: unlinked Fac only; Noise/TEX_IMAGE/Value Fac still refuse)"
+        )
+    fac_v = getattr(fac_sock, "default_value", None)
+    fac = 0.0 if fac_v is None else float(fac_v)
     # min/max of first/last point.x across 4 curves
     min_x = float("inf")
     max_x = float("-inf")
@@ -3499,7 +3620,7 @@ def _pack_world_rgb_curves_lut(node) -> dict:
         pts = list(getattr(cm, "points", None) or [])
         if not pts:
             raise QuantTraceSyncError(
-                "world Background Color RGB Curves empty curve (Slice 2as)"
+                f"{ctx} RGB Curves empty curve (Slice {slice_tag})"
             )
         min_x = min(min_x, float(pts[0].location[0]))
         max_x = max(max_x, float(pts[-1].location[0]))
@@ -3523,7 +3644,7 @@ def _pack_world_rgb_curves_lut(node) -> dict:
     # Identity LUT smoke: mid sample ~ (0.5,0.5,0.5) when all curves identity.
     mid = n // 2
     print(
-        "QUANTTRACE_SLICE2AS_LUT",
+        f"QUANTTRACE_SLICE{slice_tag.upper()}_LUT",
         "n", n,
         "min_x", min_x, "max_x", max_x,
         "fac", fac, "extrapolate", extrapolate,
@@ -3532,12 +3653,40 @@ def _pack_world_rgb_curves_lut(node) -> dict:
         "sample_end", tuple(lut[-3:]),
     )
     return {
-        "world_curves": lut,
-        "world_curves_n": n,
-        "world_curves_min_x": float(min_x),
-        "world_curves_max_x": float(max_x),
-        "world_curves_fac": float(fac),
-        "world_curves_extrapolate": int(extrapolate),
+        "curves": lut,
+        "n": n,
+        "min_x": float(min_x),
+        "max_x": float(max_x),
+        "fac": float(fac),
+        "extrapolate": int(extrapolate),
+    }
+
+
+def _pack_world_rgb_curves_lut(node) -> dict:
+    """Slice 2as wrapper — world_curves_* keys."""
+    packed = _pack_rgb_curves_lut(
+        node, ctx="world Background Color", slice_tag="2as"
+    )
+    return {
+        "world_curves": packed["curves"],
+        "world_curves_n": packed["n"],
+        "world_curves_min_x": packed["min_x"],
+        "world_curves_max_x": packed["max_x"],
+        "world_curves_fac": packed["fac"],
+        "world_curves_extrapolate": packed["extrapolate"],
+    }
+
+
+def _pack_base_rgb_curves_lut(node, ctx: str) -> dict:
+    """Slice 2bd wrapper — base_curves_* keys."""
+    packed = _pack_rgb_curves_lut(node, ctx=ctx, slice_tag="2bd")
+    return {
+        "base_curves": packed["curves"],
+        "base_curves_n": packed["n"],
+        "base_curves_min_x": packed["min_x"],
+        "base_curves_max_x": packed["max_x"],
+        "base_curves_fac": packed["fac"],
+        "base_curves_extrapolate": packed["extrapolate"],
     }
 
 
@@ -4431,6 +4580,23 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         ),
         "base_mix_b_image_path": pr.get("base_mix_b_image_path") or "",
         "base_mix_b_image_colorspace": pr.get("base_mix_b_image_colorspace") or "",
+        # Slice 2bd: None-check — n==0 / fac 0.0 valid.
+        "base_curves": list(pr.get("base_curves") or []) if pr.get("base_curves") else None,
+        "base_curves_n": int(
+            pr["base_curves_n"] if pr.get("base_curves_n") is not None else 0
+        ),
+        "base_curves_min_x": float(
+            pr["base_curves_min_x"] if pr.get("base_curves_min_x") is not None else 0.0
+        ),
+        "base_curves_max_x": float(
+            pr["base_curves_max_x"] if pr.get("base_curves_max_x") is not None else 1.0
+        ),
+        "base_curves_fac": float(
+            pr["base_curves_fac"] if pr.get("base_curves_fac") is not None else 1.0
+        ),
+        "base_curves_extrapolate": int(
+            pr["base_curves_extrapolate"] if pr.get("base_curves_extrapolate") is not None else 1
+        ),
     }
     out.update(_pack_tex_ob_fields(pr, depsgraph=depsgraph))
     return out
@@ -5182,6 +5348,28 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     keep.append(bics)
     desc.base_mix_b_image_path = bip if bip else None
     desc.base_mix_b_image_colorspace = bics if bics else None
+    # Slice 2bd: n==0 skip; fac 0.0 valid — never `or` on n/fac.
+    desc.base_curves_min_x = _bf("base_curves_min_x", 0.0)
+    desc.base_curves_max_x = _bf("base_curves_max_x", 1.0)
+    desc.base_curves_fac = _bf("base_curves_fac", 1.0)
+    _exb = packed.get("base_curves_extrapolate", 1)
+    desc.base_curves_extrapolate = 1 if _exb is None else int(_exb)
+    bcurves_list = packed.get("base_curves") or []
+    bcurves_n = packed.get("base_curves_n", 0)
+    bcurves_n = 0 if bcurves_n is None else int(bcurves_n)
+    if bcurves_list and bcurves_n > 0:
+        bflat = [float(v) for v in bcurves_list]
+        if len(bflat) < bcurves_n * 3:
+            raise QuantTraceSyncError(
+                f"base_curves len {len(bflat)} < n*3={bcurves_n * 3} (Slice 2bd)"
+            )
+        bcurves_buf = (ctypes.c_float * (bcurves_n * 3))(*bflat[: bcurves_n * 3])
+        keep.append(bcurves_buf)
+        desc.base_curves = ctypes.cast(bcurves_buf, ctypes.POINTER(ctypes.c_float))
+        desc.base_curves_n = bcurves_n
+    else:
+        desc.base_curves = None
+        desc.base_curves_n = 0
     # Slice 2az: bevel_enable 0 / samples 4 / radius 0.05 — never `or` on samples.
     desc.bevel_enable = _bi("bevel_enable", 0)
     desc.bevel_samples = _bi("bevel_samples", 4)
@@ -5574,6 +5762,12 @@ def make_qt_simple_scene_type():
             ("base_mix_clamp_result", ctypes.c_int),
             ("base_mix_b_image_path", ctypes.c_char_p),
             ("base_mix_b_image_colorspace", ctypes.c_char_p),
+            ("base_curves", ctypes.POINTER(ctypes.c_float)),
+            ("base_curves_n", ctypes.c_int),
+            ("base_curves_min_x", ctypes.c_float),
+            ("base_curves_max_x", ctypes.c_float),
+            ("base_curves_fac", ctypes.c_float),
+            ("base_curves_extrapolate", ctypes.c_int),
             ("bevel_enable", ctypes.c_int),
             ("bevel_samples", ctypes.c_int),
             ("bevel_radius", ctypes.c_float),
@@ -6025,6 +6219,12 @@ def make_qt_scene_types():
             ("base_mix_clamp_result", ctypes.c_int),
             ("base_mix_b_image_path", ctypes.c_char_p),
             ("base_mix_b_image_colorspace", ctypes.c_char_p),
+            ("base_curves", ctypes.POINTER(ctypes.c_float)),
+            ("base_curves_n", ctypes.c_int),
+            ("base_curves_min_x", ctypes.c_float),
+            ("base_curves_max_x", ctypes.c_float),
+            ("base_curves_fac", ctypes.c_float),
+            ("base_curves_extrapolate", ctypes.c_int),
             ("bevel_enable", ctypes.c_int),
             ("bevel_samples", ctypes.c_int),
             ("bevel_radius", ctypes.c_float),
