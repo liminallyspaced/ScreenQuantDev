@@ -95,6 +95,11 @@
  *   (set_fac; Color in-out). Fac unlinked; Color <- TEX_IMAGE or ColorRamp.
  *   Color → Roughness via NODE_CONVERT_CF (linear_rgb_to_gray). Linked Fac /
  *   nested Invert / GROUP / Mix / Noise Color refuse Slice 2be.
+ * Slice 2bf: MixColorNode Factor ← FresnelNode (base_mix_fresnel_enable /
+ *   base_mix_fresnel_ior after last base_mix_*). enable=0 keeps 2ay unlinked
+ *   Fac bit-identical. Cite shader_nodes.h FresnelNode set_IOR; Normal
+ *   unlinked LINK_NORMAL. MixColorNode Factor socket (not Fac). Linked
+ *   Fresnel Normal/IOR, TEX_IMAGE/Noise/LayerWeight/GROUP/Geometry Fac refuse.
  * Slice 2an: ShaderNodeTexImage → world Background Color (world_color_image_*
  *   after world_sky_ozone_density). Empty path = 2aa/2al/2am bit-identical.
  *   Priority: env path → sky → color-image → world_color RGB. Vector via
@@ -563,6 +568,11 @@ typedef struct QT_SimpleScene {
   int base_mix_clamp_result;
   const char *base_mix_b_image_path;
   const char *base_mix_b_image_colorspace;
+  /* Slice 2bf: FresnelNode → MixColorNode Factor. enable=0 = unlinked Fac
+   * (2ay bit-identical). IOR unlinked float (Blender 5.2 RNA 1.45).
+   * Normal unlinked (LINK_NORMAL geometric). */
+  int base_mix_fresnel_enable;
+  float base_mix_fresnel_ior;
   /* Slice 2bd: RGB Curves LUT → Principled Base Color (mesh analog of world 2as).
    * NULL / n==0 / fac==0 skips RGBCurvesNode — 2ay/2ax/2f bit-identical.
    * Official Cycles curvemapping_color_to_array (RAMP_TABLE_SIZE=256 → 257). */
@@ -940,6 +950,11 @@ typedef struct QT_Mesh {
   int base_mix_clamp_result;
   const char *base_mix_b_image_path;
   const char *base_mix_b_image_colorspace;
+  /* Slice 2bf: FresnelNode → MixColorNode Factor. enable=0 = unlinked Fac
+   * (2ay bit-identical). IOR unlinked float (Blender 5.2 RNA 1.45).
+   * Normal unlinked (LINK_NORMAL geometric). */
+  int base_mix_fresnel_enable;
+  float base_mix_fresnel_ior;
   /* Slice 2bd: RGB Curves LUT → Principled Base Color (mesh analog of world 2as).
    * NULL / n==0 / fac==0 skips RGBCurvesNode — 2ay/2ax/2f bit-identical.
    * Official Cycles curvemapping_color_to_array (RAMP_TABLE_SIZE=256 → 257). */

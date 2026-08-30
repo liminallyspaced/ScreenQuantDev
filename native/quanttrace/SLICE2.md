@@ -1,6 +1,31 @@
 # QuantTrace Slice 2 — build order (cube pixel-match)
 
-Status: **Slice 2be landed** (2026-08-29 9pm PlugWalk ET). InvertNode → Principled.Roughness (`rough_invert_enable` / `rough_invert_fac` after last `rough_ramp_noise_*`). enable=0 keeps 2ba/2bb/2i identity skip. Cite InvertNode set_fac; Color → Roughness NODE_CONVERT_CF (`linear_rgb_to_gray`). Loft Plane.008 IE_Brushed_Steel_02: Fac unlinked **0.083333**, Color ← packed TEX_IMAGE (Metal010_2K_Roughness.jpg). 1071 loft Invert→Roughness (967 TEX_IMAGE / 104 VALTORGB, Fac unlinked). Named refuse linked Fac / nested Invert / GROUP / Mix / Noise Color. Constant Color folds Rec.709. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.58-slice2be`. Addon `0.3.3`.
+Status: **Slice 2bf landed** (2026-08-29 10pm PlugWalk ET). MixColorNode Factor ← FresnelNode (`base_mix_fresnel_enable` / `base_mix_fresnel_ior` after last `base_mix_*`). enable=0 keeps 2ay unlinked Fac bit-identical. Cite FresnelNode set_IOR; output Fac; MixColorNode Factor socket; Normal unlinked LINK_NORMAL. Loft Object003.002 Material.003: Mix RGBA MIX clamp_factor, Fac ← Fresnel IOR=1.45 unlinked Normal; A/B leftover nested Mix + Curves. 14 loft Mix→Base Color linked Fac are FRESNEL (2 NEW_GEOMETRY / 1 INVERT). Named refuse Fac←Noise/TEX_IMAGE/LayerWeight/GROUP/Geometry/Invert + linked Fresnel IOR/Normal. Pack probe only — no loft Session Δmax. `is_tracer=1`. Native `0.0.59-slice2bf`. Addon `0.3.3`.
+
+## Slice 2bf — Fresnel Fac → Mix → Principled Base Color (2026-08-29 10pm ET)
+
+Loft leftover after 2be (Mix Factor linked): object `Object003.002` / material `Material.003`. Principled.Base Color ← Mix (`ShaderNodeMix` RGBA MIX, clamp_factor=True, clamp_result=False). Fac ← Fresnel Factor (`FRESNEL`, IOR unlinked **1.45**, Normal unlinked (0,0,0) = geometric). A ← Mix.001 (constant MIX foldable); B ← RGB Curves ← Mix.001. Claim cube: 8×8 sRGB checker TEX_IMAGE A vs constant B, Fac ← Fresnel IOR=1.45. Native Color → MixColorNode; Factor ← FresnelNode when enable≠0.
+
+Cite Cycles `shader_nodes.h` FresnelNode set_IOR / SOCKET_OUT Fac; MixColorNode Factor (not Fac). enable=0 uses set_fac (2ay).
+
+| Mode | res/spp | Δmax | MAE | px≥1e-3 | Gate |
+|---|---|---|---|---|---|
+| fresnel CLAIM | 32²/4 | 9.54e-7 | 6.36e-9 | 0 | **PASS** |
+| fresnel CLAIM | 256²/128 | 9.54e-7 | 2.95e-9 | 0 | **PASS** |
+| mix 2ay (enable=0) | 32²/4 | 5.36e-7 | 3.54e-9 | 0 | **PASS** |
+| curves 2bd (n==0 / fac-unlinked) | 32²/4 | 8.34e-7 | 1.50e-9 | 0 | **PASS** |
+| invert 2be | 32²/4 | 4.77e-7 | 6.55e-9 | 0 | **PASS** |
+| point 2av | 32²/4 | 5.66e-4 | 4.01e-6 | 0 | **PASS** |
+| hdr 2aa | 32²/4 | 6.13e-4 | 4.63e-6 | 0 | **PASS** |
+| live stock CLAIM vs unlinked-Fac | 32²/4 | 0.490 | 5.66e-3 | 82 | graph live |
+| Fac←Noise | — | — | — | — | **REFUSE** Slice 2bf |
+
+Loft pack: Object003.002 Fresnel Fac accepted. First PACK_FAIL `object='Object003.002' material='Material.003' Principled.Base Color Mix both sides linked refused (Slice 2ay: dual TEX_IMAGE Color only; Curves/Fresnel/nested Mix refuse)`. Next: nested Mix + Curves on Mix A/B, leftover Bump Height VALTORGB/SEPARATE/MATH, GROUP/Botaniq, NEW_GEOMETRY Fac. Not loft Session Δmax.
+
+ABI: `base_mix_fresnel_enable` / `base_mix_fresnel_ior` after last `base_mix_*` on `QT_Mesh` + `QT_SimpleScene`. Defaults 0 / 1.45. Native `0.0.59-slice2bf`. Box CPU only; 2080 not used.
+
+Proof plate `docs/proof/quanttrace-fresnel-fac-32-pair.png`. Tools `_quanttrace_slice2bf_scene/smoke.py`.
+
 
 ## Slice 2be — Invert → Principled.Roughness (2026-08-29 9pm ET)
 

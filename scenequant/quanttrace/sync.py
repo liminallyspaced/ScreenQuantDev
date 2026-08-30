@@ -1584,6 +1584,8 @@ def _base_mix_identity():
         "base_mix_clamp_result": 0,
         "base_mix_b_image_path": "",
         "base_mix_b_image_colorspace": "",
+        "base_mix_fresnel_enable": 0,
+        "base_mix_fresnel_ior": 1.45,
     }
 
 
@@ -1751,7 +1753,8 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
     Shape 2: both linked TEX_IMAGE Color with matching Vector graphs; dual_b
     is the non-chain TEX_IMAGE node; chain side returned as from_node/from_sock.
     Both-unlinked constants: leave Mix in place (fold later; mix_type stays 0).
-    Linked Fac / VECTOR / unsupported blend / both-linked non-TEX_IMAGE refuse.
+    Linked Fac: Fresnel Factor (IOR+Normal unlinked) is Slice 2bf;
+    other Fac sources / VECTOR / unsupported blend / both-linked non-TEX_IMAGE refuse.
     """
     mix = dict(_base_mix_identity())
     from_node, from_sock = _peel_reroute(from_node, from_sock)
@@ -1785,13 +1788,54 @@ def _peel_base_color_mix(from_node, from_sock, ctx: str):
             f"{ctx} Principled.Base Color Mix missing Factor (Slice 2ay)"
         )
     if getattr(fac_sock, "is_linked", False):
-        raise QuantTraceSyncError(
-            f"{ctx} Principled.Base Color Mix Factor is linked refused "
-            "(Slice 2ay: unlinked Factor only; Fresnel/texture Fac still refuse)"
-        )
+        flinks = list(getattr(fac_sock, "links", None) or [])
+        if len(flinks) != 1:
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix Factor multi-link refused "
+                "(Slice 2bf)"
+            )
+        fnode = getattr(flinks[0], "from_node", None)
+        fsock = getattr(flinks[0], "from_socket", None)
+        fnode, fsock = _peel_reroute(fnode, fsock)
+        ftype = getattr(fnode, "type", None) if fnode is not None else None
+        fsname = str(getattr(fsock, "name", "") or "") if fsock is not None else ""
+        if ftype != "FRESNEL" or fsname not in ("Fac", "Factor", "fac"):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix Factor from {ftype!r} refused "
+                "(Slice 2bf: Fresnel Fac IOR+Normal unlinked only; "
+                "TEX_IMAGE/Noise/LayerWeight/GROUP/Geometry/Invert still refuse)"
+            )
+        inputs_f = getattr(fnode, "inputs", None)
+        ior_sock = None
+        nrm_sock = None
+        if inputs_f is not None:
+            g = getattr(inputs_f, "get", None)
+            if callable(g):
+                ior_sock = g("IOR")
+                nrm_sock = g("Normal")
+        if ior_sock is not None and getattr(ior_sock, "is_linked", False):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix Fresnel.IOR is linked refused "
+                "(Slice 2bf)"
+            )
+        if nrm_sock is not None and getattr(nrm_sock, "is_linked", False):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix Fresnel.Normal is linked refused "
+                "(Slice 2bf: unlinked Normal only)"
+            )
+        ior = 1.45
+        if ior_sock is not None and getattr(ior_sock, "default_value", None) is not None:
+            ior = float(ior_sock.default_value)
+        mix["base_mix_fresnel_enable"] = 1
+        mix["base_mix_fresnel_ior"] = float(ior)
     a_linked = bool(getattr(a_sock, "is_linked", False)) if a_sock is not None else False
     b_linked = bool(getattr(b_sock, "is_linked", False)) if b_sock is not None else False
     if not a_linked and not b_linked:
+        if int(mix.get("base_mix_fresnel_enable") or 0):
+            raise QuantTraceSyncError(
+                f"{ctx} Principled.Base Color Mix both sides unlinked with Fresnel Fac refused "
+                "(Slice 2bf: chain or dual TEX_IMAGE)"
+            )
         # Both unlinked constants → fold into base_color later (mix_type 0).
         return from_node, from_sock, mix, None
     clamp_factor = bool(getattr(from_node, "clamp_factor", False))
@@ -4740,6 +4784,16 @@ def _pack_tex_fields(pr: dict, depsgraph=None) -> dict:
         ),
         "base_mix_b_image_path": pr.get("base_mix_b_image_path") or "",
         "base_mix_b_image_colorspace": pr.get("base_mix_b_image_colorspace") or "",
+        "base_mix_fresnel_enable": int(
+            pr["base_mix_fresnel_enable"]
+            if pr.get("base_mix_fresnel_enable") is not None
+            else 0
+        ),
+        "base_mix_fresnel_ior": float(
+            pr["base_mix_fresnel_ior"]
+            if pr.get("base_mix_fresnel_ior") is not None
+            else 1.45
+        ),
         # Slice 2bd: None-check — n==0 / fac 0.0 valid.
         "base_curves": list(pr.get("base_curves") or []) if pr.get("base_curves") else None,
         "base_curves_n": int(
@@ -5508,6 +5562,9 @@ def _fill_tex_ctypes(desc, packed: dict, keep: list) -> None:
     keep.append(bics)
     desc.base_mix_b_image_path = bip if bip else None
     desc.base_mix_b_image_colorspace = bics if bics else None
+    # Slice 2bf: enable 0 / ior 1.45 — never `or` on enable/ior.
+    desc.base_mix_fresnel_enable = _bi("base_mix_fresnel_enable", 0)
+    desc.base_mix_fresnel_ior = _bf("base_mix_fresnel_ior", 1.45)
     # Slice 2bd: n==0 skip; fac 0.0 valid — never `or` on n/fac.
     desc.base_curves_min_x = _bf("base_curves_min_x", 0.0)
     desc.base_curves_max_x = _bf("base_curves_max_x", 1.0)
@@ -5925,6 +5982,8 @@ def make_qt_simple_scene_type():
             ("base_mix_clamp_result", ctypes.c_int),
             ("base_mix_b_image_path", ctypes.c_char_p),
             ("base_mix_b_image_colorspace", ctypes.c_char_p),
+            ("base_mix_fresnel_enable", ctypes.c_int),
+            ("base_mix_fresnel_ior", ctypes.c_float),
             ("base_curves", ctypes.POINTER(ctypes.c_float)),
             ("base_curves_n", ctypes.c_int),
             ("base_curves_min_x", ctypes.c_float),
@@ -6384,6 +6443,8 @@ def make_qt_scene_types():
             ("base_mix_clamp_result", ctypes.c_int),
             ("base_mix_b_image_path", ctypes.c_char_p),
             ("base_mix_b_image_colorspace", ctypes.c_char_p),
+            ("base_mix_fresnel_enable", ctypes.c_int),
+            ("base_mix_fresnel_ior", ctypes.c_float),
             ("base_curves", ctypes.POINTER(ctypes.c_float)),
             ("base_curves_n", ctypes.c_int),
             ("base_curves_min_x", ctypes.c_float),

@@ -77,6 +77,10 @@
  * Slice 2be: InvertNode → Principled.Roughness (rough_invert_enable /
  *   rough_invert_fac). enable=0 keeps 2ba/2bb/2i bit-identical. Cite
  *   InvertNode set_fac; Color → Roughness NODE_CONVERT_CF (linear_rgb_to_gray).
+ * Slice 2bf: MixColorNode Factor ← FresnelNode (base_mix_fresnel_enable /
+ *   base_mix_fresnel_ior). enable=0 keeps 2ay unlinked Fac bit-identical.
+ *   Cite shader_nodes.h FresnelNode set_IOR; output Fac. MixColorNode
+ *   Factor socket. Normal unlinked LINK_NORMAL.
  * Slice 2bc: NoiseTextureNode → BumpNode Height (bump_noise_*).
  *   enable=0 keeps 2x bit-identical (TEX_IMAGE Height). Same Noise RNA
  *   as 2bb. Color → Height via NODE_CONVERT_CF; Fac → Height direct.
@@ -332,6 +336,9 @@ static void fill_locked_cube_desc(QT_SimpleScene *d, int width, int height, int 
     d->base_mix_clamp_result = 0;
     d->base_mix_b_image_path = nullptr;
     d->base_mix_b_image_colorspace = nullptr;
+    /* Slice 2bf identity — enable=0 skips FresnelNode (2ay unlinked Fac). */
+    d->base_mix_fresnel_enable = 0;
+    d->base_mix_fresnel_ior = 1.45f;
     /* Slice 2bd identity — n==0 skips RGBCurvesNode. */
     d->base_curves = nullptr;
     d->base_curves_n = 0;
@@ -681,6 +688,8 @@ static void simple_to_qt(const QT_SimpleScene *s,
     mesh->base_mix_clamp_result = s->base_mix_clamp_result;
     mesh->base_mix_b_image_path = s->base_mix_b_image_path;
     mesh->base_mix_b_image_colorspace = s->base_mix_b_image_colorspace;
+    mesh->base_mix_fresnel_enable = s->base_mix_fresnel_enable;
+    mesh->base_mix_fresnel_ior = s->base_mix_fresnel_ior;
     /* Slice 2bd: RGB Curves LUT → Principled Base Color. */
     mesh->base_curves = s->base_curves;
     mesh->base_curves_n = s->base_curves_n;
@@ -1235,6 +1244,14 @@ static Shader *make_principled(Scene *scene, const QT_Mesh *m, int index)
             mx->set_fac(m->base_mix_fac);
             mx->set_use_clamp(m->base_mix_clamp_factor != 0);
             mx->set_use_clamp_result(m->base_mix_clamp_result != 0);
+            /* Slice 2bf: FresnelNode → Mix Factor. enable=0 keeps set_fac.
+             * Cite shader_nodes.h FresnelNode (SOCKET_OUT Fac, set_IOR;
+             * Normal LINK_NORMAL unlinked). MixColorNode socket is Factor. */
+            if (m->base_mix_fresnel_enable) {
+                FresnelNode *fr = graph->create_node<FresnelNode>();
+                fr->set_IOR(m->base_mix_fresnel_ior);
+                graph->connect(fr->output("Fac"), mx->input("Factor"));
+            }
             ShaderOutput *b_cur = nullptr;
             if (m->base_mix_b_image_path && m->base_mix_b_image_path[0]) {
                 ImageTextureNode *img_b = wire_tex_image(
